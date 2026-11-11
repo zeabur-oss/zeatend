@@ -1,0 +1,61 @@
+name: CI
+
+# Each job runs scripts/ci/<job>.sh in the Nix dev shell, the same as locally. The nightly run
+# keeps main's caches current for the merge queue.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "30 16 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@322a53bbe1ab1a1e1cea8102781069aa094492dc # main
+        with:
+          rust-cache: true
+      - run: nix develop -c scripts/ci/lint.sh
+
+  test:
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zeabur-oss/.github/actions/ci-setup@322a53bbe1ab1a1e1cea8102781069aa094492dc # main
+        with:
+          rust-cache: true
+      - run: nix develop -c scripts/ci/test.sh
+
+  zizmor:
+    uses: zeabur-oss/.github/.github/workflows/zizmor.yml@322a53bbe1ab1a1e1cea8102781069aa094492dc # main
+
+  # The check rulesets require.
+  ok:
+    name: ci / ok
+    if: always()
+    needs: [lint, test, zizmor]
+    runs-on: ubuntu-slim
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: exit 1
+
+  dco:
+    uses: zeabur-oss/.github/.github/workflows/dco.yml@322a53bbe1ab1a1e1cea8102781069aa094492dc # main

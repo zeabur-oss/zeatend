@@ -1,0 +1,13 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "The shared preset of zeabur-oss, plus Cargo crates, Nix and the release scripts' package.json. Lock file maintenance also updates flake.lock, and with it the Rust nightly.",
+  "extends": [
+    "github>zeabur-oss/.github"
+  ],
+  "enabledManagers": [
+    "bun",
+    "cargo",
+    "github-actions",
+    "nix"
+  ]
+}

@@ -1,0 +1,11 @@
+[package]
+name = "zeabur-zeatend"
+description = "Zeabur Zeatend, a Kubernetes cluster manager for K3s, RKE2 and KubeSolo over SSH"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
