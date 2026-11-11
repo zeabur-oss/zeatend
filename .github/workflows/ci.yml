@@ -1,0 +1,25 @@
+name: CI
+
+# The jobs of scripts/ci.sh and zizmor run in the shared CI of zeabur-oss/.github, which also
+# provides the `ok` check that rulesets require; the DCO check runs on pull requests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    uses: zeabur-oss/.github/.github/workflows/ci.yml@322a53bbe1ab1a1e1cea8102781069aa094492dc # main
+    with:
+      rust-cache: true
+  dco:
+    uses: zeabur-oss/.github/.github/workflows/dco.yml@322a53bbe1ab1a1e1cea8102781069aa094492dc # main
