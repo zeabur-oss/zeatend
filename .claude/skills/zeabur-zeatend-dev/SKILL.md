@@ -9,10 +9,9 @@ Zeatend is a Kubernetes cluster manager for K3s, RKE2 and KubeSolo over SSH, wit
 The binary crate is `zeabur-zeatend`. Pull request rules: `CONTRIBUTING.md`.
 
 ## Checks (what CI runs)
-Each CI job is `scripts/ci.sh <job>` (`scripts/ci.sh --list`); it enters the dev shell itself.
-Underneath:
+Each CI job runs `nix develop -c scripts/ci/<job>.sh` (`lint`, `test`). Underneath:
 ```sh
-nix develop -c bash -c 'cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/*.sh && actionlint'
+nix develop -c bash -c 'cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/ci/*.sh && actionlint'
 nix develop -c cargo lint
 RUSTDOCFLAGS="-D warnings" nix develop -c cargo doc --workspace --no-deps --document-private-items --locked
 nix develop -c cargo nextest run --workspace --all-features --locked --no-tests=warn

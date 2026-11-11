@@ -1,3 +1,5 @@
+<!-- Edit this in zeabur-oss/skills (skills/zeabur-writing/ai-tells.md); the weekly skills sync overwrites the copy in other repositories. -->
+
 # AI tells
 
 <!-- This file quotes the patterns it describes. -->
@@ -11,6 +13,7 @@ Each entry is a pattern and its fix. One hit can be chance; a cluster is the tel
 ## Both languages
 
 - **Manufactured contrast.** 「不是 X，而是 Y」「不只是 X，更是 Y」, "not just X, but Y", "It's not X, it's Y". Fix: say Y.
+- **Defensive disclaimers.** 「不代表」「不宣稱」「並不意味」, "this does not imply". Fix: delete, or state the fact. 「不一定能」 for an uncertain outcome and 「不保證」 for a commitment are not tells.
 - **Lists of three by reflex.** Three items in every sentence. Fix: keep the ones that are true; two or four are fine.
 - **Announcing and summarising.** 「以下說明…」「值得注意的是」「總的來說」, "This page shows…", "In summary". Fix: start with the fact; end on the last fact.
 - **Inflated words.** 至關重要、不可或缺、賦能、打造、無縫、一站式、深入探討; *delve, pivotal, crucial, seamless, robust, leverage, showcase, underscore, tapestry, intricate, meticulous*. Fix: the plain word or the concrete fact.

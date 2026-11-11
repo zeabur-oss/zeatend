@@ -1,3 +1,5 @@
+<!-- Edit this in zeabur-oss/skills (skills/zeabur-writing/zh.md); the weekly skills sync overwrites the copy in other repositories. -->
+
 # Chinese (zh-TW and zh-CN)
 
 <!-- This file quotes the patterns it describes. -->
@@ -55,6 +57,13 @@ The register is plain written Chinese, as in a good manual: everyday words, full
 
 ## Say it directly
 
+- **Say how sure, in everyday words.** For an outcome: 「不一定能」「通常可以」. 「可能失敗」 reads as likely to fail; use it only when failure is likely. For a commitment the project does not make: 「不保證」, with its subject (「我們不保證…」). 「不代表」「不宣稱」 usually defend the text against a misreading: delete them, or state the fact.
+
+  | Before | After |
+  |---|---|
+  | 這是從你自己的網路檢查，不代表所有人都連得到。 | 這是從你的網路檢查的結果，其他網路不一定連得到。 |
+  | alpha 版之間沒有轉換機制，升級或回復都可能失敗。 | 我們不保證 alpha 版之間能升級或回復。 |
+  | 這份對照表不代表 Zeabur Identity 已取得 OpenID 認證。 | （刪掉；或寫事實：Zeabur Identity 還沒有申請 OpenID 認證。） |
 - **No 「不是 X，而是 Y」, 「不只是 X，更是 Y」.** Say Y. A contrast stays only when the contrast is the information.
 
 ## Punctuation

@@ -20,23 +20,20 @@ message on `main` and follows the same form. Do not add an AI `Co-Authored-By` t
 
 ## Before you open a pull request
 
-Run what CI runs, inside `nix develop`. Each job is `scripts/ci.sh <job>` and enters the dev shell
-itself:
-
-```sh
-scripts/ci.sh --list   # format, clippy, docs, test, cargo-deny
-scripts/ci.sh clippy
-```
-
+Each job in `.github/workflows/ci.yml` runs `nix develop -c scripts/ci/<job>.sh`, so
+`nix develop -c scripts/ci/lint.sh` runs a job exactly as CI does. The jobs are `lint` and `test`.
 Underneath:
 
 ```sh
-cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/*.sh && actionlint
+cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/ci/*.sh && actionlint
 cargo lint                                   # clippy, all targets and features, -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo nextest run --workspace --all-features --locked --no-tests=warn
 cargo deny --locked check
 ```
+
+A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds a change file in
+`.changeset/` (`knope document-change`) or carries the label `changelog: none`.
 
 ## Toolchain, lints and dependencies
 

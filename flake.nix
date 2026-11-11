@@ -2,10 +2,15 @@
   description = "zeabur-zeatend development environment";
 
   inputs = {
-    nixpkgs.url = "https://flakehub.com/f/NixOS/nixpkgs/0.1"; # unstable Nixpkgs
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     # Rust toolchains. The locked revision sets the nightly (overlays.default).
     rust-overlay = {
-      url = "https://flakehub.com/f/oxalica/rust-overlay/0.1";
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    # The base shell of every zeabur-oss repository: Bun, the release tools and the shared linters.
+    oss = {
+      url = "github:zeabur-oss/.github";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -37,7 +42,7 @@
     in
     {
       overlays.default = final: _: {
-        # The newest nightly in the locked rust-overlay that has all these components and targets.
+        # The newest nightly in the locked rust-overlay that has all these components.
         rustToolchain = final.rust-bin.selectLatestNightlyWith (
           toolchain:
           toolchain.minimal.override {
@@ -55,22 +60,14 @@
         { pkgs, system }:
         {
           default = pkgs.mkShell {
-            packages =
-              with pkgs;
-              [
-                rustToolchain
+            inputsFrom = [ inputs.oss.devShells.${system}.base ];
+            packages = with pkgs; [
+              rustToolchain
 
-                # Quality and supply chain
-                cargo-deny
-                cargo-nextest
-                jq
-                shellcheck
-                actionlint
-
-                self.formatter.${system}
-              ]
-              # nixpkgs does not build zizmor on macOS; CI runs it through the shared workflow.
-              ++ lib.optional stdenv.hostPlatform.isLinux zizmor;
+              # Quality and supply chain
+              cargo-deny
+              cargo-nextest
+            ];
 
             env = {
               # Required by rust-analyzer

@@ -5,7 +5,7 @@ UI. A Rust workspace in `crates/`; the binary is `zeabur-zeatend`.
 
 - Run every command inside `nix develop` (`nix develop -c <command>`). Do not use system tools.
 - Before you commit, run the checks in `.claude/skills/zeabur-zeatend-dev/SKILL.md`; CI runs the
-  same jobs through `scripts/ci.sh`.
+  same jobs through `scripts/ci/<job>.sh`.
 - Skills in `.claude/skills` hold the conventions. `zeabur-oss-*` and `zeabur-writing` are copies of
   [zeabur-oss/skills](https://github.com/zeabur-oss/skills); change them there.
 - Commits are Conventional Commits signed off with `git commit -s`. No AI trailer
