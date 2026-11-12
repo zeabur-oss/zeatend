@@ -454,8 +454,8 @@ fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
             c.tr(
                 "install-done",
                 &[(
-                    "url",
-                    FluentValue::from(format!("https://{}", mock::PRIVATE_ADDR)),
+                    "path",
+                    FluentValue::from("~/.kube/zeatend-k3s.yaml"),
                 )],
             ),
             bold().fg(Color::Green),

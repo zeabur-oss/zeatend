@@ -8,11 +8,10 @@ pub(crate) enum Lang {
     En,
     ZhTw,
     ZhCn,
-    Ja,
 }
 
 /// Every language, in the order the picker lists them.
-pub(crate) const LANGS: [Lang; 4] = [Lang::En, Lang::ZhTw, Lang::ZhCn, Lang::Ja];
+pub(crate) const LANGS: [Lang; 3] = [Lang::En, Lang::ZhTw, Lang::ZhCn];
 
 impl Lang {
     pub(crate) const fn tag(self) -> &'static str {
@@ -20,7 +19,6 @@ impl Lang {
             Self::En => "en",
             Self::ZhTw => "zh-TW",
             Self::ZhCn => "zh-CN",
-            Self::Ja => "ja",
         }
     }
 
@@ -30,7 +28,6 @@ impl Lang {
             Self::En => "English",
             Self::ZhTw => "繁體中文",
             Self::ZhCn => "简体中文",
-            Self::Ja => "日本語",
         }
     }
 
@@ -39,7 +36,6 @@ impl Lang {
             Self::En => include_str!("../locales/en.ftl"),
             Self::ZhTw => include_str!("../locales/zh-TW.ftl"),
             Self::ZhCn => include_str!("../locales/zh-CN.ftl"),
-            Self::Ja => include_str!("../locales/ja.ftl"),
         }
     }
 
@@ -51,9 +47,6 @@ impl Lang {
             .unwrap_or("")
             .to_ascii_lowercase();
         let name = name.replace('-', "_");
-        if name.starts_with("ja") {
-            return Some(Self::Ja);
-        }
         if name.starts_with("zh") {
             for traditional in ["_tw", "_hk", "_mo", "_hant"] {
                 if name.contains(traditional) {
@@ -90,7 +83,7 @@ pub(crate) fn lang_from_env() -> Lang {
     Lang::En
 }
 
-/// Why the terminal cannot show Chinese or Japanese, if it cannot.
+/// Why the terminal cannot show Chinese, if it cannot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoCjk {
     /// `TERM=linux`: the Linux virtual console font has 512 glyphs and no CJK.
@@ -226,7 +219,7 @@ mod tests {
         assert_eq!(Lang::from_locale("zh_TW.UTF-8"), Some(Lang::ZhTw));
         assert_eq!(Lang::from_locale("zh_HK.UTF-8"), Some(Lang::ZhTw));
         assert_eq!(Lang::from_locale("zh_CN.utf8"), Some(Lang::ZhCn));
-        assert_eq!(Lang::from_locale("ja_JP.UTF-8"), Some(Lang::Ja));
+        assert_eq!(Lang::from_locale("ja_JP.UTF-8"), None);
         assert_eq!(Lang::from_locale("C.UTF-8"), None);
     }
 
@@ -245,7 +238,7 @@ mod tests {
             Some(NoCjk::NotUtf8)
         );
         assert_eq!(
-            cjk_blocker(Some("xterm-256color"), Some("ja_JP.UTF-8")),
+            cjk_blocker(Some("xterm-256color"), Some("zh_TW.UTF-8")),
             None
         );
     }
@@ -269,9 +262,9 @@ mod tests {
         let en = Catalog::new(Lang::En);
         assert_eq!(en.tr("cpu-cores", &[("n", 1.into())]), "1 core");
         assert_eq!(en.tr("cpu-cores", &[("n", 4.into())]), "4 cores");
-        let ja = Catalog::new(Lang::Ja);
-        assert_eq!(ja.tr("cpu-cores", &[("n", 1.into())]), "1 コア");
-        assert_eq!(duration(&ja, 125), "2分05秒");
+        let zh = Catalog::new(Lang::ZhCn);
+        assert_eq!(zh.tr("cpu-cores", &[("n", 4.into())]), "4 核");
+        assert_eq!(duration(&zh, 125), "2 分 05 秒");
         assert_eq!(duration(&Catalog::new(Lang::ZhTw), 9), "9 秒");
         assert_eq!(group_thousands(1_210), "1,210");
     }

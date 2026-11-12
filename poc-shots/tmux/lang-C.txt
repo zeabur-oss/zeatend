@@ -1,6 +1,6 @@
- Zeabur installer                       1 Server  2 Access  3 Review  4 Install
+ Zeatend                                1 Server  2 Access  3 Review  4 Install
 + This server -----------------------------------------------------------------+
-|This terminal cannot show Chinese or Japanese, so the installer uses English. |
+|This terminal cannot show Chinese, so Zeatend uses English.                   |
 |                                                                              |
 | Hostname  tpe-edge-01                                                        |
 | System    Ubuntu 24.04.1 LTS (x86_64)                                        |

@@ -19,12 +19,11 @@ pub(crate) const DISTROS: [(&str, &str); 3] = [
 ];
 
 /// Install steps: message id and how long the fake step takes, in seconds.
-pub(crate) const STEPS: [(&str, u32); 6] = [
+pub(crate) const STEPS: [(&str, u32); 5] = [
     ("install-step-check", 4),
     ("install-step-download", 95),
     ("install-step-k3s", 30),
     ("install-step-network", 20),
-    ("install-step-zeabur", 120),
     ("install-step-ready", 45),
 ];
 
@@ -63,7 +62,7 @@ pub(crate) fn progress(elapsed: u32) -> Progress {
 }
 
 /// Log lines are tool output and stay in English in every language.
-const LOG: [(u32, &str); 22] = [
+const LOG: [(u32, &str); 18] = [
     (0, "zeatend: checking ports 80, 443, 6443"),
     (
         2,
@@ -98,21 +97,11 @@ const LOG: [(u32, &str); 22] = [
         "k3s[2210]: flannel: Running backend vxlan on interface eth0",
     ),
     (149, "zeatend: network ready"),
-    (
-        150,
-        "zeatend: zeaburctl install --profile k3s --address 10.0.0.12",
-    ),
-    (
-        160,
-        "zeaburctl: applying 42 objects to namespace zeabur-system",
-    ),
-    (190, "zeaburctl: deployment/zeabur 0 of 1 ready"),
-    (230, "zeaburctl: deployment/identity 1 of 1 ready"),
-    (262, "zeaburctl: deployment/zeabur 1 of 1 ready"),
-    (270, "zeatend: waiting for https://10.0.0.12 to answer"),
-    (290, "zeatend: GET https://10.0.0.12/healthz 503"),
-    (310, "zeatend: GET https://10.0.0.12/healthz 200"),
-    (314, "zeatend: done"),
+    (150, "zeatend: waiting for node 10-0-0-12 to be Ready"),
+    (165, "k3s[2210]: node 10-0-0-12 condition Ready=False"),
+    (185, "k3s[2210]: node 10-0-0-12 condition Ready=True"),
+    (190, "zeatend: kubeconfig written to ~/.kube/zeatend-k3s.yaml"),
+    (194, "zeatend: done"),
 ];
 
 pub(crate) fn log_until(elapsed: u32) -> Vec<&'static str> {

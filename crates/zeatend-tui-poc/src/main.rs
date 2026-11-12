@@ -37,7 +37,7 @@ fn main() -> std::io::Result<()> {
             "--shots" => shots = args.next(),
             _ => {
                 eprintln!(
-                    "usage: zeatend-tui-poc [--lang en|zh-TW|zh-CN|ja] [--ascii] [--shots <dir>]"
+                    "usage: zeatend-tui-poc [--lang en|zh-TW|zh-CN] [--ascii] [--shots <dir>]"
                 );
                 std::process::exit(2);
             }
@@ -92,25 +92,17 @@ fn type_text(app: &mut App, text: &str) {
 
 const fn sample_name(lang: Lang) -> &'static str {
     match lang {
-        Lang::En => "Avery Chen",
-        Lang::ZhTw => "陳怡君",
-        Lang::ZhCn => "王小明",
-        Lang::Ja => "山田花子",
+        Lang::En => "taipei-edge",
+        Lang::ZhTw => "台北機房",
+        Lang::ZhCn => "北京机房",
     }
 }
 
 const fn long_name(lang: Lang) -> &'static str {
     match lang {
-        Lang::En => {
-            "Avery Chen, platform team, Taipei office, on call this week, ask in the team chat first"
-        }
-        Lang::ZhTw => {
-            "陳怡君（台北辦公室平台組，這週輪值，有事請先在群組裡找我，緊急狀況再打電話）"
-        }
-        Lang::ZhCn => "王小明（北京办公室平台组，这周值班，有事请先在群里找我，紧急情况再打电话）",
-        Lang::Ja => {
-            "山田花子（東京オフィスのプラットフォームチーム、今週の当番、急ぎの用件は電話で）"
-        }
+        Lang::En => "taipei-edge, the three servers in the Taipei office rack, for the platform team",
+        Lang::ZhTw => "台北機房（辦公室機櫃裡的三台伺服器，平台組用，之後要加節點請先問我）",
+        Lang::ZhCn => "北京机房（办公室机柜里的三台服务器，平台组用，之后要加节点请先问我）",
     }
 }
 

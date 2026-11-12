@@ -1,12 +1,12 @@
 # Multilingual TUI proof of concept
 
 A throwaway look at the Zeatend install screens (Server, Access, Review, Install, plus a language
-picker) in English, 繁體中文, 简体中文 and 日本語. No SSH, no K3s, no install logic: the server
-facts are mock data and the install is a fake 5-minute timeline that runs ten times faster.
+picker) in English, 繁體中文 and 简体中文. No SSH, no K3s, no install logic: the server
+facts are mock data and the install is a fake 3-minute timeline that runs ten times faster.
 
 ```sh
 nix develop -c cargo run -p zeatend-tui-poc                      # language from LC_ALL, LC_MESSAGES, LANG
-nix develop -c cargo run -p zeatend-tui-poc -- --lang ja         # force a language
+nix develop -c cargo run -p zeatend-tui-poc -- --lang zh-TW      # force a language
 nix develop -c cargo run -p zeatend-tui-poc -- --ascii           # act like the Linux console
 nix develop -c cargo run -p zeatend-tui-poc -- --shots poc-shots # write every screen as SVG
 ```
@@ -47,16 +47,15 @@ counts cells and drops a wide character that would straddle the edge (`text::tru
 
 **Ambiguous-width glyphs.** Box drawing (`─ │ ┌`), `●`, `…`, `·`, `→` and the full block `█`
 are East Asian Width "A". Most terminals draw them one cell wide, which is what ratatui assumes;
-a terminal set to treat them as wide (an iTerm2 option, some Windows and Japanese setups) shifts
+a terminal set to treat them as wide (an iTerm2 option, some Windows setups) shifts
 every line that contains one. The screens avoid them inside text (`( )`, `(*)`, `>`, `-`, `...`,
 coloured spaces for the bar) and test that list (`content_glyphs_are_not_ambiguous_width`), but
 borders still use box drawing. No terminal with ambiguous-wide was tried.
 
-**Wrapping.** ratatui wraps at spaces. A Chinese or Japanese sentence has none, so it is one long
-"word": in Japanese, `スワップが有効です。Kubernetes はスワップなし…` breaks after `Kubernetes`
-and leaves the first line short (`tmux/ja-switch-live.txt`, 80 columns). Wrapped lines also lose
-their hanging indent (English, same screen). It also does not apply 禁則 rules, so a line can
-start with `。` or `、`. A UAX #14 line breaker (`unicode-linebreak`) would fix all three.
+**Wrapping.** ratatui wraps at spaces. A Chinese sentence has few of them, so a long run is one
+"word" and a line can end early where Latin text such as `Kubernetes` sits in it (`tmux/switch-live.txt`,
+80 columns). Wrapped lines also lose their hanging indent. It also does not apply line-start
+rules, so a line can start with `。` or `、`. A UAX #14 line breaker (`unicode-linebreak`) would fix all three.
 
 **Text input and IME.** Committed CJK text arrives as ordinary key events, in tmux and over SSH
 alike: `tmux/zh-TW-access-typed.txt` types 陳怡君, moves left, deletes 怡 and inserts 小. The IME
@@ -71,9 +70,9 @@ terminal" (`console/`, `tmux/term-linux.txt`, `tmux/lang-C.txt`). Over SSH the l
 only if the client sends it (`SendEnv LANG LC_*`) and the server accepts it (`AcceptEnv`).
 
 **Plurals and numbers.** English needs `one`/`other` (`1 core`, `4 cores`; `1 thing to know`);
-Chinese and Japanese need only `other`. Fluent's `NUMBER()` in Rust has no digit grouping, so
-numbers are grouped in Rust (`1,210 MB`); all four languages group by thousands with a comma in
-software UI. Durations are a Fluent message per language (`2 min 05 s`, `2 分 05 秒`, `2分05秒`).
+Chinese needs only `other`. Fluent's `NUMBER()` in Rust has no digit grouping, so
+numbers are grouped in Rust (`1,210 MB`); all three languages group by thousands with a comma in
+software UI. Durations are a Fluent message per language (`2 min 05 s`, `2 分 05 秒`).
 Fluent wraps placeables in Unicode isolation marks by default; the terminal draws them as extra
 cells, so `set_use_isolating(false)`.
 
@@ -84,6 +83,5 @@ readable in both themes in the SVGs, but how dim renders differs between termina
 ## Strings
 
 zh-TW and zh-CN follow the zeabur-wording and zeabur-writing rules; one pass by another model
-(Codex) suggested changes, and the ones that read better were taken. ja is a plain draft and
-needs a native reviewer before it ships. Log lines are tool output and stay English in every
+(Codex) suggested changes, and the ones that read better were taken. Log lines are tool output and stay English in every
 language.
