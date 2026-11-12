@@ -2,7 +2,7 @@
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::i18n::{Catalog, LANGS, Lang, NoCjk};
+use crate::i18n::{LOCALES, Locale, Messages, NoCjk};
 use crate::mock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,30 +21,33 @@ pub(crate) const SCREENS: [Screen; 4] = [
 ];
 
 impl Screen {
-    pub(crate) const fn title_id(self) -> &'static str {
+    pub(crate) const fn title(self, m: &Messages) -> &'static str {
         match self {
-            Self::Server => "step-server",
-            Self::Access => "step-access",
-            Self::Review => "step-review",
-            Self::Install => "step-install",
+            Self::Server => m.step_server,
+            Self::Access => m.step_access,
+            Self::Review => m.step_review,
+            Self::Install => m.step_install,
         }
     }
 }
 
+/// Picks one message out of a language's messages.
+pub(crate) type Msg = fn(&Messages) -> &'static str;
+
 /// A one-line text field. `cursor` counts chars, not bytes or cells.
 #[derive(Debug)]
 pub(crate) struct Field {
-    pub(crate) label_id: &'static str,
-    pub(crate) hint_id: Option<&'static str>,
+    pub(crate) label: Msg,
+    pub(crate) hint: Option<Msg>,
     pub(crate) value: String,
     pub(crate) cursor: usize,
 }
 
 impl Field {
-    fn new(label_id: &'static str, hint_id: Option<&'static str>, value: &str) -> Self {
+    fn new(label: Msg, hint: Option<Msg>, value: &str) -> Self {
         Self {
-            label_id,
-            hint_id,
+            label,
+            hint,
             value: value.to_owned(),
             cursor: value.chars().count(),
         }
@@ -80,7 +83,7 @@ impl Field {
 
 #[derive(Debug)]
 pub(crate) struct App {
-    pub(crate) catalog: Catalog,
+    pub(crate) locale: Locale,
     /// Set when the terminal cannot show CJK; the app stays in English with ASCII borders.
     pub(crate) no_cjk: Option<NoCjk>,
     pub(crate) screen: Screen,
@@ -95,18 +98,18 @@ pub(crate) struct App {
 }
 
 impl App {
-    pub(crate) fn new(lang: Lang, no_cjk: Option<NoCjk>) -> Self {
-        let lang = if no_cjk.is_some() { Lang::En } else { lang };
+    pub(crate) fn new(lang: Locale, no_cjk: Option<NoCjk>) -> Self {
+        let lang = if no_cjk.is_some() { Locale::En } else { lang };
         Self {
-            catalog: Catalog::new(lang),
+            locale: lang,
             no_cjk,
             screen: Screen::Server,
             picker: None,
             distro: 1,
             fields: [
-                Field::new("field-address", None, mock::PRIVATE_ADDR),
-                Field::new("field-domain", Some("field-domain-hint"), ""),
-                Field::new("field-name", Some("field-name-hint"), ""),
+                Field::new(|m| m.field_address, None, mock::PRIVATE_ADDR),
+                Field::new(|m| m.field_domain, Some(|m| m.field_domain_hint), ""),
+                Field::new(|m| m.field_name, Some(|m| m.field_name_hint), ""),
             ],
             focus: 0,
             elapsed: 0,
@@ -114,9 +117,9 @@ impl App {
         }
     }
 
-    pub(crate) fn set_lang(&mut self, lang: Lang) {
-        if self.no_cjk.is_none() || lang == Lang::En {
-            self.catalog = Catalog::new(lang);
+    pub(crate) fn set_lang(&mut self, lang: Locale) {
+        if self.no_cjk.is_none() || lang == Locale::En {
+            self.locale = lang;
         }
     }
 
@@ -130,10 +133,7 @@ impl App {
             return;
         }
         if key.code == KeyCode::F(2) {
-            let current = LANGS
-                .iter()
-                .position(|l| *l == self.catalog.lang())
-                .unwrap_or(0);
+            let current = LOCALES.iter().position(|l| *l == self.locale).unwrap_or(0);
             self.picker = Some(current);
             return;
         }
@@ -157,9 +157,9 @@ impl App {
     fn on_picker_key(&mut self, row: usize, code: KeyCode) {
         match code {
             KeyCode::Up => self.picker = Some(row.saturating_sub(1)),
-            KeyCode::Down => self.picker = Some((row + 1).min(LANGS.len() - 1)),
+            KeyCode::Down => self.picker = Some((row + 1).min(LOCALES.len() - 1)),
             KeyCode::Enter => {
-                self.set_lang(LANGS[row]);
+                self.set_lang(LOCALES[row]);
                 self.picker = None;
             }
             KeyCode::Esc | KeyCode::F(2) => self.picker = None,

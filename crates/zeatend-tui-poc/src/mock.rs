@@ -1,9 +1,11 @@
 //! Mock server facts and a fake install timeline. Nothing here touches the machine.
 
+use crate::app::Msg;
+
 pub(crate) const HOSTNAME: &str = "tpe-edge-01";
 pub(crate) const SYSTEM: &str = "Ubuntu 24.04.1 LTS (x86_64)";
-pub(crate) const CPU_CORES: i64 = 4;
-pub(crate) const MEMORY_GB: i64 = 16;
+pub(crate) const CPU_CORES: u32 = 4;
+pub(crate) const MEMORY_GB: u32 = 16;
 pub(crate) const DISK_FREE_GB: &str = "58.2";
 pub(crate) const DISK_TOTAL_GB: &str = "120";
 pub(crate) const PRIVATE_ADDR: &str = "10.0.0.12";
@@ -12,19 +14,19 @@ pub(crate) const DOWNLOAD_GB: &str = "1.2";
 pub(crate) const DISK_USE_GB: &str = "3.5";
 pub(crate) const DOWNLOAD_MB: u64 = 1_210;
 
-pub(crate) const DISTROS: [(&str, &str); 3] = [
-    ("KubeSolo", "distro-kubesolo"),
-    ("K3s", "distro-k3s"),
-    ("RKE2", "distro-rke2"),
+pub(crate) const DISTROS: [(&str, Msg); 3] = [
+    ("KubeSolo", |m| m.distro_kubesolo),
+    ("K3s", |m| m.distro_k3s),
+    ("RKE2", |m| m.distro_rke2),
 ];
 
-/// Install steps: message id and how long the fake step takes, in seconds.
-pub(crate) const STEPS: [(&str, u32); 5] = [
-    ("install-step-check", 4),
-    ("install-step-download", 95),
-    ("install-step-k3s", 30),
-    ("install-step-network", 20),
-    ("install-step-ready", 45),
+/// Install steps: message and how long the fake step takes, in seconds.
+pub(crate) const STEPS: [(Msg, u32); 5] = [
+    (|m| m.install_step_check, 4),
+    (|m| m.install_step_download, 95),
+    (|m| m.install_step_k3s, 30),
+    (|m| m.install_step_network, 20),
+    (|m| m.install_step_ready, 45),
 ];
 
 pub(crate) fn total_seconds() -> u32 {
@@ -100,7 +102,10 @@ const LOG: [(u32, &str); 18] = [
     (150, "zeatend: waiting for node 10-0-0-12 to be Ready"),
     (165, "k3s[2210]: node 10-0-0-12 condition Ready=False"),
     (185, "k3s[2210]: node 10-0-0-12 condition Ready=True"),
-    (190, "zeatend: kubeconfig written to ~/.kube/zeatend-k3s.yaml"),
+    (
+        190,
+        "zeatend: kubeconfig written to ~/.kube/zeatend-k3s.yaml",
+    ),
     (194, "zeatend: done"),
 ];
 

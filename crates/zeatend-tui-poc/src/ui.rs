@@ -1,7 +1,6 @@
 //! Drawing. Colours are the 16 ANSI colours plus bold, dim and reverse, so the terminal's
 //! own light or dark palette decides the actual colours.
 
-use fluent_bundle::FluentValue;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -9,8 +8,8 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Cell, Clear, Paragraph, Row, Table, Wrap};
 
-use crate::app::{App, SCREENS, Screen};
-use crate::i18n::{LANGS, Lang, duration, group_thousands};
+use crate::app::{App, Msg, SCREENS, Screen};
+use crate::i18n::{LOCALES, Locale, duration, group_thousands};
 use crate::mock;
 use crate::text::{pad, truncate, width};
 
@@ -33,7 +32,7 @@ const fn bold() -> Style {
     Style::new().add_modifier(Modifier::BOLD)
 }
 
-fn block<'a>(app: &App, title: String) -> Block<'a> {
+fn block<'a>(app: &App, title: impl std::fmt::Display) -> Block<'a> {
     let set = if app.no_cjk.is_some() {
         ASCII_BORDER
     } else {
@@ -76,14 +75,14 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) -> Option<Position> {
 }
 
 fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let c = &app.catalog;
+    let m = app.locale.messages();
     frame.render_widget(
-        Paragraph::new(Span::styled(format!(" {}", c.t("app-title")), bold())),
+        Paragraph::new(Span::styled(format!(" {}", m.app_title), bold())),
         area,
     );
     let mut steps = Vec::new();
     for (i, screen) in SCREENS.iter().enumerate() {
-        let label = format!(" {} {} ", i + 1, c.t(screen.title_id()));
+        let label = format!(" {} {} ", i + 1, screen.title(m));
         if *screen == app.screen {
             steps.push(Span::styled(
                 label,
@@ -100,84 +99,69 @@ fn draw_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_footer(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let keys: &[(&str, &str)] = if app.picker.is_some() {
+    let keys: &[(&str, Msg)] = if app.picker.is_some() {
         &[
-            ("Up/Down", "key-choose"),
-            ("Enter", "key-next"),
-            ("Esc", "key-back"),
+            ("Up/Down", |m| m.key_choose),
+            ("Enter", |m| m.key_next),
+            ("Esc", |m| m.key_back),
         ]
     } else {
         match app.screen {
             Screen::Server => &[
-                ("Up/Down", "key-choose"),
-                ("Enter", "key-next"),
-                ("F2", "key-lang"),
-                ("Ctrl+C", "key-quit"),
+                ("Up/Down", |m| m.key_choose),
+                ("Enter", |m| m.key_next),
+                ("F2", |m| m.key_lang),
+                ("Ctrl+C", |m| m.key_quit),
             ],
             Screen::Access => &[
-                ("Tab", "key-field"),
-                ("Enter", "key-next"),
-                ("Esc", "key-back"),
-                ("F2", "key-lang"),
-                ("Ctrl+C", "key-quit"),
+                ("Tab", |m| m.key_field),
+                ("Enter", |m| m.key_next),
+                ("Esc", |m| m.key_back),
+                ("F2", |m| m.key_lang),
+                ("Ctrl+C", |m| m.key_quit),
             ],
             Screen::Review => &[
-                ("Enter", "key-install"),
-                ("Esc", "key-back"),
-                ("F2", "key-lang"),
-                ("Ctrl+C", "key-quit"),
+                ("Enter", |m| m.key_install),
+                ("Esc", |m| m.key_back),
+                ("F2", |m| m.key_lang),
+                ("Ctrl+C", |m| m.key_quit),
             ],
-            Screen::Install => &[("F2", "key-lang"), ("Ctrl+C", "key-quit")],
+            Screen::Install => &[("F2", |m| m.key_lang), ("Ctrl+C", |m| m.key_quit)],
         }
     };
     let mut spans = vec![Span::raw(" ")];
     for (key, label) in keys {
         spans.push(Span::styled(*key, bold()));
-        spans.push(Span::raw(format!(" {}   ", app.catalog.t(label))));
+        spans.push(Span::raw(format!(" {}   ", label(app.locale.messages()))));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn draw_server(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let c = &app.catalog;
-    let outer = block(app, c.t("server-title"));
+    let m = app.locale.messages();
+    let outer = block(app, m.server_title);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
     let mut lines = Vec::new();
     if app.no_cjk.is_some() {
         lines.push(Line::styled(
-            c.t("fallback-note"),
+            m.fallback_note,
             Style::new().fg(Color::Yellow),
         ));
         lines.push(Line::raw(""));
     }
 
     let info = [
-        (c.t("server-host"), mock::HOSTNAME.to_owned()),
-        (c.t("server-system"), mock::SYSTEM.to_owned()),
+        (m.server_host, mock::HOSTNAME.to_owned()),
+        (m.server_system, mock::SYSTEM.to_owned()),
+        (m.server_cpu, (m.cpu_cores)(mock::CPU_CORES)),
+        (m.server_memory, (m.memory_gb)(mock::MEMORY_GB)),
         (
-            c.t("server-cpu"),
-            c.tr("cpu-cores", &[("n", mock::CPU_CORES.into())]),
+            m.server_disk,
+            (m.disk_free)(mock::DISK_FREE_GB, mock::DISK_TOTAL_GB),
         ),
-        (
-            c.t("server-memory"),
-            c.tr("memory-gb", &[("gb", mock::MEMORY_GB.into())]),
-        ),
-        (
-            c.t("server-disk"),
-            c.tr(
-                "disk-free",
-                &[
-                    ("free", mock::DISK_FREE_GB.into()),
-                    ("total", mock::DISK_TOTAL_GB.into()),
-                ],
-            ),
-        ),
-        (
-            c.t("server-address"),
-            c.tr("addr-private", &[("addr", mock::PRIVATE_ADDR.into())]),
-        ),
+        (m.server_address, (m.addr_private)(mock::PRIVATE_ADDR)),
     ];
     let mut label_width = 0;
     for (label, _) in &info {
@@ -185,13 +169,13 @@ fn draw_server(frame: &mut Frame<'_>, app: &App, area: Rect) {
     }
     for (label, value) in info {
         lines.push(Line::from(vec![
-            Span::styled(format!(" {}  ", pad(&label, label_width)), dim()),
+            Span::styled(format!(" {}  ", pad(label, label_width)), dim()),
             Span::raw(value),
         ]));
     }
 
     lines.push(Line::raw(""));
-    lines.push(Line::styled(format!(" {}", c.t("distro-title")), bold()));
+    lines.push(Line::styled(format!(" {}", m.distro_title), bold()));
     for (i, (name, _)) in mock::DISTROS.iter().enumerate() {
         if i == app.distro {
             lines.push(Line::styled(format!(" (*) {name}"), bold().fg(Color::Cyan)));
@@ -199,27 +183,24 @@ fn draw_server(frame: &mut Frame<'_>, app: &App, area: Rect) {
             lines.push(Line::raw(format!(" ( ) {name}")));
         }
     }
-    let description = c.t(mock::DISTROS[app.distro].1);
+    let description = (mock::DISTROS[app.distro].1)(m);
     lines.push(Line::styled(format!("     {description}"), dim()));
 
     lines.push(Line::raw(""));
     lines.push(Line::from(vec![
-        Span::styled(format!(" {}  ", c.t("checks-title")), bold()),
-        Span::styled(
-            c.tr("checks-summary", &[("n", 1.into())]),
-            Style::new().fg(Color::Yellow),
-        ),
+        Span::styled(format!(" {}  ", m.checks_title), bold()),
+        Span::styled((m.checks_summary)(1), Style::new().fg(Color::Yellow)),
     ]));
     lines.push(Line::from(vec![
         Span::styled(format!(" {} ", ok_mark(app)), Style::new().fg(Color::Green)),
-        Span::raw(c.t("check-ports")),
+        Span::raw(m.check_ports),
     ]));
     lines.push(Line::from(vec![
         Span::styled(
             " ! ",
             Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         ),
-        Span::raw(c.t("check-swap")),
+        Span::raw(m.check_swap),
     ]));
 
     frame.render_widget(
@@ -236,13 +217,13 @@ fn wrapped_rows(s: &str, cells: u16) -> u16 {
 
 fn draw_access(frame: &mut Frame<'_>, app: &App, area: Rect) -> Option<Position> {
     let mut cursor = None;
-    let c = &app.catalog;
-    let outer = block(app, c.t("access-title"));
+    let m = app.locale.messages();
+    let outer = block(app, m.access_title);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
-    let note = c.t("access-private-note");
-    let mut constraints = vec![Constraint::Length(wrapped_rows(&note, inner.width - 2) + 1)];
+    let note = m.access_private_note;
+    let mut constraints = vec![Constraint::Length(wrapped_rows(note, inner.width - 2) + 1)];
     for _ in &app.fields {
         constraints.push(Constraint::Length(3));
         constraints.push(Constraint::Length(1));
@@ -260,7 +241,7 @@ fn draw_access(frame: &mut Frame<'_>, app: &App, area: Rect) -> Option<Position>
     for (i, field) in app.fields.iter().enumerate() {
         let focused = i == app.focus;
         let box_area = rows[1 + i * 2].inner(ratatui::layout::Margin::new(1, 0));
-        let mut field_block = block(app, c.t(field.label_id));
+        let mut field_block = block(app, (field.label)(m));
         if focused {
             field_block = field_block.border_style(Style::new().fg(Color::Cyan));
         } else {
@@ -284,8 +265,8 @@ fn draw_access(frame: &mut Frame<'_>, app: &App, area: Rect) -> Option<Position>
             cursor = Some(Position::new(x, text_area.y));
         }
 
-        if let Some(hint) = field.hint_id {
-            let hint = truncate(&c.t(hint), usize::from(inner.width - 2));
+        if let Some(hint) = field.hint {
+            let hint = truncate(hint(m), usize::from(inner.width - 2));
             frame.render_widget(
                 Paragraph::new(Span::styled(format!("  {hint}"), dim())),
                 rows[2 + i * 2],
@@ -296,16 +277,16 @@ fn draw_access(frame: &mut Frame<'_>, app: &App, area: Rect) -> Option<Position>
 }
 
 fn draw_review(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let c = &app.catalog;
-    let outer = block(app, c.t("review-title"));
+    let m = app.locale.messages();
+    let outer = block(app, m.review_title);
     let inner = outer.inner(area);
     frame.render_widget(outer, area);
 
     let labels = [
-        c.t("review-distro"),
-        c.t("review-address"),
-        c.t("review-domain"),
-        c.t("review-name"),
+        m.review_distro,
+        m.review_address,
+        m.review_domain,
+        m.review_name,
     ];
     let mut label_width = 0;
     for label in &labels {
@@ -315,7 +296,7 @@ fn draw_review(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let domain = &app.fields[1].value;
     let domain_cell = if domain.is_empty() {
-        Cell::from(Span::styled(c.t("review-no-domain"), dim()))
+        Cell::from(Span::styled(m.review_no_domain, dim()))
     } else {
         Cell::from(truncate(domain, value_width))
     };
@@ -350,27 +331,18 @@ fn draw_review(frame: &mut Frame<'_>, app: &App, area: Rect) {
     frame.render_widget(table, table_area);
 
     let plan = vec![
-        Line::styled(c.t("review-plan-title"), bold()),
-        Line::raw(format!(
-            "- {}",
-            c.tr("plan-download", &[("gb", mock::DOWNLOAD_GB.into())])
-        )),
-        Line::raw(format!(
-            "- {}",
-            c.tr("plan-disk", &[("gb", mock::DISK_USE_GB.into())])
-        )),
-        Line::raw(format!(
-            "- {}",
-            c.tr("plan-time", &[("min", (mock::total_seconds() / 60).into())])
-        )),
-        Line::raw(format!("- {}", c.t("plan-restart"))),
+        Line::styled(m.review_plan_title, bold()),
+        Line::raw(format!("- {}", (m.plan_download)(mock::DOWNLOAD_GB))),
+        Line::raw(format!("- {}", (m.plan_disk)(mock::DISK_USE_GB))),
+        Line::raw(format!("- {}", (m.plan_time)(mock::total_seconds() / 60))),
+        Line::raw(format!("- {}", m.plan_restart)),
     ];
     frame.render_widget(Paragraph::new(plan).wrap(Wrap { trim: false }), plan_area);
 }
 
 fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let c = &app.catalog;
-    let outer = block(app, c.t("install-title"));
+    let m = app.locale.messages();
+    let outer = block(app, m.install_title);
     let inner = outer.inner(area).inner(ratatui::layout::Margin::new(1, 0));
     frame.render_widget(outer, area);
 
@@ -387,9 +359,9 @@ fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let progress = mock::progress(app.elapsed);
     let mut names = Vec::new();
     let mut name_width = 0;
-    for (id, _) in mock::STEPS {
-        let name = c.t(id);
-        name_width = name_width.max(width(&name));
+    for (label, _) in mock::STEPS {
+        let name = label(m);
+        name_width = name_width.max(width(name));
         names.push(name);
     }
     let mut lines = Vec::new();
@@ -399,22 +371,16 @@ fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
             (
                 ok_mark(app),
                 Style::new().fg(Color::Green),
-                duration(c, seconds),
+                duration(m, seconds),
             )
         } else if i == progress.step {
             let detail = if i == 1 {
-                c.tr(
-                    "install-downloaded",
-                    &[
-                        (
-                            "done",
-                            group_thousands(mock::downloaded_mb(progress.into_step)).into(),
-                        ),
-                        ("total", group_thousands(mock::DOWNLOAD_MB).into()),
-                    ],
+                (m.install_downloaded)(
+                    &group_thousands(mock::downloaded_mb(progress.into_step)),
+                    &group_thousands(mock::DOWNLOAD_MB),
                 )
             } else {
-                duration(c, progress.into_step)
+                duration(m, progress.into_step)
             };
             (">", bold().fg(Color::Cyan), detail)
         } else {
@@ -451,34 +417,19 @@ fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let time_line = if progress.step >= mock::STEPS.len() {
         Line::styled(
-            c.tr(
-                "install-done",
-                &[(
-                    "path",
-                    FluentValue::from("~/.kube/zeatend-k3s.yaml"),
-                )],
-            ),
+            (m.install_done)("~/.kube/zeatend-k3s.yaml"),
             bold().fg(Color::Green),
         )
     } else {
         Line::from(vec![
-            Span::raw(c.tr(
-                "install-elapsed",
-                &[("time", duration(c, app.elapsed).into())],
-            )),
+            Span::raw((m.install_elapsed)(&duration(m, app.elapsed))),
             Span::raw("    "),
-            Span::styled(
-                c.tr(
-                    "install-left",
-                    &[("time", duration(c, total - app.elapsed).into())],
-                ),
-                dim(),
-            ),
+            Span::styled((m.install_left)(&duration(m, total - app.elapsed)), dim()),
         ])
     };
     frame.render_widget(Paragraph::new(time_line), time_area);
 
-    let log_block = block(app, c.t("log-title")).border_style(dim());
+    let log_block = block(app, m.log_title).border_style(dim());
     let log_inner = log_block.inner(log_area);
     frame.render_widget(log_block, log_area);
     let all = mock::log_until(app.elapsed);
@@ -494,10 +445,10 @@ fn draw_install(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_picker(frame: &mut Frame<'_>, app: &App, row: usize) {
-    let c = &app.catalog;
+    let m = app.locale.messages();
     let area = frame.area();
     let w = 46.min(area.width);
-    let h = u16::try_from(LANGS.len()).unwrap_or(4) + 4;
+    let h = u16::try_from(LOCALES.len()).unwrap_or(4) + 4;
     let popup = Rect::new(
         area.x + (area.width - w) / 2,
         area.y + (area.height.saturating_sub(h)) / 2,
@@ -505,15 +456,15 @@ fn draw_picker(frame: &mut Frame<'_>, app: &App, row: usize) {
         h,
     );
     frame.render_widget(Clear, popup);
-    let outer = block(app, c.t("lang-title")).border_style(Style::new().fg(Color::Cyan));
+    let outer = block(app, m.lang_title).border_style(Style::new().fg(Color::Cyan));
     let inner = outer.inner(popup).inner(ratatui::layout::Margin::new(1, 0));
     frame.render_widget(outer, popup);
 
     let mut lines = Vec::new();
-    for (i, lang) in LANGS.iter().enumerate() {
-        let current = *lang == c.lang();
+    for (i, lang) in LOCALES.iter().enumerate() {
+        let current = *lang == app.locale;
         let marker = if current { "(*)" } else { "( )" };
-        let blocked = app.no_cjk.is_some() && *lang != Lang::En;
+        let blocked = app.no_cjk.is_some() && *lang != Locale::En;
         // The console cannot draw the native names, so show the tag there.
         let name = if blocked {
             lang.tag().to_owned()
@@ -529,11 +480,11 @@ fn draw_picker(frame: &mut Frame<'_>, app: &App, row: usize) {
         }
         let mut text = format!("{marker} {name}");
         if blocked {
-            text.push_str(&format!("  {}", c.t("lang-needs-utf8")));
+            text.push_str(&format!("  {}", m.lang_needs_utf8));
         }
         lines.push(Line::styled(pad(&text, usize::from(inner.width)), style));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled(c.t("lang-hint"), dim()));
+    lines.push(Line::styled(m.lang_hint, dim()));
     frame.render_widget(Paragraph::new(lines), inner);
 }

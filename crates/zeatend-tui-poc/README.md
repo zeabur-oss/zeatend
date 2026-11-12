@@ -17,14 +17,13 @@ Keys: Up/Down, Tab, Enter, Esc, F2 opens the language picker on any screen, Ctrl
 
 - **ratatui + crossterm.** The Epic's docs plan (SVGs rendered from `TestBackend`) is ratatui's
   test backend, and crossterm is its default backend. Nothing in the PoC needed anything else.
-- **Fluent** (`fluent-bundle`) for strings. Plurals follow CLDR per language and the translator
-  owns the sentence (selectors, word order), which gettext's `Plural-Forms` and rust-i18n's flat
-  keys do not give. `.ftl` files are plain text that Pontoon and Weblate edit.
+- **Messages as Rust code.** `src/i18n.rs` has one `Messages` struct with a field per message:
+  `&'static str` for plain text, a `fn` for text with numbers or plurals. Each language is a
+  `const` value of it, so the compiler rejects a missing message and a wrong argument. No
+  dependency, no parser, and the translator owns the whole sentence, including plural rules.
 
-To add a language: copy `locales/en.ftl` to `locales/<tag>.ftl`, translate the values, then add
-the variant to `Lang` in `src/i18n.rs` (tag, native name, `include_str!`). The test
-`every_language_has_every_english_message` fails until every message exists; a missing message
-falls back to English at run time.
+To add a language: add the variant to `Locale` in `src/i18n.rs` (tag, native name, `messages`),
+then write its `const` value; the build fails until every message exists.
 
 ## What the screenshots show
 
@@ -70,11 +69,8 @@ terminal" (`console/`, `tmux/term-linux.txt`, `tmux/lang-C.txt`). Over SSH the l
 only if the client sends it (`SendEnv LANG LC_*`) and the server accepts it (`AcceptEnv`).
 
 **Plurals and numbers.** English needs `one`/`other` (`1 core`, `4 cores`; `1 thing to know`);
-Chinese needs only `other`. Fluent's `NUMBER()` in Rust has no digit grouping, so
-numbers are grouped in Rust (`1,210 MB`); all three languages group by thousands with a comma in
-software UI. Durations are a Fluent message per language (`2 min 05 s`, `2 分 05 秒`).
-Fluent wraps placeables in Unicode isolation marks by default; the terminal draws them as extra
-cells, so `set_use_isolating(false)`.
+Chinese needs only `other`. Numbers are grouped in Rust (`1,210 MB`); all three languages group by thousands with a comma in
+software UI. Durations are a function per language (`2 min 05 s`, `2 分 05 秒`).
 
 **Colours.** Only the 16 ANSI colours plus bold, dim and reverse, so the terminal's palette
 decides. Reverse-video slabs turned into dark bars on light themes and were removed; dim text is
