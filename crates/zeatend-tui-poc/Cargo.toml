@@ -1,0 +1,19 @@
+[package]
+name = "zeatend-tui-poc"
+description = "Throwaway proof of concept: the Zeatend install screens in four languages, with mock data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fluent-bundle = "0.16.0"
+ratatui = "0.30.2"
+unicode-width = "0.2.3"
+
+[dev-dependencies]
+fluent-syntax = "0.12.0"
+
+# A throwaway proof of concept: default lints only.
+[lints]

@@ -67,6 +67,10 @@
               # Quality and supply chain
               cargo-deny
               cargo-nextest
+
+              # The TUI proof of concept: a real terminal to drive it, SVG to PNG for previews
+              tmux
+              librsvg
             ];
 
             env = {

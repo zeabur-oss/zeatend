@@ -9,8 +9,6 @@ rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
-[workspace.dependencies]
-
 # Lint policy (see CONTRIBUTING.md), shared with Zeabur Builder and Zeabur Identity.
 # Everything is `warn` so work in progress still compiles; CI runs with `-D warnings`.
 

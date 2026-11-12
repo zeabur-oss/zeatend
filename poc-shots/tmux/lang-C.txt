@@ -1,0 +1,24 @@
+ Zeabur installer                       1 Server  2 Access  3 Review  4 Install
++ This server -----------------------------------------------------------------+
+|This terminal cannot show Chinese or Japanese, so the installer uses English. |
+|                                                                              |
+| Hostname  tpe-edge-01                                                        |
+| System    Ubuntu 24.04.1 LTS (x86_64)                                        |
+| CPU       4 cores                                                            |
+| Memory    16 GB                                                              |
+| Disk      58.2 GB free of 120 GB                                             |
+| Address   10.0.0.12 (private)                                                |
+|                                                                              |
+| Which Kubernetes to install                                                  |
+| ( ) KubeSolo                                                                 |
+| (*) K3s                                                                      |
+| ( ) RKE2                                                                     |
+|     Light and widely used. You can add more servers later.                   |
+|                                                                              |
+| Checks  1 thing to know                                                      |
+| + Ports 80, 443 and 6443 are free                                            |
+| ! Swap is on. Kubernetes runs better without it, so the installer turns it   |
+|off.                                                                          |
+|                                                                              |
++------------------------------------------------------------------------------+
+ Up/Down choose   Enter continue   F2 language   Ctrl+C quit
