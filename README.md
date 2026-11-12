@@ -12,4 +12,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues as described in
 
 ## License
 
-[Apache-2.0](LICENSE).
+Zeatend is licensed under the [GNU Affero General Public License v3.0](LICENSE) (`AGPL-3.0-only`).
+The licence applies to Zeatend only. It does not change the licence of Zeabur, and it does not
+apply to the clusters Zeatend sets up.

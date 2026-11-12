@@ -6,8 +6,8 @@ terminal UI.
 ## Developer Certificate of Origin
 
 This project uses the [Developer Certificate of Origin 1.1](DCO). Sign off every commit to
-certify that you wrote it or otherwise have the right to submit it under the
-[Apache License 2.0](LICENSE):
+certify that you wrote it or otherwise have the right to submit it. Contributions are licensed
+under the [GNU Affero General Public License v3.0](LICENSE):
 
 ```sh
 git commit -s

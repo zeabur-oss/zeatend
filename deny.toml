@@ -25,6 +25,10 @@ allow = [
 ]
 unused-allowed-license = "allow"
 
+# Workspace crates are not published; their own licence (AGPL-3.0-only) is not a dependency licence.
+[licenses.private]
+ignore = true
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
