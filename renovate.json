@@ -1,6 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "description": "The shared preset of zeabur-oss, plus Cargo crates, Nix and the release scripts' package.json. Lock file maintenance updates flake.lock; the Rust nightly date in rust-toolchain.toml is bumped by hand.",
+  "description": "The shared preset of zeabur-oss, plus Cargo crates, Nix and the release scripts' package.json. Lock file maintenance updates flake.lock; the Rust nightly date in rust-toolchain.toml moves with the rust-toolchain manager, after the preset's seven-day wait.",
   "extends": [
     "github>zeabur-oss/.github"
   ],
@@ -8,6 +8,7 @@
     "bun",
     "cargo",
     "github-actions",
-    "nix"
+    "nix",
+    "rust-toolchain"
   ]
 }
