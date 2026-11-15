@@ -40,9 +40,11 @@ A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds
 Shared with [Zeabur Builder](https://github.com/zeabur-oss/builder) and
 [Zeabur Identity](https://github.com/zeabur-oss/identity):
 
-- `flake.lock` is the only place the compiler version is set: the newest nightly in the locked
-  rust-overlay that has every component listed in `flake.nix`. Renovate's lock file maintenance
-  (`renovate.json`) moves it every Monday.
+- `rust-toolchain.toml` sets the compiler: the nightly (by date) and components. `nix develop` builds
+  exactly that toolchain, and rustup, which reads the same file, installs it outside Nix. Renovate has no
+  manager for the nightly date. To move it, set `channel` to a newer `nightly-YYYY-MM-DD`, run
+  `nix flake update rust-overlay` if the locked rust-overlay does not have that date yet, and fix any new
+  clippy lints on that pull request.
 - Lints are set once in `Cargo.toml`. All are `warn`, and `cargo lint` turns them into errors.
   Suppress with `#[expect(lint, reason = "…")]`. Only the binary's `output` module writes to
   stdout or stderr.
