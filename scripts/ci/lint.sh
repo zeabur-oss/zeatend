@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.."
 cargo fmt --all --check
 nixfmt --check flake.nix
 shellcheck scripts/ci/*.sh
-actionlint
+jactionlint
 
 cargo lint
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked

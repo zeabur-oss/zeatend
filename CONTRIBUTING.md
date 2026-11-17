@@ -25,7 +25,7 @@ Each job in `.github/workflows/ci.yml` runs `nix develop -c scripts/ci/<job>.sh`
 Underneath:
 
 ```sh
-cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/ci/*.sh && actionlint
+cargo fmt --all --check && nixfmt --check flake.nix && shellcheck scripts/ci/*.sh && jactionlint
 cargo lint                                   # clippy, all targets and features, -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 cargo nextest run --workspace --all-features --locked --no-tests=warn

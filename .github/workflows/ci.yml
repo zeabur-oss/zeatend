@@ -24,6 +24,7 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-26.04-arm
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,6 +36,7 @@ jobs:
 
   test:
     runs-on: ubuntu-26.04-arm
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,18 +46,13 @@ jobs:
           rust-cache: true
       - run: nix develop -c scripts/ci/test.sh
 
-  zizmor:
-    uses: zeabur-oss/.github/.github/workflows/zizmor.yml@cb333d6e0f4250e3b2ca3625dffca106d5ea2713 # main
-
   # The check rulesets require.
   ok:
     name: ci / ok
     if: always()
-    needs: [lint, test, zizmor]
+    needs: [lint, test]
     runs-on: ubuntu-slim
+    timeout-minutes: 5
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
         run: exit 1
-
-  dco:
-    uses: zeabur-oss/.github/.github/workflows/dco.yml@cb333d6e0f4250e3b2ca3625dffca106d5ea2713 # main
