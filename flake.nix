@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    # Rust toolchains. The locked revision sets the nightly (overlays.default).
+    # Rust toolchains. rust-toolchain.toml sets the nightly; the locked revision must have its manifest.
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -42,18 +42,8 @@
     in
     {
       overlays.default = final: _: {
-        # The newest nightly in the locked rust-overlay that has all these components.
-        rustToolchain = final.rust-bin.selectLatestNightlyWith (
-          toolchain:
-          toolchain.minimal.override {
-            extensions = [
-              "rustfmt"
-              "clippy"
-              "rust-src"
-              "rust-analyzer"
-            ];
-          }
-        );
+        # The nightly and components of rust-toolchain.toml, the same file rustup reads.
+        rustToolchain = final.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
       };
 
       devShells = forEachSupportedSystem (
