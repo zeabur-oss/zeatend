@@ -32,7 +32,11 @@ jobs:
       - uses: zeabur-oss/.github/actions/ci-setup@3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e # main
         with:
           rust-cache: true
-      - run: nix develop -c scripts/ci/lint.sh
+      - parallel:
+          - name: Static checks
+            run: nix develop -c scripts/ci/lint.sh static
+          - name: Cargo checks
+            run: nix develop -c scripts/ci/lint.sh cargo
 
   test:
     runs-on: instabox-small
