@@ -1,4 +1,4 @@
-# cargo-deny policy. Rationale: .claude/skills/zeabur-oss-dependencies/SKILL.md.
+# cargo-deny policy.
 
 [graph]
 all-features = true
