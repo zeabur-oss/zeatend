@@ -7,7 +7,7 @@ UI. A Rust workspace in `crates/`; the binary is `zeabur-zeatend`.
 - Before you commit, run the checks in `.claude/skills/zeabur-zeatend-dev/SKILL.md`; CI runs the
   same jobs through `scripts/ci/<job>.sh`.
 - Skills in `.claude/skills` hold this repository's conventions; the shared `zeabur-oss-*` and
-  `zeabur-writing` skills are in [zeabur-oss/.github](https://github.com/zeabur-oss/.github/tree/main/skills).
+  `zeabur-writing` skills are in [zeabur-oss/skills](https://github.com/zeabur-oss/skills).
 - Commits are Conventional Commits signed off with `git commit -s`. No AI trailer
   (`Co-Authored-By`) in commits or pull requests.
 - Text in the repository is English.
