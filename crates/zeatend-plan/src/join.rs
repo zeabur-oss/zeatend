@@ -258,8 +258,8 @@ pub fn advice(distribution: Rancher, role: Role) -> Vec<Warning> {
     all
 }
 
-/// What every join is told: the ports, UDP, high availability for servers, where volumes live,
-/// and an unpinned token.
+/// What every join is told: the ports, UDP, high availability for servers, where volumes live on
+/// K3s, and an unpinned token.
 fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Warning> {
     let mut warnings = Vec::new();
     let (udp, network) = distribution.vxlan();
@@ -300,13 +300,16 @@ fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> V
                 .to_owned(),
         ));
     }
-    warnings.push(warning(
-        "join.storage.local",
-        &[],
-        "Volumes on the default local-path storage class stay on the node that created them: a \
-         pod using one runs only on that node, and the data goes with the node."
-            .to_owned(),
-    ));
+    // RKE2 has no storage class until the Zeabur catalog installs one.
+    if distribution == Rancher::K3s {
+        warnings.push(warning(
+            "join.storage.local",
+            &[],
+            "Volumes on the default local-path storage class stay on the node that created them: \
+             a pod using one runs only on that node, and the data goes with the node."
+                .to_owned(),
+        ));
+    }
     if !token_pinned {
         warnings.push(warning(
             "join.token.unpinned",
@@ -486,8 +489,7 @@ mod tests {
                 "join.sameRegion",
                 "join.port.closed",
                 "join.ports",
-                "join.udp",
-                "join.storage.local"
+                "join.udp"
             ]
         );
         assert_eq!(p.blockers.len(), 0);
@@ -554,18 +556,10 @@ mod tests {
                 .map(|w| w.code)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            codes(Role::Worker),
-            ["join.sameRegion", "join.ports", "join.storage.local"]
-        );
+        assert_eq!(codes(Role::Worker), ["join.sameRegion", "join.ports"]);
         assert_eq!(
             codes(Role::Server),
-            [
-                "join.sameRegion",
-                "join.ports",
-                "join.servers.ha",
-                "join.storage.local"
-            ]
+            ["join.sameRegion", "join.ports", "join.servers.ha"]
         );
     }
 

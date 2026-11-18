@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use zeatend_plan::cluster::Rancher;
-use zeatend_plan::{kubesolo, rke2};
+use zeatend_plan::kubesolo;
 
 use crate::{cmd, systemd};
 
@@ -183,18 +183,12 @@ impl Node {
         }
     }
 
-    /// Where the node keeps secrets or data: the root file system, the data directory, the
-    /// configuration with its tokens and kubeconfigs, and the volumes of RKE2's local-path
-    /// storage.
+    /// Where the node keeps secrets or data: the root file system, the data directory, and the
+    /// configuration with its tokens and kubeconfigs.
     fn secret_paths(self) -> Vec<&'static str> {
         let mut paths = vec!["/", self.data_dir()];
         match self {
-            Self::Server(d) | Self::Agent(d) => {
-                paths.push(d.layout().config_dir);
-                if d == Rancher::Rke2 {
-                    paths.push(rke2::STORAGE_DIR);
-                }
-            }
+            Self::Server(d) | Self::Agent(d) => paths.push(d.layout().config_dir),
             Self::KubeSolo => {
                 paths.extend(
                     [kubesolo::CONFIG_FILE, kubesolo::KUBECONFIG]
@@ -776,12 +770,7 @@ mod tests {
         for node in [Node::Server(Rancher::Rke2), Node::Agent(Rancher::Rke2)] {
             assert_eq!(
                 node.secret_paths(),
-                [
-                    "/",
-                    "/var/lib/rancher",
-                    "/etc/rancher/rke2",
-                    "/var/lib/zeatend/storage"
-                ]
+                ["/", "/var/lib/rancher", "/etc/rancher/rke2"]
             );
         }
         assert_eq!(
@@ -802,9 +791,9 @@ mod tests {
             least_encrypted(&[
                 ("/", Encrypted),
                 ("/etc/rancher/rke2", Unknown),
-                ("/var/lib/zeatend/storage", Plain),
+                ("/var/lib/rancher", Plain),
             ]),
-            (Plain, vec!["/var/lib/zeatend/storage"])
+            (Plain, vec!["/var/lib/rancher"])
         );
         assert_eq!(
             least_encrypted(&[("/", Encrypted), ("/etc/rancher/rke2", Unknown)]),
