@@ -1,7 +1,7 @@
 //! Writing files atomically with a mode.
 
 use std::fs::{self, File, OpenOptions, Permissions};
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
@@ -148,7 +148,7 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>, HostError> {
 ///
 /// # Errors
 ///
-/// When `/dev/urandom` cannot be read.
+/// When the operating system's random number generator fails.
 pub fn random_hex() -> Result<String, HostError> {
     random_bytes(64).map(hex::encode)
 }
@@ -157,12 +157,11 @@ pub fn random_hex() -> Result<String, HostError> {
 ///
 /// # Errors
 ///
-/// When `/dev/urandom` cannot be read.
+/// When the operating system's random number generator fails.
 pub fn random_bytes(n: usize) -> Result<Vec<u8>, HostError> {
     let mut bytes = vec![0_u8; n];
-    File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
-        .map_err(HostError::io("/dev/urandom"))?;
+    // AWS-LC reads getrandom(2), which waits until the kernel pool is seeded.
+    aws_lc_rs::rand::fill(&mut bytes).map_err(|_unspecified| HostError::Random)?;
     Ok(bytes)
 }
 

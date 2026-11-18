@@ -13,11 +13,14 @@ publish = false
 zeatend-host = { path = "crates/zeatend-host" }
 zeatend-plan = { path = "crates/zeatend-plan" }
 
+# The crypto backend rustls already uses; only its random number generator is called directly.
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 base64 = { version = "0.23", default-features = false, features = ["alloc"] }
 clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "usage", "error-context"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 hex = "0.4"
 httpdate = "1"
+jiff = { version = "0.2.42", default-features = false, features = ["std"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 semver = { version = "1", default-features = false }
 serde = { version = "1", features = ["derive"] }

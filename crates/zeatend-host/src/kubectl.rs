@@ -191,28 +191,11 @@ impl Kubectl {
     }
 }
 
-/// A Kubernetes timestamp (`2026-10-23T08:00:30Z`, RFC 3339 in UTC) in seconds since the Unix
-/// epoch.
+/// A Kubernetes timestamp (`2026-10-23T08:00:30Z`, RFC 3339) in seconds since the Unix epoch.
 #[must_use]
 pub fn unix_seconds(text: &str) -> Option<u64> {
-    let (date, time) = text.strip_suffix('Z')?.split_once('T')?;
-    let mut date = date.splitn(3, '-').map(|p| p.parse::<i64>().ok());
-    let (y, m, d) = (date.next()??, date.next()??, date.next()??);
-    let time = time.split('.').next()?;
-    let mut time = time.splitn(3, ':').map(|p| p.parse::<i64>().ok());
-    let (hh, mm, ss) = (time.next()??, time.next()??, time.next()??);
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
-        return None;
-    }
-    // Days from 1970-01-01 to the date in the proleptic Gregorian calendar (Howard Hinnant's
-    // days_from_civil).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
+    let at: jiff::Timestamp = text.parse().ok()?;
+    u64::try_from(at.as_second()).ok()
 }
 
 /// Calls `ready` every few seconds until it returns `true`.
@@ -278,7 +261,11 @@ mod tests {
         assert_eq!(unix_seconds("2000-03-01T00:00:00Z"), Some(951_868_800));
         assert_eq!(unix_seconds("2026-10-23T08:00:30Z"), Some(1_792_742_430));
         assert_eq!(unix_seconds("2026-10-23T08:00:30.5Z"), Some(1_792_742_430));
-        assert_eq!(unix_seconds("2026-10-23T08:00:30+08:00"), None);
+        assert_eq!(
+            unix_seconds("2026-10-23T16:00:30+08:00"),
+            Some(1_792_742_430)
+        );
+        assert_eq!(unix_seconds("1969-12-31T23:59:59Z"), None);
         assert_eq!(unix_seconds("yesterday"), None);
     }
 

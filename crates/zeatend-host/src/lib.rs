@@ -60,6 +60,9 @@ pub enum HostError {
         /// Why it did not parse.
         reason: String,
     },
+    /// The operating system's random number generator failed.
+    #[error("the system random number generator failed")]
+    Random,
 }
 
 impl HostError {
