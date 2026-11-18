@@ -323,9 +323,10 @@ fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> V
 ///
 /// # Errors
 ///
-/// When the architecture has no release, K3s is asked for a second server, or the node name
-/// cannot be used.
+/// When a newer zeatend applied, the architecture has no release, K3s is asked for a second
+/// server, or the node name cannot be used.
 pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanError> {
+    facts.facts.check_zeatend_version()?;
     let join = &config.join;
     let node_name = node_name::choose(
         config.host.node_name.as_deref(),
@@ -432,7 +433,6 @@ mod tests {
                 memory_mib: 4096,
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
                 record: None,
-                zeatend_version: None,
                 apparmor_restricts_unconfined: false,
             },
             rtt_us: rtt_us.to_vec(),

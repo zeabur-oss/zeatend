@@ -34,7 +34,6 @@ pub async fn read() -> Result<Facts, HostError> {
         })?,
         node_ips,
         record: None,
-        zeatend_version: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
             .is_ok_and(|v| v.trim() == "1"),
     })

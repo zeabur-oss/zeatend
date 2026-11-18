@@ -406,12 +406,51 @@ impl Rancher {
         ports
     }
 
-    /// The files of the first server, in the order to write them.
+    /// The files of a server, in the order to write them.
     #[must_use]
     pub fn server_files(self, options: &Options) -> Vec<HostFile> {
-        match self {
+        let mut files = match self {
             Self::K3s => crate::k3s::host_files(options),
             Self::Rke2 => crate::rke2::host_files(options),
+        };
+        files.push(self.servicelb_policy());
+        files
+    }
+
+    /// The `NetworkPolicy` that lets outside traffic into the `ServiceLB` pods, as a manifest the
+    /// server's deploy controller applies.
+    ///
+    /// `kube-system/default-network-policy` lets in only pods of `kube-system`: RKE2's `cis`
+    /// profile adds it, and zeatend adds it on K3s. Without this policy, a `ServiceLB` pod on a
+    /// worker gets no outside requests. Each distribution labels the pods with its own prefix.
+    fn servicelb_policy(self) -> HostFile {
+        let manifests = match self {
+            Self::K3s => crate::k3s::MANIFESTS_DIR,
+            Self::Rke2 => crate::rke2::MANIFESTS_DIR,
+        };
+        let policy = serde_json::json!({
+            "apiVersion": "networking.k8s.io/v1",
+            "kind": "NetworkPolicy",
+            "metadata": {
+                "name": "zeatend-servicelb",
+                "namespace": "kube-system",
+                "labels": {"app.kubernetes.io/managed-by": crate::plan::MANAGER},
+            },
+            "spec": {
+                "podSelector": {"matchExpressions": [
+                    {"key": self.servicelb_label(), "operator": "Exists"},
+                ]},
+                "policyTypes": ["Ingress"],
+                "ingress": [{}],
+            },
+        });
+        HostFile {
+            path: format!("{manifests}/zeatend-servicelb-policy.yaml"),
+            mode: 0o600,
+            content: format!(
+                "# Written by zeatend; {} applies it on every start.\n---\n{policy}\n",
+                self.title()
+            ),
         }
     }
 
@@ -600,6 +639,41 @@ pub(crate) fn yaml_list(out: &mut String, key: &str, items: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_gets_the_servicelb_policy_as_a_manifest() {
+        let options = Options {
+            tls_san: Vec::new(),
+        };
+        for rancher in Rancher::ALL {
+            let file = rancher
+                .server_files(&options)
+                .into_iter()
+                .find(|f| f.path.ends_with("/zeatend-servicelb-policy.yaml"))
+                .unwrap();
+            assert!(file.path.starts_with(match rancher {
+                Rancher::K3s => crate::k3s::MANIFESTS_DIR,
+                Rancher::Rke2 => crate::rke2::MANIFESTS_DIR,
+            }));
+            assert_eq!(file.mode, 0o600);
+            let policy: serde_json::Value = serde_saphyr::from_str(&file.content).unwrap();
+            assert_eq!(policy["kind"], "NetworkPolicy");
+            assert_eq!(
+                policy["spec"]["podSelector"]["matchExpressions"][0]["key"],
+                rancher.servicelb_label()
+            );
+            assert_eq!(
+                policy["metadata"]["labels"]["app.kubernetes.io/managed-by"],
+                crate::plan::MANAGER
+            );
+            assert!(
+                rancher
+                    .agent_files()
+                    .iter()
+                    .all(|f| !f.path.ends_with("/zeatend-servicelb-policy.yaml"))
+            );
+        }
+    }
 
     #[test]
     fn the_minimum_holds_the_requests_on_top_of_the_reserves() {

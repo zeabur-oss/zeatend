@@ -49,7 +49,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
     s
 }
 
-/// What `apply` changes against the install record that `unit`'s cluster holds; empty on a first
+/// What `apply` changes for `unit` against the install record on the host; empty on a first
 /// install.
 pub(crate) fn changes(changes: Option<&Changes>, unit: &str) -> String {
     let mut s = String::new();
@@ -264,7 +264,6 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
             record: None,
-            zeatend_version: None,
             apparmor_restricts_unconfined: false,
         }
     }

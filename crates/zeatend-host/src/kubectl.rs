@@ -1,7 +1,7 @@
 //! The cluster, through the `kubectl` and admin kubeconfig of K3s or RKE2.
 //!
-//! A subprocess rather than a client library: zeatend applies a handful of objects and
-//! waits on them, and `kubectl` is already on the host, matched to the server.
+//! A subprocess rather than a client library: zeatend reads a few objects and waits on them, and
+//! `kubectl` is already on the host, matched to the server.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -40,33 +40,11 @@ impl Kubectl {
     }
 
     /// Runs `kubectl` with the kubeconfig.
-    ///
-    /// # Errors
-    ///
-    /// When it fails.
-    pub async fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, HostError> {
+    async fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, HostError> {
         let kubeconfig = format!("--kubeconfig={}", self.kubeconfig.display());
         let mut all = vec![kubeconfig.as_str()];
         all.extend_from_slice(args);
         cmd::run(&self.binary, &all, stdin).await
-    }
-
-    /// Server-side applies YAML or JSON documents as zeatend's field manager. Fields another
-    /// manager set stay; only the ones zeatend set before and leaves out now are removed.
-    async fn apply(&self, documents: &[u8]) -> Result<String, HostError> {
-        let manager = format!("--field-manager={MANAGER}");
-        self.run(
-            &[
-                "apply",
-                "--server-side",
-                "--force-conflicts",
-                &manager,
-                "-f",
-                "-",
-            ],
-            Some(documents),
-        )
-        .await
     }
 
     /// Server-side applies documents into `namespace` when they name none.
@@ -101,15 +79,6 @@ impl Kubectl {
                 result => return result,
             }
         }
-    }
-
-    /// Server-side applies one object.
-    ///
-    /// # Errors
-    ///
-    /// When the server rejects it.
-    pub async fn apply_object(&self, object: &Value) -> Result<(), HostError> {
-        self.apply(object.to_string().as_bytes()).await.map(drop)
     }
 
     /// Gets an object as JSON, or `None` when it does not exist.

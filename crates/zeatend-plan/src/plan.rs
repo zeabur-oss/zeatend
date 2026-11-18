@@ -4,7 +4,6 @@
 //! reviewed, diffed and tested.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
 use crate::config::Config;
@@ -32,12 +31,9 @@ pub struct Facts {
     /// The addresses the node registers with (`node-ip`); empty leaves the choice to the
     /// distribution.
     pub node_ips: Vec<String>,
-    /// What an earlier `apply` recorded in the cluster.
+    /// What an earlier `apply` or `join` recorded on the host.
     #[serde(skip)]
     pub record: Option<Record>,
-    /// The version of the zeatend that last applied, as kept on the host.
-    #[serde(skip)]
-    pub zeatend_version: Option<String>,
     /// `kernel.apparmor_restrict_unprivileged_unconfined` is 1; see
     /// [`cluster::apparmor_profile`].
     #[serde(skip)]
@@ -52,18 +48,15 @@ impl Facts {
             .then(cluster::apparmor_profile)
     }
 
-    /// Stops when a newer zeatend applied, as the record or the host says.
+    /// Stops when a newer zeatend applied, as the record says.
     ///
     /// # Errors
     ///
     /// [`PlanError::NewerZeatend`].
     pub fn check_zeatend_version(&self) -> Result<(), PlanError> {
-        if let Some(record) = &self.record {
-            record.check_zeatend_version()?;
-        }
-        self.zeatend_version
-            .as_deref()
-            .map_or(Ok(()), crate::record::check_zeatend_version)
+        self.record
+            .as_ref()
+            .map_or(Ok(()), Record::check_zeatend_version)
     }
 }
 
@@ -384,34 +377,6 @@ pub(crate) fn cluster_plan(
     })
 }
 
-/// The namespace where K3s and RKE2 run the `ServiceLB` pods.
-const SERVICELB_NAMESPACE: &str = "kube-system";
-
-/// The `NetworkPolicy` that lets outside traffic into the `ServiceLB` pods.
-///
-/// `kube-system/default-network-policy` lets in only pods of `kube-system`: RKE2's `cis` profile
-/// adds it, and zeatend adds it on K3s. Without this policy, a `ServiceLB` pod on a worker gets no
-/// outside requests. Each distribution labels the pods with its own prefix.
-#[must_use]
-pub fn servicelb_policy(distribution: Rancher) -> Value {
-    json!({
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {
-            "name": "zeatend-servicelb",
-            "namespace": SERVICELB_NAMESPACE,
-            "labels": {"app.kubernetes.io/managed-by": MANAGER},
-        },
-        "spec": {
-            "podSelector": {"matchExpressions": [
-                {"key": distribution.servicelb_label(), "operator": "Exists"},
-            ]},
-            "policyTypes": ["Ingress"],
-            "ingress": [{}],
-        },
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,7 +395,6 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.5".to_owned()],
             record: None,
-            zeatend_version: None,
             apparmor_restricts_unconfined: false,
         }
     }
@@ -440,17 +404,21 @@ mod tests {
     }
 
     #[test]
-    fn a_stopped_cluster_last_applied_by_a_newer_zeatend_is_left_alone() {
-        let stopped = Facts {
-            zeatend_version: Some("99.0.0".to_owned()),
+    fn a_host_last_applied_by_a_newer_zeatend_is_left_alone() {
+        let newer = Facts {
+            record: Some(Record {
+                zeatend_version: "99.0.0".to_owned(),
+                distribution: None,
+                version: None,
+            }),
             ..facts()
         };
         assert!(matches!(
-            plan(&config("{}"), &stopped),
+            plan(&config("{}"), &newer),
             Err(PlanError::NewerZeatend { recorded, .. }) if recorded == "99.0.0"
         ));
         let own = Facts {
-            zeatend_version: Some(record::ZEATEND_VERSION.to_owned()),
+            record: Some(Record::new(Distribution::K3s, "v1.0.0+k3s1")),
             ..facts()
         };
         plan(&config("{}"), &own).unwrap();
@@ -476,6 +444,7 @@ mod tests {
                 "/etc/rancher/k3s/admission.yaml",
                 "/etc/rancher/k3s/config.yaml",
                 "/var/lib/rancher/k3s/server/manifests/zeabur-cis.yaml",
+                "/var/lib/rancher/k3s/server/manifests/zeatend-servicelb-policy.yaml",
                 "/etc/rancher/k3s/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/k3s/config.yaml.d/20-node-ip.yaml",
             ]
@@ -561,21 +530,6 @@ mod tests {
             assert!(
                 plan.host_files.contains(&cluster::apparmor_profile()),
                 "{distribution}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_servicelb_policy_selects_the_distributions_pods() {
-        for rancher in Rancher::ALL {
-            let policy = servicelb_policy(rancher);
-            assert_eq!(
-                policy["spec"]["podSelector"]["matchExpressions"][0]["key"],
-                rancher.servicelb_label()
-            );
-            assert_eq!(
-                policy["metadata"]["labels"]["app.kubernetes.io/managed-by"],
-                MANAGER
             );
         }
     }

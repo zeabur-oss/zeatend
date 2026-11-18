@@ -1,5 +1,5 @@
-//! The install record that `apply` keeps in `kube-system/zeatend`, and what the next `apply`
-//! changes against it.
+//! The install record that `apply` and `join` keep on the host, and what the next `apply` changes
+//! against it.
 
 use std::cmp::Ordering;
 
@@ -7,16 +7,17 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::PlanError;
+use crate::cluster::Distribution;
 
 /// This zeatend's version.
 pub const ZEATEND_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// The file in zeatend's state directory that keeps the version of the zeatend that last applied,
-/// for when the cluster is stopped and its record cannot be read.
-pub const VERSION_FILE: &str = "zeatend-version";
+/// The file in zeatend's state directory that holds the [`Record`] as JSON.
+pub const RECORD_FILE: &str = "record.json";
 
-/// What an earlier `apply` recorded.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What an earlier `apply` or `join` recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Record {
     /// The version of the zeatend that wrote it.
     pub zeatend_version: String,
@@ -27,7 +28,18 @@ pub struct Record {
 }
 
 impl Record {
-    /// Reads the `data` of the `ConfigMap`. `None` when it names no zeatend version.
+    /// The record of this zeatend installing `version` of `distribution`.
+    #[must_use]
+    pub fn new(distribution: Distribution, version: &str) -> Self {
+        Self {
+            zeatend_version: ZEATEND_VERSION.to_owned(),
+            distribution: Some(distribution.id().to_owned()),
+            version: Some(version.to_owned()),
+        }
+    }
+
+    /// Reads the record from the JSON of [`RECORD_FILE`]. `None` when it names no zeatend
+    /// version.
     #[must_use]
     pub fn from_data(data: &Value) -> Option<Self> {
         let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
@@ -187,5 +199,20 @@ mod tests {
             })
         );
         assert_eq!(Record::from_data(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn a_record_reads_back_what_it_wrote() {
+        let record = Record::new(Distribution::Rke2, "v1.0.0+rke2r1");
+        let json = serde_json::to_value(&record).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "zeatendVersion": ZEATEND_VERSION,
+                "distribution": "rke2",
+                "version": "v1.0.0+rke2r1",
+            })
+        );
+        assert_eq!(Record::from_data(&json), Some(record));
     }
 }

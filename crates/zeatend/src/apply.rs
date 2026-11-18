@@ -5,24 +5,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde_json::json;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::preflight::{self, Status};
-use zeatend_host::{archive, cmd, download, facts, files, systemd};
+use zeatend_host::{HostError, archive, cmd, download, facts, files, systemd};
 use zeatend_plan::cluster::{APPARMOR_PROFILE, HostFile, Rancher};
 use zeatend_plan::config::Config;
-use zeatend_plan::fit::{self, NodeMemory};
 use zeatend_plan::k3s;
-use zeatend_plan::plan::{self, ClusterPlan, Download, MANAGER, Plan, Release};
-use zeatend_plan::record::{Record, VERSION_FILE, ZEATEND_VERSION};
+use zeatend_plan::plan::{self, ClusterPlan, Download, Plan, Release};
+use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
 
 use crate::{InstallError, output, render};
 
-/// Downloads, and the version of the zeatend that last applied.
+/// Downloads and the install record of K3s and RKE2.
 pub(crate) const STATE_DIR: &str = "/var/lib/rancher/zeatend";
-/// The `ConfigMap` in `kube-system` that records what was installed.
-pub(crate) const STATE_CONFIGMAP: &str = "zeatend";
 /// The file in a state directory that says a restart is owed.
 const RESTART_OWED: &str = "restart-owed";
 
@@ -81,8 +77,7 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
 
 pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     let rancher = rancher(config)?;
-    let running = systemd::is_active(rancher.server_unit()).await;
-    let mut plan = make_plan(config, rancher).await?;
+    let plan = make_plan(config, rancher).await?;
     output::line(render::plan(&plan).trim_end());
     check_host(
         preflight::Node::Server(rancher),
@@ -101,11 +96,6 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     .await?;
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     files::set_modes(Path::new(rancher.layout().tls_dir), ".crt", 0o600)?;
-    // A stopped cluster could not be read while planning: plan again now that it answers.
-    if !running && read_record(&kubectl).await?.is_some() {
-        plan = make_plan(config, rancher).await?;
-        output::line(render::changes(plan.changes.as_ref(), rancher.server_unit()).trim_end());
-    }
     let name = plan.node_name.clone();
     if started.is_some() {
         kubectl::poll(
@@ -120,11 +110,10 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         .await?;
     }
 
-    output::step("ServiceLB network policy");
-    kubectl
-        .apply_object(&plan::servicelb_policy(rancher))
-        .await?;
-    record(&kubectl, &plan).await?;
+    write_record(
+        Path::new(STATE_DIR),
+        &Record::new(plan.distribution, plan.release.version()),
+    )?;
 
     output::step("Done");
     let layout = rancher.layout();
@@ -138,15 +127,10 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// The plan, with the install record read from the cluster when it runs.
+/// The plan, with the install record read from the host.
 async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
-    let kubectl = Kubectl::admin(rancher);
-    let running = systemd::is_active(rancher.server_unit()).await;
     let mut facts = facts::read().await?;
-    facts.zeatend_version = kept_version(Path::new(STATE_DIR));
-    if running {
-        facts.record = read_record(&kubectl).await?;
-    }
+    facts.record = read_record(Path::new(STATE_DIR))?;
     let mut plan = plan::plan(config, &facts)?;
     if plan.changes.is_some() {
         let mut pending = pending(&ClusterInstall {
@@ -166,72 +150,39 @@ async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallErr
             changes.set_host_files(pending);
             changes.restart |= restart_owed(STATE_DIR);
         }
-        // The check is advice; a failed read skips it.
-        if running && let Some(nodes) = node_memory(&kubectl).await {
-            let full = fit::warnings(&plan, &nodes);
-            plan.warnings.extend(full);
-        }
     }
     Ok(plan)
 }
 
-/// Each node's memory and what the Pods on it request; `None` when a read fails.
-async fn node_memory(kubectl: &Kubectl) -> Option<Vec<NodeMemory>> {
-    let list = async |args: &[&str]| -> Option<serde_json::Value> {
-        serde_json::from_str(&kubectl.run(args, None).await.ok()?).ok()
+/// The install record in `state_dir`, when there is one.
+///
+/// # Errors
+///
+/// When the file cannot be read or is not a record.
+pub(crate) fn read_record(state_dir: &Path) -> Result<Option<Record>, InstallError> {
+    let path = state_dir.join(RECORD_FILE);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => return Err(HostError::Io { path, source }.into()),
     };
-    let nodes = list(&["get", "nodes", "--output=json"]).await?;
-    let pods = list(&["get", "pods", "--all-namespaces", "--output=json"]).await?;
-    Some(fit::nodes(&nodes, &pods))
+    serde_json::from_str(&text)
+        .ok()
+        .and_then(|data| Record::from_data(&data))
+        .map(Some)
+        .ok_or_else(|| InstallError::Message(format!("{}: not an install record", path.display())))
 }
 
-/// The install record, when there is one.
-pub(crate) async fn read_record(kubectl: &Kubectl) -> Result<Option<Record>, InstallError> {
-    Ok(kubectl
-        .get("configmap", STATE_CONFIGMAP, Some("kube-system"))
-        .await?
-        .and_then(|state| Record::from_data(state.get("data")?)))
-}
-
-/// The version of the zeatend that last applied, kept in `state_dir`.
-pub(crate) fn kept_version(state_dir: &Path) -> Option<String> {
-    let version = fs::read_to_string(state_dir.join(VERSION_FILE)).ok()?;
-    Some(version.trim().to_owned()).filter(|v| !v.is_empty())
-}
-
-/// Keeps this zeatend's version in `state_dir`, where a stopped cluster's next `apply` reads it.
-fn keep_version(state_dir: &Path) -> Result<(), InstallError> {
+/// Records what was installed in `state_dir`, where the next `plan` reads it.
+pub(crate) fn write_record(state_dir: &Path, record: &Record) -> Result<(), InstallError> {
+    let json = serde_json::to_string_pretty(record)
+        .map_err(|e| InstallError::Message(format!("install record: {e}")))?;
     files::write(
-        &state_dir.join(VERSION_FILE),
+        &state_dir.join(RECORD_FILE),
         0o644,
-        format!("{ZEATEND_VERSION}\n").as_bytes(),
+        format!("{json}\n").as_bytes(),
     )?;
     Ok(())
-}
-
-/// Records what `apply` installed, in the cluster and in the state directory.
-pub(crate) async fn record(kubectl: &Kubectl, plan: &Plan) -> Result<(), InstallError> {
-    kubectl
-        .apply_object(&json!({
-            "apiVersion": "v1",
-            "kind": "ConfigMap",
-            "metadata": {
-                "name": STATE_CONFIGMAP,
-                "namespace": "kube-system",
-                "labels": {"app.kubernetes.io/managed-by": MANAGER},
-            },
-            "data": {
-                "zeatendVersion": ZEATEND_VERSION,
-                "distribution": plan.distribution.id(),
-                "version": plan.release.version(),
-            },
-        }))
-        .await?;
-    let state_dir = match plan.release {
-        Release::Cluster(_) => STATE_DIR,
-        Release::KubeSolo(_) => zeatend_plan::kubesolo::STATE_DIR,
-    };
-    keep_version(Path::new(state_dir))
 }
 
 /// The paths of `files` whose content on this host differs.
@@ -566,11 +517,15 @@ mod tests {
     }
 
     #[test]
-    fn the_kept_version_is_the_one_that_last_applied() {
+    fn the_record_is_the_one_that_last_applied() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(kept_version(dir.path()), None);
-        keep_version(dir.path()).unwrap();
-        assert_eq!(kept_version(dir.path()).as_deref(), Some(ZEATEND_VERSION));
+        assert_eq!(read_record(dir.path()).unwrap(), None);
+        let record = Record::new(Rancher::K3s.into(), "v1.0.0+k3s1");
+        write_record(dir.path(), &record).unwrap();
+        assert_eq!(read_record(dir.path()).unwrap(), Some(record));
+        fs::write(dir.path().join(RECORD_FILE), "{}").unwrap();
+        let error = read_record(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("not an install record"), "{error}");
     }
 
     #[test]

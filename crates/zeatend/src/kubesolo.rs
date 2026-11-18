@@ -13,10 +13,11 @@ use zeatend_host::{archive, cmd, download, facts, files, systemd};
 use zeatend_plan::config::Config;
 use zeatend_plan::kubesolo::{ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, STATE_DIR, UNIT};
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
+use zeatend_plan::record::Record;
 
 use crate::apply::{
-    changed_files, check_host, kept_version, owe_restart, read_record, restart_owed, restarted,
-    show_checks,
+    changed_files, check_host, owe_restart, read_record, restart_owed, restarted, show_checks,
+    write_record,
 };
 use crate::{InstallError, output, render};
 
@@ -30,14 +31,10 @@ fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
     }
 }
 
-/// The plan, with the install record read from the cluster when it runs.
+/// The plan, with the install record read from the host.
 async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
-    let running = systemd::is_active(UNIT).await;
     let mut facts = facts::read().await?;
-    facts.zeatend_version = kept_version(Path::new(STATE_DIR));
-    if running {
-        facts.record = read_record(&kubectl()).await?;
-    }
+    facts.record = read_record(Path::new(STATE_DIR))?;
     let mut plan = plan::plan(config, &facts)?;
     let outdated = binary_outdated(Path::new(BINARY), &release(&plan)?.version).await;
     let changed = changed_files(plan.host_files.iter());
@@ -65,8 +62,7 @@ fn kubectl() -> Kubectl {
 }
 
 pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
-    let mut plan = make_plan(config).await?;
-    let running = systemd::is_active(UNIT).await;
+    let plan = make_plan(config).await?;
     output::line(render::plan(&plan).trim_end());
     check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
 
@@ -90,12 +86,10 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
     ] {
         wait_available(&kubectl, namespace, deployment).await?;
     }
-    // A stopped cluster could not be read while planning: plan again now that it answers.
-    if !running && read_record(&kubectl).await?.is_some() {
-        plan = make_plan(config).await?;
-        output::line(render::changes(plan.changes.as_ref(), UNIT).trim_end());
-    }
-    crate::apply::record(&kubectl, &plan).await?;
+    write_record(
+        Path::new(STATE_DIR),
+        &Record::new(plan.distribution, plan.release.version()),
+    )?;
     let name = plan.node_name.clone();
     write_kubeconfig(&name)?;
 

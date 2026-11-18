@@ -9,6 +9,7 @@ use zeatend_host::{facts, files, network, preflight, systemd};
 use zeatend_plan::cluster::Rancher;
 use zeatend_plan::config::{self, JoinConfig, Role};
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
+use zeatend_plan::record::Record;
 
 use crate::apply::{self, ClusterInstall};
 use crate::{InstallError, output, render};
@@ -49,8 +50,10 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
         Role::Worker => distribution.agent_unit(),
         Role::Server => distribution.server_unit(),
     };
+    let mut facts = facts::read().await?;
+    facts.record = apply::read_record(Path::new(apply::STATE_DIR))?;
     Ok(JoinFacts {
-        facts: facts::read().await?,
+        facts,
         rtt_us,
         ports,
         token_pinned: config::token_pins_ca(token),
@@ -123,6 +126,10 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
         async || node_ready(&own, &name, started).await.unwrap_or(false),
     )
     .await?;
+    apply::write_record(
+        Path::new(apply::STATE_DIR),
+        &Record::new(distribution.into(), &plan.cluster.version),
+    )?;
 
     output::step("Done");
     output::line(&format!(
