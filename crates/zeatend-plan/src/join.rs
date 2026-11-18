@@ -8,7 +8,7 @@
 
 use serde::Serialize;
 
-use crate::cluster::{self, HostFile, Rancher};
+use crate::cluster::{self, HostFile, PortUse, Rancher};
 use crate::config::{JoinConfig, Role};
 use crate::plan::{ClusterPlan, Facts, Warning, cluster_plan, warning};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -26,14 +26,17 @@ pub const RTT_CRITICAL_US: u64 = 50_000;
 /// TCP ports on the server this node must reach. The first one is the join port; a node cannot
 /// join without it.
 #[must_use]
-pub fn server_ports(distribution: Rancher, role: Role) -> Vec<(u16, &'static str)> {
+pub fn server_ports(distribution: Rancher, role: Role) -> Vec<(u16, PortUse)> {
     let mut ports = match distribution {
-        Rancher::K3s => vec![(6443, "Kubernetes API and K3s supervisor")],
-        Rancher::Rke2 => vec![(9345, "RKE2 supervisor"), (6443, "Kubernetes API")],
+        Rancher::K3s => vec![(6443, PortUse::K3sApiAndSupervisor)],
+        Rancher::Rke2 => vec![
+            (9345, PortUse::Rke2Supervisor),
+            (6443, PortUse::KubernetesApi),
+        ],
     };
-    ports.push((10250, "kubelet"));
+    ports.push((10250, PortUse::Kubelet));
     if role == Role::Server {
-        ports.extend([(2379, "etcd client"), (2380, "etcd peer")]);
+        ports.extend([(2379, PortUse::EtcdClient), (2380, PortUse::EtcdPeer)]);
     }
     ports
 }
@@ -63,7 +66,7 @@ pub struct Port {
     /// `tcp` or `udp`.
     pub protocol: &'static str,
     /// What uses it.
-    pub purpose: &'static str,
+    pub purpose: PortUse,
     /// Whether it answered; `None` when it cannot be checked from here (UDP).
     pub open: Option<bool>,
 }
@@ -267,8 +270,12 @@ const CALICO_VXLAN: &str = "Calico VXLAN";
 /// K3s, and an unpinned token.
 fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Warning> {
     let mut warnings = Vec::new();
-    let (udp, network) = distribution.vxlan();
+    let (udp, _) = distribution.vxlan();
     let udp = udp.to_string();
+    let network = match distribution {
+        Rancher::K3s => "flannel VXLAN",
+        Rancher::Rke2 => "Canal VXLAN",
+    };
     warnings.push(match distribution {
         // A cluster that an earlier zeatend installed with Calico keeps it, and the worker cannot
         // tell which network the cluster runs, so the warning names both ports.

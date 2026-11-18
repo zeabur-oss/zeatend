@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::path::Path;
 
 use serde::Serialize;
-use zeatend_plan::cluster::Rancher;
+use zeatend_plan::cluster::{PortUse, Rancher};
 use zeatend_plan::kubesolo;
 
 use crate::{cmd, systemd};
@@ -48,25 +48,6 @@ pub enum Topic {
     Docker,
 }
 
-impl Topic {
-    /// The English name, for the command line.
-    #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Root => "root",
-            Self::Systemd => "systemd",
-            Self::Time => "time",
-            Self::Swap => "swap",
-            Self::CrashKernel => "crash kernel",
-            Self::OtherKubernetes => "other Kubernetes",
-            Self::Ports => "ports",
-            Self::DiskSpace => "disk space",
-            Self::DiskEncryption => "disk encryption",
-            Self::Docker => "Docker",
-        }
-    }
-}
-
 /// Files of another Kubernetes distribution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Leftover {
@@ -81,8 +62,8 @@ pub struct Leftover {
 pub struct BusyPort {
     /// The TCP port.
     pub port: u16,
-    /// What the node needs it for, in English.
-    pub purpose: &'static str,
+    /// What the node needs it for.
+    pub purpose: PortUse,
 }
 
 /// How a check came out, with what it found. Serialized with the outcome's key as `code` and
@@ -544,7 +525,7 @@ fn docker_check(found: Vec<String>, iptables: &str) -> Finding {
 
 /// The TCP ports a node needs free.
 #[must_use]
-fn needed_ports(node: Node) -> Vec<(u16, &'static str)> {
+fn needed_ports(node: Node) -> Vec<(u16, PortUse)> {
     match node {
         Node::Server(d) => d.node_ports(true),
         Node::Agent(d) => d.node_ports(false),
@@ -806,14 +787,14 @@ mod tests {
             check(Finding::PortsBusy {
                 ports: vec![BusyPort {
                     port: 6443,
-                    purpose: "Kubernetes API"
+                    purpose: PortUse::KubernetesApi
                 }],
             }),
             serde_json::json!({
                 "name": "ports",
                 "status": "fail",
                 "code": "ports.busy",
-                "ports": [{"port": 6443, "purpose": "Kubernetes API"}],
+                "ports": [{"port": 6443, "purpose": "kubernetesApi"}],
             })
         );
         assert_eq!(

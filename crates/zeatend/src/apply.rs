@@ -15,7 +15,7 @@ use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
 
-use crate::{InstallError, output, render};
+use crate::{InstallError, i18n, output, render};
 
 /// Downloads and the install record of K3s and RKE2.
 pub(crate) const STATE_DIR: &str = "/var/lib/rancher/zeatend";
@@ -70,7 +70,7 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
     )
     .await
     {
-        output::line("apply stops until what failed is fixed.");
+        output::line(i18n::messages().apply_stops);
     }
     Ok(())
 }
@@ -198,7 +198,7 @@ pub(crate) async fn check_host(
 ) -> Result<(), InstallError> {
     if show_checks(node, require_encrypted_disk).await {
         return Err(InstallError::Message(
-            "the host is not ready; fix what failed and run apply again".to_owned(),
+            i18n::messages().host_not_ready.to_owned(),
         ));
     }
     Ok(())
@@ -206,7 +206,8 @@ pub(crate) async fn check_host(
 
 /// Runs and prints the preflight checks, which only read the host. Returns whether one failed.
 pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: bool) -> bool {
-    output::step("Checking the host");
+    let messages = i18n::messages();
+    output::step(messages.checking_host);
     let unit = match node {
         preflight::Node::Server(d) => d.server_unit(),
         preflight::Node::Agent(d) => d.agent_unit(),
@@ -219,16 +220,7 @@ pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: b
     })
     .await;
     for check in &checks {
-        let mark = match check.status {
-            Status::Pass => "ok  ",
-            Status::Warn => "warn",
-            Status::Fail => "FAIL",
-        };
-        output::note(&format!(
-            "{mark} {:<18} {}",
-            check.name.label(),
-            render::finding(&check.finding)
-        ));
+        output::note(&messages.check_line(&check.finding));
     }
     checks.iter().any(|c| c.status == Status::Fail)
 }
