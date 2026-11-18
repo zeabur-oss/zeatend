@@ -10,6 +10,27 @@ license = "Apache-2.0"
 publish = false
 
 [workspace.dependencies]
+zeatend-host = { path = "crates/zeatend-host" }
+zeatend-plan = { path = "crates/zeatend-plan" }
+
+# The crypto backend rustls already uses; only its random number generator is called directly.
+aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+hex = "0.4"
+httpdate = "1"
+jiff = { version = "0.2.42", default-features = false, features = ["std"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+semver = { version = "1", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
+serde_json = "1"
+sha2 = { version = "0.11", default-features = false }
+tar = { version = "0.4", default-features = false }
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util"] }
 
 # Lint policy (see CONTRIBUTING.md), shared with Zeabur Builder and Zeabur Identity.
 # Everything is `warn` so work in progress still compiles; CI runs with `-D warnings`.
