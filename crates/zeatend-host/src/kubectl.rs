@@ -15,6 +15,11 @@ use zeatend_plan::plan::MANAGER;
 
 use crate::{HostError, cmd};
 
+/// How long a read waits for the API server to answer. `kubectl` waits without end by default
+/// (`--request-timeout` is `0`), so an API server that accepts a connection and does not answer
+/// would hang the caller.
+const READ_TIMEOUT: &str = "--request-timeout=10s";
+
 /// `kubectl` with a kubeconfig.
 #[derive(Debug, Clone)]
 pub struct Kubectl {
@@ -92,7 +97,14 @@ impl Kubectl {
         name: &str,
         namespace: Option<&str>,
     ) -> Result<Option<Value>, HostError> {
-        let mut args = vec!["get", kind, name, "--ignore-not-found", "--output=json"];
+        let mut args = vec![
+            "get",
+            kind,
+            name,
+            "--ignore-not-found",
+            "--output=json",
+            READ_TIMEOUT,
+        ];
         if let Some(ns) = namespace {
             args.extend(["--namespace", ns]);
         }
@@ -115,7 +127,7 @@ impl Kubectl {
     /// When the request fails or the answer is not JSON.
     pub async fn raw(&self, path: &str) -> Result<Value, HostError> {
         let raw = format!("--raw={path}");
-        let out = self.run(&["get", &raw], None).await?;
+        let out = self.run(&["get", &raw, READ_TIMEOUT], None).await?;
         serde_json::from_str(&out).map_err(|e| HostError::Parse {
             what: format!("kubectl get --raw {path}"),
             reason: e.to_string(),
@@ -133,14 +145,17 @@ impl Kubectl {
         self.run(&all, None).await.map(drop)
     }
 
-    /// Waits for the API server to answer `/readyz`.
+    /// Waits for the API server to answer `/readyz`. Each try waits at most 10 s for an answer,
+    /// so this returns at most 10 s after `timeout`.
     ///
     /// # Errors
     ///
     /// When it does not within `timeout`.
     pub async fn wait_ready(&self, timeout: Duration) -> Result<(), HostError> {
         poll(timeout, "the API server to become ready", async || {
-            self.run(&["get", "--raw=/readyz"], None).await.is_ok()
+            self.run(&["get", "--raw=/readyz", READ_TIMEOUT], None)
+                .await
+                .is_ok()
         })
         .await
     }

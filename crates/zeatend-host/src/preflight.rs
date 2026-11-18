@@ -285,6 +285,12 @@ pub enum Finding {
         /// The command that shows why.
         command: String,
     },
+    /// The cluster has no nodes.
+    #[serde(rename = "nodes.none")]
+    NodesNone {
+        /// The service whose log shows why.
+        unit: &'static str,
+    },
     /// The nodes could not be read.
     #[serde(rename = "nodes.unknown")]
     NodesUnknown {
@@ -357,9 +363,10 @@ impl Finding {
             Self::RecordOk { .. } | Self::RecordMissing { .. } | Self::RecordNewer { .. } => {
                 Topic::InstallRecord
             }
-            Self::NodesReady { .. } | Self::NodesNotReady { .. } | Self::NodesUnknown { .. } => {
-                Topic::Nodes
-            }
+            Self::NodesReady { .. }
+            | Self::NodesNotReady { .. }
+            | Self::NodesNone { .. }
+            | Self::NodesUnknown { .. } => Topic::Nodes,
             Self::ReservesSet { .. } | Self::ReservesLow { .. } | Self::ReservesUnknown { .. } => {
                 Topic::KubeletReserves
             }
@@ -413,6 +420,7 @@ impl Finding {
             | Self::ServiceStopped { .. }
             | Self::ApiDown { .. }
             | Self::NodesNotReady { .. }
+            | Self::NodesNone { .. }
             | Self::NodesUnknown { .. }
             | Self::SecretsPlain { .. } => Status::Fail,
         }

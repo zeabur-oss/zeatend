@@ -184,6 +184,10 @@ fn finding(finding: &Finding) -> String {
             and_list(names),
             be(names.len())
         ),
+        Finding::NodesNone { unit } => format!(
+            "the cluster has no nodes; `sudo journalctl -u {unit} -n 100` shows why the kubelet \
+             did not register"
+        ),
         Finding::NodesUnknown { reason } => format!("could not read the nodes: {reason}"),
         Finding::ReservesSet { names } => format!(
             "the kubelet on {} keeps at least the memory the OS needs from pods",
@@ -449,6 +453,12 @@ mod tests {
                     command: "sudo kubectl describe node vps-2".to_owned(),
                 },
                 "vps-2 and vps-3 are not Ready; `sudo kubectl describe node vps-2` shows why",
+            ),
+            (
+                Finding::NodesNone {
+                    unit: "rke2-server",
+                },
+                "the cluster has no nodes; `sudo journalctl -u rke2-server -n 100` shows why the kubelet did not register",
             ),
             (
                 Finding::ReservesLow {

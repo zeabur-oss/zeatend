@@ -123,6 +123,7 @@ async fn cluster(node: Node) -> Vec<Finding> {
     }
     found.push(record(Path::new(state_dir)));
     match read_nodes(&kubectl, admin).await {
+        Ok(nodes) if nodes.is_empty() => found.push(Finding::NodesNone { unit }),
         Ok(nodes) => {
             let kubectl = kubectl_command(node.distribution);
             found.push(readiness(&nodes, |name| {

@@ -171,6 +171,9 @@ fn finding(finding: &Finding) -> String {
         Finding::NodesNotReady { names, command } => {
             format!("{} 尚未就緒，用 `{command}` 查看原因", and_list(names))
         }
+        Finding::NodesNone { unit } => format!(
+            "叢集沒有任何節點，用 `sudo journalctl -u {unit} -n 100` 查看 kubelet 為什麼沒有註冊"
+        ),
         Finding::NodesUnknown { reason } => format!("無法讀取節點：{reason}"),
         Finding::ReservesSet { names } => format!(
             "{} 的 kubelet {}替系統保留了足夠的記憶體",
