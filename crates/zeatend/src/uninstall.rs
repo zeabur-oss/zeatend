@@ -395,6 +395,16 @@ fn exists(root: &Path, path: &str) -> bool {
 }
 
 pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallError> {
+    if systemd::booted() {
+        let installs =
+            systemd::running_services(&format!("{}*.service", crate::unit::PREFIX)).await?;
+        if let Some(unit) = installs.first() {
+            return Err(InstallError::Message(format!(
+                "nothing was removed: an install runs in {unit}. Wait for it to end, or stop it \
+                 with `systemctl stop {unit}`, and run uninstall again"
+            )));
+        }
+    }
     let root = Path::new("/");
     let plan = plan(detect(|path| exists(root, path)));
     let remove: Vec<&str> = plan

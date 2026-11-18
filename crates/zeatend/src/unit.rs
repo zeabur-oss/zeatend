@@ -16,7 +16,7 @@ use zeatend_host::{random, systemd};
 use crate::{InstallError, output};
 
 /// The start of the name of an install unit; the rest is its id and `.service`.
-const PREFIX: &str = "zeatend-install-";
+pub(crate) const PREFIX: &str = "zeatend-install-";
 
 /// The environment variables the unit gets from this process. A unit starts with an empty
 /// environment, and downloads need the proxy.
