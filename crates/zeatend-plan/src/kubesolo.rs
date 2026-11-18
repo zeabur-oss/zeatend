@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::PlanError;
 use crate::cluster::HostFile;
+use crate::tuning::HostTuning;
 
 /// The systemd unit.
 pub const UNIT: &str = "kubesolo";
@@ -66,6 +67,8 @@ pub struct Options {
     pub node_ip: Option<String>,
     /// Extra API server certificate names.
     pub tls_san: Vec<String>,
+    /// The host's memory settings; the unit sets their `GOMEMLIMIT`.
+    pub tuning: HostTuning,
 }
 
 const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n";
@@ -101,12 +104,21 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
         HostFile {
             path: UNIT_FILE.to_owned(),
             mode: 0o644,
-            content: UNIT_TEXT.to_owned(),
+            content: unit(&options.tuning),
         },
     ]
 }
 
-/// The unit of `KubeSolo`'s own installer, without its environment file.
+/// The unit of `KubeSolo`'s own installer, without its environment file, and with the
+/// `GOMEMLIMIT` of `tuning`.
+fn unit(tuning: &HostTuning) -> String {
+    UNIT_TEXT.replacen(
+        "ExecStart=",
+        &format!("{}ExecStart=", tuning.environment().unwrap_or_default()),
+        1,
+    )
+}
+
 const UNIT_TEXT: &str = "# Written by zeatend; `zeatend apply` writes it again.
 [Unit]
 Description=KubeSolo
@@ -176,6 +188,12 @@ pub fn kubeconfig(admin: &Value, name: &str) -> Result<Value, PlanError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::Distribution;
+    use crate::tuning::MemoryTier;
+
+    fn tuning() -> HostTuning {
+        HostTuning::new(Distribution::KubeSolo, MemoryTier::Small)
+    }
 
     #[test]
     fn the_config_names_the_address_and_certificate_names() {
@@ -183,6 +201,7 @@ mod tests {
             node_name: "solo".to_owned(),
             node_ip: Some("10.0.0.5".to_owned()),
             tls_san: vec!["solo.example.com".to_owned()],
+            tuning: tuning(),
         });
         let config = files.iter().find(|f| f.path == CONFIG_FILE).unwrap();
         assert_eq!(config.mode, 0o600);
@@ -198,6 +217,7 @@ mod tests {
             node_name: "solo".to_owned(),
             node_ip: None,
             tls_san: Vec::new(),
+            tuning: tuning(),
         });
         let value: Value = serde_saphyr::from_str(&bare[0].content).unwrap();
         assert!(value.get("network").is_none());
@@ -206,6 +226,10 @@ mod tests {
         assert!(
             unit.content
                 .contains(&format!("ExecStart={BINARY} --config={CONFIG_FILE}"))
+        );
+        assert!(
+            unit.content
+                .contains("[Service]\nType=simple\nEnvironment=GOMEMLIMIT=500MiB\nExecStart=")
         );
     }
 

@@ -265,6 +265,7 @@ mod tests {
             node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
             record: None,
             apparmor_restricts_unconfined: false,
+            k3s_own_network: false,
         }
     }
 

@@ -11,7 +11,7 @@ use zeatend_host::{HostError, archive, cmd, download, facts, files, systemd};
 use zeatend_plan::cluster::{APPARMOR_PROFILE, HostFile, Rancher};
 use zeatend_plan::config::Config;
 use zeatend_plan::k3s;
-use zeatend_plan::plan::{self, ClusterPlan, Download, Plan, Release};
+use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
 
@@ -88,7 +88,6 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     let kubectl = Kubectl::admin(rancher);
     let started = install_cluster(&ClusterInstall {
         cluster: cluster(&plan)?,
-        calico: plan.calico.as_ref(),
         files: &plan.host_files,
         server: true,
         changed: false,
@@ -135,7 +134,6 @@ async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallErr
     if plan.changes.is_some() {
         let mut pending = pending(&ClusterInstall {
             cluster: cluster(&plan)?,
-            calico: plan.calico.as_ref(),
             files: &plan.host_files,
             server: true,
             changed: false,
@@ -309,8 +307,6 @@ async fn install_release(
 /// What `install_cluster` installs: a first server, a joining server or an agent.
 pub(crate) struct ClusterInstall<'a> {
     pub(crate) cluster: &'a ClusterPlan,
-    /// Calico's manifest, which a K3s server applies.
-    pub(crate) calico: Option<&'a Download>,
     pub(crate) files: &'a [HostFile],
     /// A server runs the control plane; an RKE2 server runs etcd as the `etcd` user.
     pub(crate) server: bool,
@@ -331,12 +327,6 @@ impl ClusterInstall<'_> {
 /// The paths `install_cluster` would write; a running cluster restarts when there is one.
 async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallError> {
     let mut paths = changed_files(install.files.iter());
-    if let Some(calico) = install.calico {
-        let path = calico_path();
-        if calico_differs(&pinned_path(calico), calico.sha256.as_deref(), &path)? {
-            paths.push(path.display().to_string());
-        }
-    }
     paths.extend(release_pending(install.cluster, install.unit()).await);
     Ok(paths)
 }
@@ -363,6 +353,10 @@ pub(crate) async fn install_cluster(
     for file in install.files {
         files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
+    if changed {
+        // A unit drop-in, such as the one with `GOMEMLIMIT`, takes effect after a reload.
+        systemd::daemon_reload().await?;
+    }
     cmd::run(
         "sysctl",
         &["--quiet", &format!("--load={}", layout.sysctl_file)],
@@ -381,9 +375,6 @@ pub(crate) async fn install_cluster(
             files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
         }
         Rancher::K3s | Rancher::Rke2 => {}
-    }
-    if let Some(calico) = install.calico {
-        calico_manifest(calico).await?;
     }
     install_release(cluster, install.server, unit).await?;
 
@@ -454,103 +445,9 @@ async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallE
     Ok(())
 }
 
-/// Where a pinned download is kept.
-fn pinned_path(download: &Download) -> PathBuf {
-    Path::new(STATE_DIR).join("downloads").join(&download.file)
-}
-
-/// Where K3s reads Calico's manifest, which it applies on start.
-fn calico_path() -> PathBuf {
-    Path::new(k3s::MANIFESTS_DIR).join("zeatend-calico.yaml")
-}
-
-/// Whether `source` is the download with the digest `sha256`. A source from another pin is stale;
-/// one with no digest to check against is never taken as current.
-fn is_current(source: &Path, sha256: Option<&str>) -> bool {
-    sha256.is_some_and(|expected| download::is_cached(source, expected))
-}
-
-/// Whether the manifest at `path` is not the one `calico_manifest` writes from the pinned
-/// `source`, which has the digest `sha256`. Without a current copy of the source it cannot tell,
-/// so it says it is.
-fn calico_differs(source: &Path, sha256: Option<&str>, path: &Path) -> Result<bool, InstallError> {
-    if !is_current(source, sha256) {
-        return Ok(true);
-    }
-    let manifest = fs::read_to_string(source)
-        .map_err(|e| InstallError::Message(format!("{}: {e}", source.display())))?;
-    Ok(fs::read_to_string(path).ok() != Some(k3s::calico_manifest(&manifest)?))
-}
-
-/// Writes Calico's manifest, set for K3s, from the pinned source, which it downloads again when
-/// the copy is missing or from another pin.
-async fn calico_manifest(calico: &Download) -> Result<(), InstallError> {
-    let path = calico_path();
-    let source = pinned_path(calico);
-    let sha256 = calico.sha256.as_deref();
-    if !is_current(&source, sha256) {
-        output::err(&format!("    {}", calico.url));
-        download::fetch(
-            &download::agent(),
-            &calico.url,
-            &source,
-            sha256,
-            &mut output::Meter::new(),
-        )
-        .await?;
-    }
-    let manifest = fs::read_to_string(&source)
-        .map_err(|e| InstallError::Message(format!("{}: {e}", source.display())))?;
-    files::write(&path, 0o600, k3s::calico_manifest(&manifest)?.as_bytes())?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_missing_or_edited_calico_manifest_is_a_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("calico.yaml");
-        let path = dir.path().join("zeatend-calico.yaml");
-        assert!(calico_differs(&source, None, &path).unwrap());
-
-        let images: Vec<String> = zeatend_plan::pins::CALICO
-            .images
-            .iter()
-            .map(|(tag, _)| format!("          image: {tag}\n"))
-            .collect();
-        let manifest = format!(
-            "{}            # - name: CALICO_IPV4POOL_CIDR\n            #   value: \"192.168.0.0/16\"\n            - name: CALICO_IPV4POOL_VXLAN\n              value: \"CrossSubnet\"\n",
-            images.concat()
-        );
-        fs::write(&source, &manifest).unwrap();
-        let sha256 = download::sha256_file(&source).unwrap();
-        let sha256 = Some(sha256.as_str());
-        assert!(calico_differs(&source, sha256, &path).unwrap());
-
-        fs::write(&path, k3s::calico_manifest(&manifest).unwrap()).unwrap();
-        assert!(!calico_differs(&source, sha256, &path).unwrap());
-
-        fs::write(&path, "edited").unwrap();
-        assert!(calico_differs(&source, sha256, &path).unwrap());
-    }
-
-    #[test]
-    fn a_source_cached_for_another_pin_is_a_change_not_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("calico.yaml");
-        let path = dir.path().join("zeatend-calico.yaml");
-        // An older pin's manifest names other images, so the new pin's edits do not apply.
-        let stale = "          image: docker.io/calico/node:v0.0.1\n";
-        assert!(k3s::calico_manifest(stale).is_err());
-        fs::write(&source, stale).unwrap();
-        fs::write(&path, "the older pin's manifest").unwrap();
-        let pinned = "0".repeat(64);
-        assert!(calico_differs(&source, Some(&pinned), &path).unwrap());
-        assert!(!is_current(&source, Some(&pinned)));
-    }
 
     #[test]
     fn the_record_is_the_one_that_last_applied() {

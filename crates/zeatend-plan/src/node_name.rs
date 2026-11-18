@@ -2,7 +2,7 @@
 //!
 //! K3s, RKE2 and `KubeSolo` name a node after the host name unless told otherwise. A host name
 //! that changes, as some hypervisors and clouds do on reboot, registers a second node with the
-//! same address: the first goes `NotReady` and Calico refuses to start on the address conflict.
+//! same address: the first goes `NotReady` and the network plugin refuses the address conflict.
 //! zeatend picks the name once and writes it into the distribution's configuration.
 
 use crate::PlanError;
@@ -131,6 +131,7 @@ mod tests {
             node_ips: vec!["10.211.55.189".to_owned(), "fd00::5".to_owned()],
             record: None,
             apparmor_restricts_unconfined: false,
+            k3s_own_network: false,
         }
     }
 

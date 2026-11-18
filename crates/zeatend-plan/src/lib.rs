@@ -10,6 +10,7 @@ pub mod pins;
 pub mod plan;
 pub mod record;
 pub mod rke2;
+pub mod tuning;
 
 /// Why a plan cannot be made.
 #[derive(Debug, thiserror::Error)]

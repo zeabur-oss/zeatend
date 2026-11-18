@@ -6,8 +6,8 @@ use std::path::Path;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use zeatend_plan::cluster::Rancher;
-use zeatend_plan::kubesolo;
 use zeatend_plan::plan::Facts;
+use zeatend_plan::{k3s, kubesolo};
 
 use crate::HostError;
 
@@ -36,6 +36,8 @@ pub async fn read() -> Result<Facts, HostError> {
         record: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
             .is_ok_and(|v| v.trim() == "1"),
+        k3s_own_network: fs::read_to_string(k3s::CONFIG_FILE)
+            .is_ok_and(|config| k3s::runs_own_network(&config)),
     })
 }
 

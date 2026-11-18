@@ -15,13 +15,13 @@ Distance         0.7 ms to the server (median of 5 TCP connects; 0.6 to 0.9)
 Ports on the server
   open    TCP 6443  Kubernetes API and K3s supervisor
   open    TCP 10250 kubelet
-  unknown UDP 4789  Calico VXLAN
+  unknown UDP 8472  flannel VXLAN
 Ports on this VM, free before the node starts (apply checks them)
   TCP 80    HTTP ingress: ServiceLB holds it on every node for a LoadBalancer Service
   TCP 443   HTTPS ingress: ServiceLB holds it on every node for a LoadBalancer Service
   TCP 10250 kubelet
 
 warning: Put every node at the same hosting provider and in the same region. Different availability zones in one region are fine. Between providers or regions, latency slows etcd, the Kubernetes API and storage, and can make the cluster unstable.
-warning: Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 4789 (Calico VXLAN) between all nodes. Keep UDP 4789 closed to the internet.
-warning: UDP 4789 cannot be checked from here. If it is blocked, pods on different nodes cannot reach each other.
+warning: Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 8472 (flannel VXLAN) between all nodes. Keep UDP 8472 closed to the internet. A cluster that an earlier zeatend installed with Calico uses UDP 4789 (Calico VXLAN) instead.
+warning: UDP 8472 cannot be checked from here. If it is blocked, pods on different nodes cannot reach each other.
 warning: Volumes on the default local-path storage class stay on the node that created them: a pod using one runs only on that node, and the data goes with the node.

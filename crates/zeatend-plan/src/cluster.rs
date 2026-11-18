@@ -3,12 +3,14 @@
 //! RKE2's server is K3s's, so both read the same keys from `/etc/rancher/<name>/config.yaml`, then
 //! `config.yaml.d/*.yaml` in name order. K3s is one process with `SQLite`: it takes workers but no
 //! second server. RKE2 runs the control plane as static pods with etcd, and three servers keep it
-//! up when one fails. K3s gets Calico from zeatend; RKE2 brings Canal, Calico's policy engine on
-//! flannel. `KubeSolo` is one node with no workers, for hosts with little memory.
+//! up when one fails. K3s runs its packaged flannel VXLAN and the kube-router policy controller;
+//! RKE2 brings Canal, Calico's policy engine on flannel. `KubeSolo` is one node with no workers,
+//! for hosts with little memory.
 
 use serde::{Deserialize, Serialize};
 
 use crate::pins::{K3S, KUBESOLO, RKE2};
+use crate::tuning::{HostTuning, MemoryTier};
 
 /// The Kubernetes distribution zeatend installs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -17,8 +19,8 @@ pub enum Distribution {
     /// `KubeSolo`: one node and no workers, for a host with little memory.
     #[serde(rename = "kubesolo")]
     KubeSolo,
-    /// K3s, hardened like RKE2's `cis` profile, with Calico. One server and any number of
-    /// workers.
+    /// K3s, hardened like RKE2's `cis` profile, with flannel VXLAN and kube-router. One server
+    /// and any number of workers.
     #[default]
     K3s,
     /// RKE2 with its `cis` profile and Canal. Servers and workers.
@@ -168,9 +170,12 @@ pub fn apparmor_profile() -> HostFile {
     }
 }
 
-/// The OS at idle.
-const OS_IDLE_MIB: u64 = 350;
-// What the RKE2 control plane's processes used at idle on a 4 GiB VM (`Rancher::idle_mib`).
+/// RKE2 and its control plane at idle, containerd, kubelet and the network included. On a 4 GiB VM
+/// with the default components, `free` showed 2640 MiB used, about 500 of it the components. The
+/// rest is split by the process figures from that VM: kube-apiserver about 980, etcd 97,
+/// kube-controller-manager 92, canal 59, then kubelet, containerd and the rest of RKE2.
+const RKE2_IDLE_MIB: u64 = 1730;
+// What the RKE2 control plane's processes used at idle on a 4 GiB VM (`RKE2_IDLE_MIB`).
 const RKE2_APISERVER_IDLE_MIB: u64 = 980;
 const RKE2_ETCD_IDLE_MIB: u64 = 97;
 const RKE2_CONTROLLER_MANAGER_IDLE_MIB: u64 = 92;
@@ -186,8 +191,10 @@ const RKE2_STATIC_PODS_REQUEST_MIB: u64 =
     1024 + RKE2_ETCD_REQUEST_MIB + RKE2_CONTROLLER_MANAGER_REQUEST_MIB + 3 * 128;
 /// rke2-coredns and its autoscaler.
 const RKE2_COREDNS_REQUEST_MIB: u64 = 144;
-/// K3s's `CoreDNS`. Calico asks for no memory.
-const K3S_COREDNS_REQUEST_MIB: u64 = 70;
+/// The least memory K3s needs: a 2 GiB host, less what the kernel and firmware keep, with the
+/// reserves of [`MemoryTier::Small`]. Below it, only `KubeSolo` fits.
+const K3S_MIN_MEMORY_MIB: u64 = 1900;
+
 impl Rancher {
     /// Both, in the order an interface lists them.
     pub const ALL: [Self; 2] = [Self::K3s, Self::Rke2];
@@ -271,84 +278,59 @@ impl Rancher {
         }
     }
 
-    /// The distribution and its control plane at idle, containerd, kubelet and the network
-    /// included.
-    ///
-    /// RKE2: on a 4 GiB VM with the default components, `free` showed 2640 MiB used, about 500 of
-    /// it the components. The rest is split by the process figures from that VM: kube-apiserver
-    /// about 980, etcd 97, kube-controller-manager 92, canal 59, then kubelet, containerd and the
-    /// rest of RKE2. K3s runs the control plane in one process on `SQLite`. On the same VM with the
-    /// same components, 10 minutes after a reboot, K3s with Calico used about 200 MiB less:
-    /// `k3s server` and containerd 1030 against 1210 for RKE2's processes.
-    #[must_use]
-    pub const fn idle_mib(self) -> u64 {
-        match self {
-            Self::K3s => 1530,
-            Self::Rke2 => 1730,
-        }
-    }
-
-    /// The memory the kubelet keeps from pods on a server for the distribution (`kube-reserved`).
-    /// K3s runs the control plane in its own process: all of [`Self::idle_mib`]. RKE2 runs it in
-    /// static pods, whose requests already count against what pods may use: what is left of
-    /// [`Self::idle_mib`] without kube-apiserver, etcd, kube-controller-manager and canal.
-    #[must_use]
-    pub const fn kube_reserved_mib(self) -> u64 {
-        match self {
-            Self::K3s => self.idle_mib(),
-            Self::Rke2 => {
-                self.idle_mib()
-                    - (RKE2_APISERVER_IDLE_MIB
-                        + RKE2_ETCD_IDLE_MIB
-                        + RKE2_CONTROLLER_MANAGER_IDLE_MIB
-                        + RKE2_CANAL_IDLE_MIB)
-            }
-        }
-    }
-
-    /// The memory pods cannot use on a server: the OS and [`Self::kube_reserved_mib`].
-    #[must_use]
-    pub const fn reserved_mib(self) -> u64 {
-        OS_IDLE_MIB + self.kube_reserved_mib()
-    }
-
-    /// The memory a server's kubelet keeps from pods: [`Self::reserved_mib`] and the hard eviction
-    /// threshold.
-    #[must_use]
-    pub const fn kept_from_pods_mib(self) -> u64 {
-        self.reserved_mib() + EVICTION_HARD_MIB
-    }
+    /// The memory the kubelet keeps from pods on an RKE2 server for RKE2 (`kube-reserved`).
+    /// RKE2 runs the control plane in static pods, whose requests already count against what pods
+    /// may use: this is what is left of RKE2 at idle without kube-apiserver, etcd,
+    /// kube-controller-manager and canal.
+    pub(crate) const RKE2_KUBE_RESERVED_MIB: u64 = RKE2_IDLE_MIB
+        - (RKE2_APISERVER_IDLE_MIB
+            + RKE2_ETCD_IDLE_MIB
+            + RKE2_CONTROLLER_MANAGER_IDLE_MIB
+            + RKE2_CANAL_IDLE_MIB);
 
     /// The kubelet's arguments. With the reserves, the pods' cgroup ends short of the OS and the
     /// distribution, so memory running out kills or evicts a pod, and not `k3s-server`. A worker
-    /// has no control plane and reserves only the OS.
-    pub(crate) fn kubelet_args(self, server: bool) -> String {
-        let kube_reserved = if server {
-            format!("  - kube-reserved=memory={}Mi\n", self.kube_reserved_mib())
+    /// has no control plane and reserves only the OS. None when `tuning` has no reserves.
+    pub(crate) fn kubelet_args(tuning: &HostTuning, server: bool) -> String {
+        let Some(reserves) = tuning.kubelet else {
+            return String::new();
+        };
+        let kube = if server {
+            format!("  - kube-reserved=memory={}Mi\n", reserves.kube)
         } else {
             String::new()
         };
+        let soft = reserves.eviction_soft.map_or_else(String::new, |soft| {
+            format!(
+                "  - eviction-soft=memory.available<{soft}Mi\n  \
+                 - eviction-soft-grace-period=memory.available=30s\n"
+            )
+        });
         format!(
-            "{KUBELET_ARGS}  - system-reserved=memory={OS_IDLE_MIB}Mi\n{kube_reserved}  \
-             - eviction-hard=memory.available<{EVICTION_HARD_MIB}Mi,{DISK_EVICTION_HARD}\n  \
-             - eviction-soft=memory.available<{EVICTION_SOFT_MIB}Mi\n  \
-             - eviction-soft-grace-period=memory.available=30s\n"
+            "{KUBELET_ARGS}  - system-reserved=memory={}Mi\n{kube}  \
+             - eviction-hard=memory.available<{}Mi,{DISK_EVICTION_HARD}\n{soft}",
+            reserves.system, reserves.eviction_hard
         )
     }
 
     /// The least memory a server needs.
     ///
-    /// The scheduler places a pod only where its memory request fits in what pods may use, so that
-    /// must hold the requests of the distribution's own pods (RKE2's static pods and `CoreDNS`,
-    /// K3s's `CoreDNS`) on top of the reserves and the hard eviction threshold, rounded up to a
-    /// hundred.
+    /// K3s: 1900 MiB, a 2 GiB host less what the kernel and firmware keep. RKE2: the scheduler
+    /// places a pod only where its memory request fits in what pods may use, so that must hold the
+    /// requests of RKE2's static pods and `CoreDNS` on top of the reserves and the hard eviction
+    /// threshold, rounded up to a hundred.
     #[must_use]
     pub const fn min_memory_mib(self) -> u64 {
-        let own_pods = match self {
-            Self::K3s => K3S_COREDNS_REQUEST_MIB,
-            Self::Rke2 => RKE2_STATIC_PODS_REQUEST_MIB + RKE2_COREDNS_REQUEST_MIB,
-        };
-        (own_pods + self.reserved_mib() + EVICTION_HARD_MIB).div_ceil(100) * 100
+        match self {
+            Self::K3s => K3S_MIN_MEMORY_MIB,
+            Self::Rke2 => {
+                let own_pods = RKE2_STATIC_PODS_REQUEST_MIB + RKE2_COREDNS_REQUEST_MIB;
+                match HostTuning::new(Distribution::Rke2, MemoryTier::Small).kubelet {
+                    Some(r) => (own_pods + r.system + r.kube + r.eviction_hard).div_ceil(100) * 100,
+                    None => own_pods,
+                }
+            }
+        }
     }
 
     /// The label `ServiceLB` puts on its pods.
@@ -374,7 +356,7 @@ impl Rancher {
     #[must_use]
     pub const fn vxlan(self) -> (u16, &'static str) {
         match self {
-            Self::K3s => (4789, "Calico VXLAN"),
+            Self::K3s => (8472, "flannel VXLAN"),
             Self::Rke2 => (8472, "Canal VXLAN"),
         }
     }
@@ -456,10 +438,10 @@ impl Rancher {
 
     /// The files of a worker.
     #[must_use]
-    pub fn agent_files(self) -> Vec<HostFile> {
+    pub fn agent_files(self, tuning: &HostTuning) -> Vec<HostFile> {
         match self {
-            Self::K3s => crate::k3s::agent_files(),
-            Self::Rke2 => crate::rke2::agent_files(),
+            Self::K3s => crate::k3s::agent_files(tuning),
+            Self::Rke2 => crate::rke2::agent_files(tuning),
         }
     }
 
@@ -545,11 +527,16 @@ pub struct HostFile {
     pub content: String,
 }
 
-/// Server settings from the configuration.
+/// Server settings from the configuration and the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     /// Extra API server certificate names.
     pub tls_san: Vec<String>,
+    /// The host's memory settings.
+    pub tuning: HostTuning,
+    /// K3s only: an earlier install turned flannel off for a network plugin of its own, which
+    /// zeatend keeps.
+    pub own_network: bool,
 }
 
 pub(crate) const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n\
@@ -601,17 +588,11 @@ TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,\
 TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,\
 TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305\n";
 
-/// Below this much available memory the kubelet evicts at once. Twice its default of 100Mi, so it
-/// evicts before the kernel has to kill.
-const EVICTION_HARD_MIB: u64 = 200;
 /// The disk thresholds K3s sets in its kubelet configuration, which RKE2 runs as its agent
 /// (<https://github.com/k3s-io/k3s/blob/3acf8db8f2096ae0ea34f4b4ce1048e6472b89be/pkg/daemons/agent/agent.go#L192-L195>).
 /// The flag replaces the whole map, and a threshold it leaves out is zero
 /// (<https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/#hard-eviction-thresholds>).
 const DISK_EVICTION_HARD: &str = "nodefs.available<5%,imagefs.available<5%";
-/// Below this much for 30 seconds the kubelet evicts too, which catches memory that grows slowly
-/// before it reaches the hard threshold.
-const EVICTION_SOFT_MIB: u64 = 400;
 
 /// RKE2's `control-plane-resource-requests` for etcd and kube-controller-manager.
 pub(crate) fn control_plane_requests() -> String {
@@ -642,10 +623,13 @@ mod tests {
 
     #[test]
     fn a_server_gets_the_servicelb_policy_as_a_manifest() {
-        let options = Options {
-            tls_san: Vec::new(),
-        };
         for rancher in Rancher::ALL {
+            let tuning = HostTuning::new(rancher.into(), MemoryTier::Standard);
+            let options = Options {
+                tls_san: Vec::new(),
+                tuning,
+                own_network: false,
+            };
             let file = rancher
                 .server_files(&options)
                 .into_iter()
@@ -668,7 +652,7 @@ mod tests {
             );
             assert!(
                 rancher
-                    .agent_files()
+                    .agent_files(&tuning)
                     .iter()
                     .all(|f| !f.path.ends_with("/zeatend-servicelb-policy.yaml"))
             );
@@ -676,19 +660,29 @@ mod tests {
     }
 
     #[test]
-    fn the_minimum_holds_the_requests_on_top_of_the_reserves() {
+    fn the_minimum_holds_the_reserves_of_a_host_that_has_it() {
         for distribution in Rancher::ALL {
-            let floor = distribution.reserved_mib() + EVICTION_HARD_MIB;
-            assert!(distribution.min_memory_mib() >= floor);
-            assert_eq!(distribution.min_memory_mib() % 100, 0);
+            let min = distribution.min_memory_mib();
+            let reserves = HostTuning::new(distribution.into(), MemoryTier::of(min))
+                .kubelet
+                .unwrap();
+            let kept = reserves.system + reserves.kube + reserves.eviction_hard;
+            assert!(min > kept, "{distribution:?}");
+            assert_eq!(min % 100, 0);
         }
+        assert_eq!(Rancher::K3s.min_memory_mib(), 1900);
     }
 
     #[test]
     fn the_memory_threshold_keeps_the_disk_thresholds_k3s_sets() {
         for distribution in Rancher::ALL {
-            for server in [true, false] {
-                let args = distribution.kubelet_args(server);
+            for (tier, server) in [
+                (MemoryTier::Small, true),
+                (MemoryTier::Standard, true),
+                (MemoryTier::Standard, false),
+            ] {
+                let args =
+                    Rancher::kubelet_args(&HostTuning::new(distribution.into(), tier), server);
                 let hard = args
                     .lines()
                     .find_map(|l| l.trim().strip_prefix("- eviction-hard="))

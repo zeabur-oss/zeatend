@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::cluster::{self, HostFile, Rancher};
 use crate::config::{JoinConfig, Role};
 use crate::plan::{ClusterPlan, Facts, Warning, cluster_plan, warning};
+use crate::tuning::{HostTuning, MemoryTier};
 use crate::{PlanError, node_name};
 
 /// Connections timed to the server's join port.
@@ -258,6 +259,10 @@ pub fn advice(distribution: Rancher, role: Role) -> Vec<Warning> {
     all
 }
 
+/// The UDP port of Calico's VXLAN, which K3s clusters from earlier zeatend versions run.
+const CALICO_VXLAN_PORT: &str = "4789";
+const CALICO_VXLAN: &str = "Calico VXLAN";
+
 /// What every join is told: the ports, UDP, high availability for servers, where volumes live on
 /// K3s, and an unpinned token.
 fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Warning> {
@@ -265,12 +270,16 @@ fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> V
     let (udp, network) = distribution.vxlan();
     let udp = udp.to_string();
     warnings.push(match distribution {
+        // A cluster that an earlier zeatend installed with Calico keeps it, and the worker cannot
+        // tell which network the cluster runs, so the warning names both ports.
         Rancher::K3s => warning(
             "join.ports",
-            &[&udp, network],
+            &[&udp, network, CALICO_VXLAN_PORT, CALICO_VXLAN],
             format!(
                 "Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP {udp} \
-                 ({network}) between all nodes. Keep UDP {udp} closed to the internet."
+                 ({network}) between all nodes. Keep UDP {udp} closed to the internet. A cluster \
+                 that an earlier zeatend installed with Calico uses UDP {CALICO_VXLAN_PORT} \
+                 ({CALICO_VXLAN}) instead."
             ),
         ),
         Rancher::Rke2 => warning(
@@ -346,12 +355,16 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &mut warnings,
     )?;
 
+    let tuning = HostTuning::new(distribution.into(), MemoryTier::of(facts.facts.memory_mib));
     let (mut host_files, unit) = match join.role {
-        Role::Worker => (distribution.agent_files(), distribution.agent_unit()),
+        Role::Worker => (distribution.agent_files(&tuning), distribution.agent_unit()),
         Role::Server if !distribution.takes_servers() => return Err(PlanError::SecondServer),
         Role::Server => (
             distribution.server_files(&cluster::Options {
                 tls_san: config.host.tls_san.clone(),
+                tuning,
+                // Only RKE2 takes a second server, and it always runs Canal.
+                own_network: false,
             }),
             distribution.server_unit(),
         ),
@@ -437,6 +450,7 @@ mod tests {
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
                 record: None,
                 apparmor_restricts_unconfined: false,
+                k3s_own_network: false,
             },
             rtt_us: rtt_us.to_vec(),
             ports: vec![(9345, true), (6443, true), (10250, false)],
