@@ -259,6 +259,10 @@ pub fn advice(distribution: Rancher, role: Role) -> Vec<Warning> {
     all
 }
 
+/// The UDP port of Calico's VXLAN, which K3s clusters from earlier zeatend versions run.
+const CALICO_VXLAN_PORT: &str = "4789";
+const CALICO_VXLAN: &str = "Calico VXLAN";
+
 /// What every join is told: the ports, UDP, high availability for servers, where volumes live on
 /// K3s, and an unpinned token.
 fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Warning> {
@@ -266,12 +270,16 @@ fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> V
     let (udp, network) = distribution.vxlan();
     let udp = udp.to_string();
     warnings.push(match distribution {
+        // A cluster that an earlier zeatend installed with Calico keeps it, and the worker cannot
+        // tell which network the cluster runs, so the warning names both ports.
         Rancher::K3s => warning(
             "join.ports",
-            &[&udp, network],
+            &[&udp, network, CALICO_VXLAN_PORT, CALICO_VXLAN],
             format!(
                 "Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP {udp} \
-                 ({network}) between all nodes. Keep UDP {udp} closed to the internet."
+                 ({network}) between all nodes. Keep UDP {udp} closed to the internet. A cluster \
+                 that an earlier zeatend installed with Calico uses UDP {CALICO_VXLAN_PORT} \
+                 ({CALICO_VXLAN}) instead."
             ),
         ),
         Rancher::Rke2 => warning(

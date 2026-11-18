@@ -22,6 +22,6 @@ Ports on this VM, free before the node starts (apply checks them)
   TCP 10250 kubelet
 
 warning: Put every node at the same hosting provider and in the same region. Different availability zones in one region are fine. Between providers or regions, latency slows etcd, the Kubernetes API and storage, and can make the cluster unstable.
-warning: Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 8472 (flannel VXLAN) between all nodes. Keep UDP 8472 closed to the internet.
+warning: Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 8472 (flannel VXLAN) between all nodes. Keep UDP 8472 closed to the internet. A cluster that an earlier zeatend installed with Calico uses UDP 4789 (Calico VXLAN) instead.
 warning: UDP 8472 cannot be checked from here. If it is blocked, pods on different nodes cannot reach each other.
 warning: Volumes on the default local-path storage class stay on the node that created them: a pod using one runs only on that node, and the data goes with the node.
