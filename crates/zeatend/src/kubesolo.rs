@@ -149,6 +149,7 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         &solo.kubectl.url,
         kubectl,
         solo.kubectl.sha256.as_deref(),
+        &mut output::Meter::new(),
     )
     .await?;
     fs::set_permissions(kubectl, Permissions::from_mode(0o755)).map_err(io(kubectl))?;
@@ -174,6 +175,7 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
             &download.url,
             &dir.join(&download.file),
             download.sha256.as_deref(),
+            &mut output::Meter::new(),
         )
         .await?;
         let unpacked = dir.join("unpacked");
