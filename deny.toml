@@ -1,6 +1,15 @@
 # cargo-deny policy.
 
 [graph]
+# The platforms zeatend builds for. rustls-platform-verifier needs webpki-root-certs on wasm32
+# only, so the check leaves out the targets zeatend does not build for.
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-unknown-linux-musl",
+  "aarch64-unknown-linux-musl",
+  "aarch64-apple-darwin",
+]
 all-features = true
 
 [advisories]

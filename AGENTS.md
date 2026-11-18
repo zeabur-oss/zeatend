@@ -1,7 +1,8 @@
 # AGENTS.md
 
 Zeabur Zeatend: a Kubernetes cluster manager for K3s, RKE2 and KubeSolo over SSH, with a terminal
-UI. A Rust workspace in `crates/`; the binary is `zeabur-zeatend`.
+UI. A Rust workspace in `crates/`: the binary `zeatend` (`crates/zeatend`), the host operations
+(`crates/zeatend-host`) and the plan, which does no I/O (`crates/zeatend-plan`).
 
 - Run every command inside `nix develop` (`nix develop -c <command>`). Do not use system tools.
 - Before you commit, run the checks in `CONTRIBUTING.md`; CI runs the same jobs through

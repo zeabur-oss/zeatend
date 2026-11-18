@@ -1,0 +1,38 @@
+[package]
+name = "zeatend-host"
+description = "Reads and changes the host for zeatend: files, systemd units, preflight checks, downloads and kubectl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+readme = "README.md"
+
+[dependencies]
+zeatend-plan.workspace = true
+
+base64.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+hex.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+httpdate.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+serde.workspace = true
+serde-saphyr.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
