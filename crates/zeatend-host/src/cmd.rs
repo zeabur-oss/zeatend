@@ -1,8 +1,10 @@
 //! Running commands.
 
-use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use tokio::io::AsyncWriteExt as _;
+use tokio::process::Command;
 
 use crate::HostError;
 
@@ -20,12 +22,12 @@ pub struct Output {
 /// # Errors
 ///
 /// When it cannot start or exits with a failure; the error ends with its standard error.
-pub fn run(
+pub async fn run(
     program: impl AsRef<Path>,
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<String, HostError> {
-    run_with(program, args, &[], stdin).map(|o| o.stdout)
+    run_with(program, args, &[], stdin).await.map(|o| o.stdout)
 }
 
 /// Runs a command with extra environment variables and returns both outputs.
@@ -33,7 +35,7 @@ pub fn run(
 /// # Errors
 ///
 /// When it cannot start or exits with a failure; the error ends with its standard error.
-pub fn run_with(
+pub async fn run_with(
     program: impl AsRef<Path>,
     args: &[&str],
     env: &[(&str, &str)],
@@ -55,12 +57,19 @@ pub fn run_with(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| fail(e.to_string()))?;
     if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
-        pipe.write_all(input).map_err(|e| fail(e.to_string()))?;
+        pipe.write_all(input)
+            .await
+            .map_err(|e| fail(e.to_string()))?;
+        drop(pipe);
     }
-    let output = child.wait_with_output().map_err(|e| fail(e.to_string()))?;
+    let output = child
+        .wait_with_output()
+        .await
+        .map_err(|e| fail(e.to_string()))?;
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
         let lines: Vec<&str> = stderr.trim_end().lines().collect();
@@ -75,12 +84,14 @@ pub fn run_with(
 
 /// Whether a command exits successfully; output is discarded.
 #[must_use]
-pub fn succeeds(program: &str, args: &[&str]) -> bool {
+pub async fn succeeds(program: &str, args: &[&str]) -> bool {
     Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .status()
+        .await
         .is_ok_and(|s| s.success())
 }

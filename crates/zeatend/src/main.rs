@@ -74,13 +74,13 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
         ));
     }
     match (&cli.command, document) {
-        (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json),
+        (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json).await,
         (Command::Apply, Document::Join(config)) => join::apply(&config).await,
         (Command::Plan { json }, Document::Install(config)) => {
             if config.distribution.rancher().is_some() {
-                apply::show_plan(&config, *json)
+                apply::show_plan(&config, *json).await
             } else {
-                kubesolo::show_plan(&config, *json)
+                kubesolo::show_plan(&config, *json).await
             }
         }
         (Command::Apply, Document::Install(config)) => {

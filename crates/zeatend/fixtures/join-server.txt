@@ -10,7 +10,7 @@ Files
   /etc/rancher/rke2/config.yaml.d/10-join.yaml
   /etc/rancher/rke2/config.yaml.d/15-node-name.yaml
   /etc/rancher/rke2/config.yaml.d/20-node-ip.yaml
-  /etc/rancher/rke2/zeabur-join-token (the token, mode 0600)
+  /etc/rancher/rke2/zeatend-join-token (the token, mode 0600)
 
 Distance         24.0 ms to the server (median of 5 TCP connects; 23.5 to 25.1)
 Ports on the server

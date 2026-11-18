@@ -432,7 +432,7 @@ mod tests {
                 memory_mib: 4096,
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
                 record: None,
-                installer: None,
+                zeatend_version: None,
                 apparmor_restricts_unconfined: false,
             },
             rtt_us: rtt_us.to_vec(),

@@ -1,8 +1,8 @@
 //! Writing files atomically with a mode.
 
-use std::fs::{self, OpenOptions, Permissions};
+use std::fs::{self, File, OpenOptions, Permissions};
 use std::io::{Read as _, Write as _};
-use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::Path;
 
 use crate::HostError;
@@ -70,7 +70,12 @@ pub fn install(source: &Path, dest: &Path, mode: u32) -> Result<(), HostError> {
     fs::rename(&temp, dest).map_err(HostError::io(dest))
 }
 
-/// Sets `mode` on the files in `dir` whose names end with `suffix`. Returns how many changed.
+/// Sets `mode` on the regular files in `dir` whose names end with `suffix`. Returns how many
+/// changed.
+///
+/// A symbolic link is not followed. The mode is set on the open file (`fchmod`), and only when
+/// the open file has the device and inode that `lstat` found for the name, so a name that changes
+/// to a link or another file between the two calls is left as it is.
 ///
 /// # Errors
 ///
@@ -79,15 +84,24 @@ pub fn set_modes(dir: &Path, suffix: &str, mode: u32) -> Result<usize, HostError
     let mut changed = 0;
     for entry in fs::read_dir(dir).map_err(HostError::io(dir))? {
         let path = entry.map_err(HostError::io(dir))?.path();
-        let meta = fs::symlink_metadata(&path).map_err(HostError::io(&path))?;
         let matches = path
             .file_name()
             .is_some_and(|n| n.to_string_lossy().ends_with(suffix));
-        if matches && meta.is_file() && meta.permissions().mode() & 0o7777 != mode {
-            fs::set_permissions(&path, Permissions::from_mode(mode))
-                .map_err(HostError::io(&path))?;
-            changed += 1;
+        if !matches {
+            continue;
         }
+        let named = fs::symlink_metadata(&path).map_err(HostError::io(&path))?;
+        if !named.is_file() || named.permissions().mode() & 0o7777 == mode {
+            continue;
+        }
+        let file = File::open(&path).map_err(HostError::io(&path))?;
+        let opened = file.metadata().map_err(HostError::io(&path))?;
+        if !opened.is_file() || (opened.dev(), opened.ino()) != (named.dev(), named.ino()) {
+            continue;
+        }
+        file.set_permissions(Permissions::from_mode(mode))
+            .map_err(HostError::io(&path))?;
+        changed += 1;
     }
     Ok(changed)
 }
@@ -98,7 +112,7 @@ pub fn set_modes(dir: &Path, suffix: &str, mode: u32) -> Result<usize, HostError
 ///
 /// When it cannot be read or its mode lets the group or others read it.
 pub fn read_secret(path: &Path) -> Result<Vec<u8>, HostError> {
-    let mut file = fs::File::open(path).map_err(HostError::io(path))?;
+    let mut file = File::open(path).map_err(HostError::io(path))?;
     let mode = file
         .metadata()
         .map_err(HostError::io(path))?
@@ -134,7 +148,7 @@ pub fn random_hex() -> Result<String, HostError> {
 /// When `/dev/urandom` cannot be read.
 pub fn random_bytes(n: usize) -> Result<Vec<u8>, HostError> {
     let mut bytes = vec![0_u8; n];
-    fs::File::open("/dev/urandom")
+    File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut bytes))
         .map_err(HostError::io("/dev/urandom"))?;
     Ok(bytes)
@@ -160,5 +174,28 @@ mod tests {
         assert_eq!(read_secret(&path).unwrap(), b"y");
         assert_eq!(random_hex().unwrap().len(), 128);
         assert_eq!(random_bytes(24).unwrap().len(), 24);
+    }
+
+    #[test]
+    fn set_modes_skips_links_and_other_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let mode = |path: &Path| fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777;
+        let target = outside.path().join("target.crt");
+        fs::write(&target, "t").unwrap();
+        fs::set_permissions(&target, Permissions::from_mode(0o644)).unwrap();
+        let own = dir.path().join("server.crt");
+        fs::write(&own, "c").unwrap();
+        fs::set_permissions(&own, Permissions::from_mode(0o644)).unwrap();
+        let other = dir.path().join("server.key");
+        fs::write(&other, "k").unwrap();
+        fs::set_permissions(&other, Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.path().join("link.crt")).unwrap();
+
+        assert_eq!(set_modes(dir.path(), ".crt", 0o600).unwrap(), 1);
+        assert_eq!(mode(&own), 0o600);
+        assert_eq!(mode(&other), 0o644);
+        assert_eq!(mode(&target), 0o644);
+        assert_eq!(set_modes(dir.path(), ".crt", 0o600).unwrap(), 0);
     }
 }

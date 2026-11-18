@@ -18,11 +18,11 @@ const RESTRICT_UNCONFINED: &str = "/proc/sys/kernel/apparmor_restrict_unprivileg
 /// # Errors
 ///
 /// When `/proc` cannot be read.
-pub fn read() -> Result<Facts, HostError> {
+pub async fn read() -> Result<Facts, HostError> {
     let hostname = fs::read_to_string("/proc/sys/kernel/hostname")
         .map_err(HostError::io("/proc/sys/kernel/hostname"))?;
     let meminfo = fs::read_to_string("/proc/meminfo").map_err(HostError::io("/proc/meminfo"))?;
-    let node_ips = node_ips();
+    let node_ips = node_ips().await;
     Ok(Facts {
         arch: arch(std::env::consts::ARCH).to_owned(),
         hostname: hostname.trim().to_owned(),
@@ -34,7 +34,7 @@ pub fn read() -> Result<Facts, HostError> {
         })?,
         node_ips,
         record: None,
-        installer: None,
+        zeatend_version: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
             .is_ok_and(|v| v.trim() == "1"),
     })
@@ -138,9 +138,10 @@ impl HostAddress {
 
 /// The host's global addresses with their flags.
 #[must_use]
-pub fn host_addresses() -> Vec<HostAddress> {
+pub async fn host_addresses() -> Vec<HostAddress> {
     parse_addresses(
         &crate::cmd::run("ip", &["-o", "addr", "show", "scope", "global"], None)
+            .await
             .unwrap_or_default(),
     )
 }
@@ -172,8 +173,10 @@ fn parse_addresses(text: &str) -> Vec<HostAddress> {
 }
 
 /// The interface of the first default route, `-4` or `-6`.
-fn default_interface(family: &str) -> Option<String> {
-    let routes = crate::cmd::run("ip", &[family, "-o", "route", "show", "default"], None).ok()?;
+async fn default_interface(family: &str) -> Option<String> {
+    let routes = crate::cmd::run("ip", &[family, "-o", "route", "show", "default"], None)
+        .await
+        .ok()?;
     route_interface(&routes)
 }
 
@@ -191,11 +194,11 @@ fn route_interface(routes: &str) -> Option<String> {
 /// changes within a day, and the node's address in the network policies goes stale. A configured
 /// address comes first, then one from SLAAC (EUI-64 or stable-privacy), which keeps its value.
 #[must_use]
-pub fn node_ips() -> Vec<String> {
+pub async fn node_ips() -> Vec<String> {
     choose_node_ips(
-        &host_addresses(),
-        default_interface("-4").as_deref(),
-        default_interface("-6").as_deref(),
+        &host_addresses().await,
+        default_interface("-4").await.as_deref(),
+        default_interface("-6").await.as_deref(),
     )
 }
 
@@ -242,9 +245,10 @@ fn memory_mib(meminfo: &str) -> Option<u64> {
 
 /// The host's global addresses, IPv4 first, from `ip`; empty when it cannot run.
 #[must_use]
-pub fn addresses() -> Vec<String> {
+pub async fn addresses() -> Vec<String> {
     let mut found: Vec<String> =
         crate::cmd::run("ip", &["-o", "addr", "show", "scope", "global"], None)
+            .await
             .unwrap_or_default()
             .lines()
             .filter_map(|line| {

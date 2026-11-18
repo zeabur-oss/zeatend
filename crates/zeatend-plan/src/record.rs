@@ -19,7 +19,7 @@ pub const VERSION_FILE: &str = "zeatend-version";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
     /// The version of the zeatend that wrote it.
-    pub installer: String,
+    pub zeatend_version: String,
     /// The distribution's id, such as `k3s`.
     pub distribution: Option<String>,
     /// The K3s, RKE2 or `KubeSolo` release.
@@ -32,7 +32,7 @@ impl Record {
     pub fn from_data(data: &Value) -> Option<Self> {
         let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
         Some(Self {
-            installer: text("installer")?,
+            zeatend_version: text("zeatendVersion")?,
             distribution: text("distribution"),
             version: text("version"),
         })
@@ -43,8 +43,8 @@ impl Record {
     /// # Errors
     ///
     /// [`PlanError::NewerZeatend`].
-    pub fn check_installer(&self) -> Result<(), PlanError> {
-        check_installer(&self.installer)
+    pub fn check_zeatend_version(&self) -> Result<(), PlanError> {
+        check_zeatend_version(&self.zeatend_version)
     }
 }
 
@@ -53,7 +53,7 @@ impl Record {
 /// # Errors
 ///
 /// [`PlanError::NewerZeatend`].
-pub fn check_installer(recorded: &str) -> Result<(), PlanError> {
+pub fn check_zeatend_version(recorded: &str) -> Result<(), PlanError> {
     if precedence(recorded, ZEATEND_VERSION) == Some(Ordering::Greater) {
         return Err(PlanError::NewerZeatend {
             recorded: recorded.to_owned(),
@@ -68,7 +68,7 @@ pub fn check_installer(recorded: &str) -> Result<(), PlanError> {
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
     /// The version of the zeatend that wrote the record.
-    pub installer: String,
+    pub zeatend_version: String,
     /// The K3s, RKE2 or `KubeSolo` release, when it changes.
     pub version: Option<VersionChange>,
     /// Host files whose content changes; `apply` fills it.
@@ -99,7 +99,7 @@ impl Changes {
                 to: version.to_owned(),
             });
         Self {
-            installer: record.installer.clone(),
+            zeatend_version: record.zeatend_version.clone(),
             restart: version.is_some(),
             version,
             host_files: Vec::new(),
@@ -152,23 +152,23 @@ mod tests {
     #[test]
     fn a_record_from_a_newer_zeatend_names_the_version_to_use() {
         let record = Record {
-            installer: "99.0.0".to_owned(),
+            zeatend_version: "99.0.0".to_owned(),
             distribution: None,
             version: None,
         };
-        let error = record.check_installer().unwrap_err().to_string();
+        let error = record.check_zeatend_version().unwrap_err().to_string();
         assert!(error.contains("zeatend 99.0.0 or newer"), "{error}");
         let own = Record {
-            installer: ZEATEND_VERSION.to_owned(),
+            zeatend_version: ZEATEND_VERSION.to_owned(),
             ..record
         };
-        own.check_installer().unwrap();
+        own.check_zeatend_version().unwrap();
     }
 
     #[test]
     fn a_new_release_or_changed_file_restarts() {
         let record = Record {
-            installer: ZEATEND_VERSION.to_owned(),
+            zeatend_version: ZEATEND_VERSION.to_owned(),
             distribution: Some("k3s".to_owned()),
             version: Some("v1.0.0+k3s1".to_owned()),
         };

@@ -31,37 +31,35 @@ fn token(config: &JoinConfig) -> Result<String, InstallError> {
 }
 
 /// Reads the host and the way to the server.
-fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, InstallError> {
+async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, InstallError> {
     let distribution = config.rancher()?;
     let (host, port) = config::server_address(&config.join.server, distribution.join_port())?;
-    let rtt_us = network::connect_times(&host, port, RTT_SAMPLES);
-    let ports = join::server_ports(distribution, config.join.role)
-        .into_iter()
-        .map(|(p, _)| {
-            let open = if p == port {
-                !rtt_us.is_empty()
-            } else {
-                network::open(&host, p)
-            };
-            (p, open)
-        })
-        .collect();
+    let rtt_us = network::connect_times(&host, port, RTT_SAMPLES).await;
+    let mut ports = Vec::new();
+    for (p, _) in join::server_ports(distribution, config.join.role) {
+        let open = if p == port {
+            !rtt_us.is_empty()
+        } else {
+            network::open(&host, p).await
+        };
+        ports.push((p, open));
+    }
     let unit = match config.join.role {
         Role::Worker => distribution.agent_unit(),
         Role::Server => distribution.server_unit(),
     };
     Ok(JoinFacts {
-        facts: facts::read()?,
+        facts: facts::read().await?,
         rtt_us,
         ports,
         token_pinned: config::token_pins_ca(token),
-        unit_running: systemd::is_active(unit),
+        unit_running: systemd::is_active(unit).await,
     })
 }
 
-fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallError> {
+async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallError> {
     let token = token(config)?;
-    let facts = read_facts(config, &token)?;
+    let facts = read_facts(config, &token).await?;
     Ok((join::plan(config, &facts)?, token))
 }
 
@@ -79,25 +77,25 @@ fn own_kubectl(distribution: Rancher) -> Kubectl {
     Kubectl::new(layout.kubectl, layout.kubelet_kubeconfig)
 }
 
-pub(crate) fn show_plan(config: &JoinConfig, json: bool) -> Result<(), InstallError> {
-    let (plan, _) = make_plan(config)?;
+pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), InstallError> {
+    let (plan, _) = make_plan(config).await?;
     if json {
         return crate::print_json(&plan);
     }
     output::line(render::join_plan(&plan).trim_end());
-    if apply::show_checks(node(&plan), config.host.require_encrypted_disk) {
+    if apply::show_checks(node(&plan), config.host.require_encrypted_disk).await {
         output::line("apply stops until what failed is fixed.");
     }
     Ok(())
 }
 
 pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
-    let (plan, token) = make_plan(config)?;
+    let (plan, token) = make_plan(config).await?;
     output::line(render::join_plan(&plan).trim_end());
     if let Some(blocker) = plan.blockers.first() {
         return Err(InstallError::Message(blocker.text.clone()));
     }
-    apply::check_host(node(&plan), config.host.require_encrypted_disk)?;
+    apply::check_host(node(&plan), config.host.require_encrypted_disk).await?;
 
     let distribution = plan.cluster.distribution;
     let layout = distribution.layout();
@@ -121,8 +119,9 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
     kubectl::poll(
         Duration::from_mins(10),
         &format!("node {name} to be Ready"),
-        || node_ready(&own, &name, started).unwrap_or(false),
-    )?;
+        async || node_ready(&own, &name, started).await.unwrap_or(false),
+    )
+    .await?;
 
     output::step("Done");
     output::line(&format!(
@@ -139,12 +138,12 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
 /// kubelet reports its status as soon as it starts, so a heartbeat from before a restart is the
 /// old kubelet's. The kubelet's own credentials may read its Node object, so this works on an
 /// agent, which has no admin kubeconfig.
-pub(crate) fn node_ready(
+pub(crate) async fn node_ready(
     kubectl: &Kubectl,
     name: &str,
     since: Option<u64>,
 ) -> Result<bool, InstallError> {
-    let node = kubectl.get("node", name, None)?;
+    let node = kubectl.get("node", name, None).await?;
     Ok(node.as_ref().is_some_and(|n| ready_since(n, since)))
 }
 

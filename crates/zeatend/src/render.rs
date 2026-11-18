@@ -58,7 +58,10 @@ pub(crate) fn changes(changes: Option<&Changes>, unit: &str) -> String {
     };
     push(
         &mut s,
-        &format!("Changes since the last apply (by zeatend {})", c.installer),
+        &format!(
+            "Changes since the last apply (by zeatend {})",
+            c.zeatend_version
+        ),
     );
     let before = s.len();
     if let Some(v) = &c.version {
@@ -261,7 +264,7 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
             record: None,
-            installer: None,
+            zeatend_version: None,
             apparmor_restricts_unconfined: false,
         }
     }
@@ -349,7 +352,7 @@ mod tests {
     #[test]
     fn an_upgrade_names_what_changes() {
         let mut changes = Changes {
-            installer: "0.1.1".to_owned(),
+            zeatend_version: "0.1.1".to_owned(),
             version: None,
             host_files: Vec::new(),
             restart: false,

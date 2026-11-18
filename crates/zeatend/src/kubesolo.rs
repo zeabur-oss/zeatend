@@ -28,15 +28,15 @@ fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
 }
 
 /// The plan, with the install record read from the cluster when it runs.
-fn make_plan(config: &Config) -> Result<Plan, InstallError> {
-    let running = systemd::is_active(UNIT);
-    let mut facts = facts::read()?;
-    facts.installer = kept_version(Path::new(STATE_DIR));
+async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
+    let running = systemd::is_active(UNIT).await;
+    let mut facts = facts::read().await?;
+    facts.zeatend_version = kept_version(Path::new(STATE_DIR));
     if running {
-        facts.record = read_record(&kubectl())?;
+        facts.record = read_record(&kubectl()).await?;
     }
     let mut plan = plan::plan(config, &facts)?;
-    let outdated = binary_outdated(Path::new(BINARY), &release(&plan)?.version);
+    let outdated = binary_outdated(Path::new(BINARY), &release(&plan)?.version).await;
     let changed = changed_files(plan.host_files.iter());
     if let Some(changes) = &mut plan.changes {
         changes.set_host_files(changed);
@@ -45,13 +45,13 @@ fn make_plan(config: &Config) -> Result<Plan, InstallError> {
     Ok(plan)
 }
 
-pub(crate) fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
-    let plan = make_plan(config)?;
+pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
+    let plan = make_plan(config).await?;
     if json {
         return crate::print_json(&plan);
     }
     output::line(render::plan(&plan).trim_end());
-    if show_checks(Node::KubeSolo, config.host.require_encrypted_disk) {
+    if show_checks(Node::KubeSolo, config.host.require_encrypted_disk).await {
         output::line("apply stops until what failed is fixed.");
     }
     Ok(())
@@ -62,36 +62,42 @@ fn kubectl() -> Kubectl {
 }
 
 pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
-    let mut plan = make_plan(config)?;
-    let running = systemd::is_active(UNIT);
+    let mut plan = make_plan(config).await?;
+    let running = systemd::is_active(UNIT).await;
     output::line(render::plan(&plan).trim_end());
-    check_host(Node::KubeSolo, config.host.require_encrypted_disk)?;
+    check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
 
     install_kubesolo(&plan).await?;
     let kubectl = kubectl();
-    kubectl.wait_ready(Duration::from_mins(10))?;
-    kubectl::poll(Duration::from_mins(10), "the node to be Ready", || {
-        kubectl
-            .wait(&["node", "--all", "--for=condition=Ready", "--timeout=10s"])
-            .is_ok()
-    })?;
+    kubectl.wait_ready(Duration::from_mins(10)).await?;
+    kubectl::poll(
+        Duration::from_mins(10),
+        "the node to be Ready",
+        async || {
+            kubectl
+                .wait(&["node", "--all", "--for=condition=Ready", "--timeout=10s"])
+                .await
+                .is_ok()
+        },
+    )
+    .await?;
     for (namespace, deployment) in [
         ("kube-system", "coredns"),
         ("local-path-storage", "local-path-provisioner"),
     ] {
-        wait_available(&kubectl, namespace, deployment)?;
+        wait_available(&kubectl, namespace, deployment).await?;
     }
     // A stopped cluster could not be read while planning: plan again now that it answers.
-    if !running && read_record(&kubectl)?.is_some() {
-        plan = make_plan(config)?;
+    if !running && read_record(&kubectl).await?.is_some() {
+        plan = make_plan(config).await?;
         output::line(render::changes(plan.changes.as_ref(), UNIT).trim_end());
     }
-    crate::apply::record(&kubectl, &plan)?;
+    crate::apply::record(&kubectl, &plan).await?;
     let name = plan.node_name.clone();
     write_kubeconfig(&name)?;
 
     output::step("Done");
-    output::line(&done_text(&name, &facts::addresses()));
+    output::line(&done_text(&name, &facts::addresses().await));
     Ok(())
 }
 
@@ -108,12 +114,16 @@ fn done_text(name: &str, addresses: &[String]) -> String {
     )
 }
 
-fn wait_available(kubectl: &Kubectl, namespace: &str, name: &str) -> Result<(), InstallError> {
+async fn wait_available(
+    kubectl: &Kubectl,
+    namespace: &str,
+    name: &str,
+) -> Result<(), InstallError> {
     let target = format!("deployment/{name}");
     kubectl::poll(
         Duration::from_mins(10),
         &format!("{namespace}/{name}"),
-        || {
+        async || {
             kubectl
                 .wait(&[
                     "--namespace",
@@ -122,9 +132,11 @@ fn wait_available(kubectl: &Kubectl, namespace: &str, name: &str) -> Result<(), 
                     "--for=condition=Available",
                     "--timeout=10s",
                 ])
+                .await
                 .is_ok()
         },
-    )?;
+    )
+    .await?;
     Ok(())
 }
 
@@ -148,8 +160,8 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
     for file in &plan.host_files {
         changed |= files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
-    crate::apply::load_apparmor_profile(plan.host_files.iter())?;
-    if binary_outdated(Path::new(BINARY), &solo.version) {
+    crate::apply::load_apparmor_profile(plan.host_files.iter()).await?;
+    if binary_outdated(Path::new(BINARY), &solo.version).await {
         let download = &solo.download;
         let dir = PathBuf::from(STATE_DIR)
             .join("downloads")
@@ -170,23 +182,24 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         changed = true;
     }
     if changed {
-        systemd::daemon_reload()?;
+        systemd::daemon_reload().await?;
     }
-    if !systemd::is_active(UNIT) {
+    if !systemd::is_active(UNIT).await {
         output::err(&format!(
             "    starting {UNIT}; the first start takes a few minutes"
         ));
-        systemd::enable_now(UNIT)?;
+        systemd::enable_now(UNIT).await?;
     } else if changed {
         output::err(&format!("    restarting {UNIT} for the new configuration"));
-        systemd::restart(UNIT)?;
+        systemd::restart(UNIT).await?;
     }
     Ok(())
 }
 
 /// Whether the binary at `path` is missing or does not report `version`.
-fn binary_outdated(path: &Path, version: &str) -> bool {
+async fn binary_outdated(path: &Path, version: &str) -> bool {
     !cmd::run(path, &["--version"], None)
+        .await
         .unwrap_or_default()
         .contains(version)
 }
@@ -224,9 +237,9 @@ mod tests {
         assert!(done_text("solo", &[]).contains("<this server>"));
     }
 
-    #[test]
-    fn a_missing_binary_is_outdated() {
+    #[tokio::test]
+    async fn a_missing_binary_is_outdated() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(binary_outdated(&dir.path().join("kubesolo"), "v1.0.0"));
+        assert!(binary_outdated(&dir.path().join("kubesolo"), "v1.0.0").await);
     }
 }

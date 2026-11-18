@@ -5,7 +5,6 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -55,11 +54,11 @@ impl Kubectl {
     /// # Errors
     ///
     /// When it fails.
-    pub fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, HostError> {
+    pub async fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<String, HostError> {
         let kubeconfig = format!("--kubeconfig={}", self.kubeconfig.display());
         let mut all = vec![kubeconfig.as_str()];
         all.extend_from_slice(args);
-        cmd::run(&self.binary, &all, stdin)
+        cmd::run(&self.binary, &all, stdin).await
     }
 
     /// Server-side applies YAML or JSON documents as zeatend's field manager.
@@ -67,8 +66,8 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the server rejects them.
-    pub fn apply(&self, documents: &[u8]) -> Result<String, HostError> {
-        self.apply_as(MANAGER, documents)
+    pub async fn apply(&self, documents: &[u8]) -> Result<String, HostError> {
+        self.apply_as(MANAGER, documents).await
     }
 
     /// Server-side applies documents as `manager`. Fields another manager set stay; only the ones
@@ -77,7 +76,7 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the server rejects them.
-    pub fn apply_as(&self, manager: &str, documents: &[u8]) -> Result<String, HostError> {
+    pub async fn apply_as(&self, manager: &str, documents: &[u8]) -> Result<String, HostError> {
         let manager = format!("--field-manager={manager}");
         self.run(
             &[
@@ -90,6 +89,7 @@ impl Kubectl {
             ],
             Some(documents),
         )
+        .await
     }
 
     /// Server-side applies documents into `namespace` when they name none.
@@ -100,7 +100,7 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the server rejects them.
-    pub fn apply_in(&self, namespace: &str, documents: &[u8]) -> Result<String, HostError> {
+    pub async fn apply_in(&self, namespace: &str, documents: &[u8]) -> Result<String, HostError> {
         let manager = format!("--field-manager={MANAGER}");
         let args = [
             "apply",
@@ -114,11 +114,11 @@ impl Kubectl {
         ];
         let start = Instant::now();
         loop {
-            match self.run(&args, Some(documents)) {
+            match self.run(&args, Some(documents)).await {
                 Err(HostError::Command { reason, .. })
                     if not_serving_yet(&reason) && start.elapsed() < Duration::from_mins(5) =>
                 {
-                    thread::sleep(Duration::from_secs(5));
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
                 result => return result,
             }
@@ -136,8 +136,8 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the server rejects it.
-    pub fn apply_object(&self, object: &Value) -> Result<(), HostError> {
-        self.apply(object.to_string().as_bytes()).map(drop)
+    pub async fn apply_object(&self, object: &Value) -> Result<(), HostError> {
+        self.apply(object.to_string().as_bytes()).await.map(drop)
     }
 
     /// Gets an object as JSON, or `None` when it does not exist.
@@ -145,7 +145,7 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the request fails for another reason.
-    pub fn get(
+    pub async fn get(
         &self,
         kind: &str,
         name: &str,
@@ -155,7 +155,7 @@ impl Kubectl {
         if let Some(ns) = namespace {
             args.extend(["--namespace", ns]);
         }
-        let out = self.run(&args, None)?;
+        let out = self.run(&args, None).await?;
         if out.trim().is_empty() {
             return Ok(None);
         }
@@ -172,10 +172,10 @@ impl Kubectl {
     /// # Errors
     ///
     /// When the condition is not met in time.
-    pub fn wait(&self, args: &[&str]) -> Result<(), HostError> {
+    pub async fn wait(&self, args: &[&str]) -> Result<(), HostError> {
         let mut all = vec!["wait"];
         all.extend_from_slice(args);
-        self.run(&all, None).map(drop)
+        self.run(&all, None).await.map(drop)
     }
 
     /// Waits for the API server to answer `/readyz`.
@@ -183,10 +183,11 @@ impl Kubectl {
     /// # Errors
     ///
     /// When it does not within `timeout`.
-    pub fn wait_ready(&self, timeout: Duration) -> Result<(), HostError> {
-        poll(timeout, "the API server to become ready", || {
-            self.run(&["get", "--raw=/readyz"], None).is_ok()
+    pub async fn wait_ready(&self, timeout: Duration) -> Result<(), HostError> {
+        poll(timeout, "the API server to become ready", async || {
+            self.run(&["get", "--raw=/readyz"], None).await.is_ok()
         })
+        .await
     }
 }
 
@@ -219,17 +220,17 @@ pub fn unix_seconds(text: &str) -> Option<u64> {
 /// # Errors
 ///
 /// When it does not within `timeout`.
-pub fn poll(
+pub async fn poll(
     timeout: Duration,
     what: &str,
-    mut ready: impl FnMut() -> bool,
+    mut ready: impl AsyncFnMut() -> bool,
 ) -> Result<(), HostError> {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        if ready() {
+        if ready().await {
             return Ok(());
         }
-        thread::sleep(Duration::from_secs(3));
+        tokio::time::sleep(Duration::from_secs(3)).await;
     }
     Err(HostError::Command {
         command: format!("waiting for {what}"),

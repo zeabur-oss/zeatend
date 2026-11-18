@@ -41,9 +41,9 @@ fn rancher(config: &Config) -> Result<Rancher, InstallError> {
         .ok_or_else(|| InstallError::Message("the configuration installs KubeSolo".to_owned()))
 }
 
-pub(crate) fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
+pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
     let rancher = rancher(config)?;
-    let plan = make_plan(config, rancher)?;
+    let plan = make_plan(config, rancher).await?;
     if json {
         return crate::print_json(&plan);
     }
@@ -51,7 +51,9 @@ pub(crate) fn show_plan(config: &Config, json: bool) -> Result<(), InstallError>
     if show_checks(
         preflight::Node::Server(rancher),
         config.host.require_encrypted_disk,
-    ) {
+    )
+    .await
+    {
         output::line("apply stops until what failed is fixed.");
     }
     Ok(())
@@ -59,13 +61,14 @@ pub(crate) fn show_plan(config: &Config, json: bool) -> Result<(), InstallError>
 
 pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     let rancher = rancher(config)?;
-    let running = systemd::is_active(rancher.server_unit());
-    let mut plan = make_plan(config, rancher)?;
+    let running = systemd::is_active(rancher.server_unit()).await;
+    let mut plan = make_plan(config, rancher).await?;
     output::line(render::plan(&plan).trim_end());
     check_host(
         preflight::Node::Server(rancher),
         config.host.require_encrypted_disk,
-    )?;
+    )
+    .await?;
 
     let kubectl = Kubectl::admin(rancher);
     let started = install_cluster(&ClusterInstall {
@@ -76,11 +79,11 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         changed: false,
     })
     .await?;
-    kubectl.wait_ready(Duration::from_mins(10))?;
+    kubectl.wait_ready(Duration::from_mins(10)).await?;
     files::set_modes(Path::new(rancher.layout().tls_dir), ".crt", 0o600)?;
     // A stopped cluster could not be read while planning: plan again now that it answers.
-    if !running && read_record(&kubectl)?.is_some() {
-        plan = make_plan(config, rancher)?;
+    if !running && read_record(&kubectl).await?.is_some() {
+        plan = make_plan(config, rancher).await?;
         output::line(render::changes(plan.changes.as_ref(), rancher.server_unit()).trim_end());
     }
     let name = plan.node_name.clone();
@@ -88,13 +91,20 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         kubectl::poll(
             Duration::from_mins(10),
             &format!("node {name} to be Ready"),
-            || crate::join::node_ready(&kubectl, &name, started).unwrap_or(false),
-        )?;
+            async || {
+                crate::join::node_ready(&kubectl, &name, started)
+                    .await
+                    .unwrap_or(false)
+            },
+        )
+        .await?;
     }
 
     output::step("ServiceLB network policy");
-    kubectl.apply_object(&plan::servicelb_policy(rancher))?;
-    record(&kubectl, &plan)?;
+    kubectl
+        .apply_object(&plan::servicelb_policy(rancher))
+        .await?;
+    record(&kubectl, &plan).await?;
 
     output::step("Done");
     let layout = rancher.layout();
@@ -109,13 +119,13 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
 }
 
 /// The plan, with the install record read from the cluster when it runs.
-fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
+async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
     let kubectl = Kubectl::admin(rancher);
-    let running = systemd::is_active(rancher.server_unit());
-    let mut facts = facts::read()?;
-    facts.installer = kept_version(Path::new(STATE_DIR));
+    let running = systemd::is_active(rancher.server_unit()).await;
+    let mut facts = facts::read().await?;
+    facts.zeatend_version = kept_version(Path::new(STATE_DIR));
     if running {
-        facts.record = read_record(&kubectl)?;
+        facts.record = read_record(&kubectl).await?;
     }
     let mut plan = plan::plan(config, &facts)?;
     if plan.changes.is_some() {
@@ -125,7 +135,8 @@ fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
             files: &plan.host_files,
             server: true,
             changed: false,
-        })?;
+        })
+        .await?;
         if let Some(changes) = &mut plan.changes {
             // A new release is shown as such, not as its binary.
             if changes.version.is_some() {
@@ -135,7 +146,7 @@ fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
             changes.set_host_files(pending);
         }
         // The check is advice; a failed read skips it.
-        if running && let Some(nodes) = node_memory(&kubectl) {
+        if running && let Some(nodes) = node_memory(&kubectl).await {
             let full = fit::warnings(&plan, &nodes);
             plan.warnings.extend(full);
         }
@@ -144,19 +155,20 @@ fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
 }
 
 /// Each node's memory and what the Pods on it request; `None` when a read fails.
-fn node_memory(kubectl: &Kubectl) -> Option<Vec<NodeMemory>> {
-    let list = |args: &[&str]| -> Option<serde_json::Value> {
-        serde_json::from_str(&kubectl.run(args, None).ok()?).ok()
+async fn node_memory(kubectl: &Kubectl) -> Option<Vec<NodeMemory>> {
+    let list = async |args: &[&str]| -> Option<serde_json::Value> {
+        serde_json::from_str(&kubectl.run(args, None).await.ok()?).ok()
     };
-    let nodes = list(&["get", "nodes", "--output=json"])?;
-    let pods = list(&["get", "pods", "--all-namespaces", "--output=json"])?;
+    let nodes = list(&["get", "nodes", "--output=json"]).await?;
+    let pods = list(&["get", "pods", "--all-namespaces", "--output=json"]).await?;
     Some(fit::nodes(&nodes, &pods))
 }
 
 /// The install record, when there is one.
-pub(crate) fn read_record(kubectl: &Kubectl) -> Result<Option<Record>, InstallError> {
+pub(crate) async fn read_record(kubectl: &Kubectl) -> Result<Option<Record>, InstallError> {
     Ok(kubectl
-        .get("configmap", STATE_CONFIGMAP, Some("kube-system"))?
+        .get("configmap", STATE_CONFIGMAP, Some("kube-system"))
+        .await?
         .and_then(|state| Record::from_data(state.get("data")?)))
 }
 
@@ -177,21 +189,23 @@ fn keep_version(state_dir: &Path) -> Result<(), InstallError> {
 }
 
 /// Records what `apply` installed, in the cluster and in the state directory.
-pub(crate) fn record(kubectl: &Kubectl, plan: &Plan) -> Result<(), InstallError> {
-    kubectl.apply_object(&json!({
-        "apiVersion": "v1",
-        "kind": "ConfigMap",
-        "metadata": {
-            "name": STATE_CONFIGMAP,
-            "namespace": "kube-system",
-            "labels": {"app.kubernetes.io/managed-by": MANAGER},
-        },
-        "data": {
-            "installer": ZEATEND_VERSION,
-            "distribution": plan.distribution.id(),
-            "version": plan.release.version(),
-        },
-    }))?;
+pub(crate) async fn record(kubectl: &Kubectl, plan: &Plan) -> Result<(), InstallError> {
+    kubectl
+        .apply_object(&json!({
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": STATE_CONFIGMAP,
+                "namespace": "kube-system",
+                "labels": {"app.kubernetes.io/managed-by": MANAGER},
+            },
+            "data": {
+                "zeatendVersion": ZEATEND_VERSION,
+                "distribution": plan.distribution.id(),
+                "version": plan.release.version(),
+            },
+        }))
+        .await?;
     let state_dir = match plan.release {
         Release::Cluster(_) => STATE_DIR,
         Release::KubeSolo(_) => zeatend_plan::kubesolo::STATE_DIR,
@@ -208,11 +222,11 @@ pub(crate) fn changed_files<'a>(files: impl Iterator<Item = &'a HostFile>) -> Ve
 }
 
 /// The preflight checks; a failed one stops `apply`.
-pub(crate) fn check_host(
+pub(crate) async fn check_host(
     node: preflight::Node,
     require_encrypted_disk: bool,
 ) -> Result<(), InstallError> {
-    if show_checks(node, require_encrypted_disk) {
+    if show_checks(node, require_encrypted_disk).await {
         return Err(InstallError::Message(
             "the host is not ready; fix what failed and run apply again".to_owned(),
         ));
@@ -221,7 +235,7 @@ pub(crate) fn check_host(
 }
 
 /// Runs and prints the preflight checks, which only read the host. Returns whether one failed.
-pub(crate) fn show_checks(node: preflight::Node, require_encrypted_disk: bool) -> bool {
+pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: bool) -> bool {
     output::step("Checking the host");
     let unit = match node {
         preflight::Node::Server(d) => d.server_unit(),
@@ -229,10 +243,11 @@ pub(crate) fn show_checks(node: preflight::Node, require_encrypted_disk: bool) -
         preflight::Node::KubeSolo => zeatend_plan::kubesolo::UNIT,
     };
     let checks = preflight::run(preflight::Options {
-        cluster_running: systemd::is_active(unit),
+        cluster_running: systemd::is_active(unit).await,
         require_encrypted_disk,
         node,
-    });
+    })
+    .await;
     for check in &checks {
         let mark = match check.status {
             Status::Pass => "ok  ",
@@ -258,9 +273,11 @@ fn release_binary(distribution: Rancher) -> PathBuf {
 
 /// What `install_release` would install: the binary when it is not the planned release, or the
 /// K3s unit when it is missing.
-fn release_pending(cluster: &ClusterPlan, unit: &str) -> Option<String> {
+async fn release_pending(cluster: &ClusterPlan, unit: &str) -> Option<String> {
     let binary = release_binary(cluster.distribution);
-    let installed = cmd::run(&binary, &["--version"], None).unwrap_or_default();
+    let installed = cmd::run(&binary, &["--version"], None)
+        .await
+        .unwrap_or_default();
     // `install.sh` writes the K3s unit; RKE2's comes in its tarball.
     let unit_file = format!("/etc/systemd/system/{unit}.service");
     if !installed.contains(&cluster.version) {
@@ -278,7 +295,7 @@ async fn install_release(
     server: bool,
     unit: &str,
 ) -> Result<(), InstallError> {
-    if release_pending(cluster, unit).is_none() {
+    if release_pending(cluster, unit).await.is_none() {
         return Ok(());
     }
     let distribution = cluster.distribution;
@@ -306,13 +323,14 @@ async fn install_release(
                     ("INSTALL_K3S_SKIP_SELINUX_RPM", "true"),
                 ],
                 None,
-            )?;
+            )
+            .await?;
         }
         Rancher::Rke2 => {
             archive::unpack_tar_gz(&release, Path::new(PREFIX))?;
         }
     }
-    systemd::daemon_reload()?;
+    systemd::daemon_reload().await?;
     Ok(())
 }
 
@@ -339,7 +357,7 @@ impl ClusterInstall<'_> {
 }
 
 /// The paths `install_cluster` would write; a running cluster restarts when there is one.
-fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallError> {
+async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallError> {
     let mut paths = changed_files(install.files.iter());
     if let Some(calico) = install.calico {
         let path = calico_path();
@@ -347,7 +365,7 @@ fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallError> {
             paths.push(path.display().to_string());
         }
     }
-    paths.extend(release_pending(install.cluster, install.unit()));
+    paths.extend(release_pending(install.cluster, install.unit()).await);
     Ok(paths)
 }
 
@@ -366,7 +384,7 @@ pub(crate) async fn install_cluster(
         distribution.title(),
         cluster.version
     ));
-    let changed = install.changed || !pending(install)?.is_empty();
+    let changed = install.changed || !pending(install).await?.is_empty();
     for file in install.files {
         files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
@@ -374,14 +392,15 @@ pub(crate) async fn install_cluster(
         "sysctl",
         &["--quiet", &format!("--load={}", layout.sysctl_file)],
         None,
-    )?;
-    load_apparmor_profile(install.files.iter())?;
+    )
+    .await?;
+    load_apparmor_profile(install.files.iter()).await?;
     match distribution {
-        Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]) => {
+        Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
             let (program, args) = ETCD_USER
                 .split_first()
                 .ok_or_else(|| InstallError::Message("ETCD_USER".to_owned()))?;
-            cmd::run(program, args, None)?;
+            cmd::run(program, args, None).await?;
         }
         Rancher::K3s if install.server => {
             files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
@@ -398,17 +417,17 @@ pub(crate) async fn install_cluster(
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs())
     };
-    if !systemd::is_active(unit) {
+    if !systemd::is_active(unit).await {
         output::err(&format!(
             "    starting {unit}; the first start takes a few minutes"
         ));
         let started = now();
-        systemd::enable_now(unit)?;
+        systemd::enable_now(unit).await?;
         Ok(Some(started))
     } else if changed {
         output::err(&format!("    restarting {unit} for the new configuration"));
         let started = now();
-        systemd::restart(unit)?;
+        systemd::restart(unit).await?;
         Ok(Some(started))
     } else {
         Ok(None)
@@ -416,11 +435,11 @@ pub(crate) async fn install_cluster(
 }
 
 /// Loads the `AppArmor` profile among `files`, so containerd finds it loaded and keeps it.
-pub(crate) fn load_apparmor_profile<'a>(
+pub(crate) async fn load_apparmor_profile<'a>(
     mut files: impl Iterator<Item = &'a HostFile>,
 ) -> Result<(), InstallError> {
     if files.any(|f| f.path == APPARMOR_PROFILE) {
-        cmd::run("apparmor_parser", &["--replace", APPARMOR_PROFILE], None)?;
+        cmd::run("apparmor_parser", &["--replace", APPARMOR_PROFILE], None).await?;
     }
     Ok(())
 }
@@ -458,7 +477,7 @@ fn pinned_path(download: &Download) -> PathBuf {
 
 /// Where K3s reads Calico's manifest, which it applies on start.
 fn calico_path() -> PathBuf {
-    Path::new(k3s::MANIFESTS_DIR).join("zeabur-calico.yaml")
+    Path::new(k3s::MANIFESTS_DIR).join("zeatend-calico.yaml")
 }
 
 /// Whether the manifest at `path` is not the one `calico_manifest` writes from the pinned
@@ -498,7 +517,7 @@ mod tests {
     fn a_missing_or_edited_calico_manifest_is_a_change() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("calico.yaml");
-        let path = dir.path().join("zeabur-calico.yaml");
+        let path = dir.path().join("zeatend-calico.yaml");
         assert!(calico_differs(&source, &path).unwrap());
 
         let images: Vec<String> = zeatend_plan::pins::CALICO

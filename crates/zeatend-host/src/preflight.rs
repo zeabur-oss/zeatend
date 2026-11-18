@@ -224,26 +224,23 @@ const DISK_ROOMY_GIB: u64 = 30;
 
 /// Runs every check.
 #[must_use]
-pub fn run(options: Options) -> Vec<Check> {
+pub async fn run(options: Options) -> Vec<Check> {
     let mut checks = vec![
         root(),
         systemd(),
-        time_sync(),
+        time_sync().await,
         swap(),
         crash_kernel(),
         other_distributions(options.node),
     ];
     if options.node == Node::KubeSolo {
-        checks.push(docker());
+        checks.push(docker().await);
     }
     if !options.cluster_running {
         checks.push(ports(options.node));
     }
-    checks.push(disk_space(options.node.data_dir()));
-    checks.push(encryption(
-        options.node.data_dir(),
-        options.require_encrypted_disk,
-    ));
+    checks.push(disk_space(options.node.data_dir()).await);
+    checks.push(encryption(options.node.data_dir(), options.require_encrypted_disk).await);
     checks
 }
 
@@ -310,12 +307,14 @@ fn systemd() -> Check {
     }
 }
 
-fn time_sync() -> Check {
+async fn time_sync() -> Check {
     match cmd::run(
         "timedatectl",
         &["show", "--property=NTPSynchronized", "--value"],
         None,
-    ) {
+    )
+    .await
+    {
         Ok(out) if out.trim() == "yes" => check(
             Topic::Time,
             Status::Pass,
@@ -428,19 +427,20 @@ const DOCKER_PATHS: [&str; 5] = [
 ];
 const DOCKER_UNITS: [&str; 2] = ["docker.service", "docker.socket"];
 
-fn docker() -> Check {
+async fn docker() -> Check {
     let mut found: Vec<String> = DOCKER_PATHS
         .iter()
         .filter(|path| Path::new(path).exists())
         .map(|&path| path.to_owned())
         .collect();
-    found.extend(
-        DOCKER_UNITS
-            .iter()
-            .filter(|unit| systemd::is_active(unit))
-            .map(|&unit| unit.to_owned()),
-    );
-    let iptables = cmd::run("iptables", &["-S", "FORWARD"], None).unwrap_or_default();
+    for unit in DOCKER_UNITS {
+        if systemd::is_active(unit).await {
+            found.push(unit.to_owned());
+        }
+    }
+    let iptables = cmd::run("iptables", &["-S", "FORWARD"], None)
+        .await
+        .unwrap_or_default();
     docker_check(&found, &iptables)
 }
 
@@ -532,9 +532,10 @@ fn existing_or_var_lib(dir: &str) -> &str {
     }
 }
 
-fn disk_space(data_dir: &str) -> Check {
+async fn disk_space(data_dir: &str) -> Check {
     let target = existing_or_var_lib(data_dir);
     let Some(kib) = cmd::run("df", &["-Pk", target], None)
+        .await
         .ok()
         .and_then(|out| available_kib(&out))
     else {
@@ -586,9 +587,9 @@ fn available_kib(df: &str) -> Option<u64> {
     df.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()
 }
 
-fn encryption(data_dir: &str, required: bool) -> Check {
+async fn encryption(data_dir: &str, required: bool) -> Check {
     let target = existing_or_var_lib(data_dir);
-    let found = disk_encryption(target);
+    let found = disk_encryption(target).await;
     let (status, detail, code) = match (found, required) {
         (Encryption::Encrypted, _) => (
             Status::Pass,
@@ -627,12 +628,14 @@ fn encryption(data_dir: &str, required: bool) -> Check {
 
 /// Whether the device holding `path` has a dm-crypt device beneath it.
 #[must_use]
-pub fn disk_encryption(path: &str) -> Encryption {
+pub async fn disk_encryption(path: &str) -> Encryption {
     let Ok(source) = cmd::run(
         "findmnt",
         &["--noheadings", "--output", "SOURCE", "--target", path],
         None,
-    ) else {
+    )
+    .await
+    else {
         return Encryption::Unknown;
     };
     let source = source.trim();
@@ -642,7 +645,9 @@ pub fn disk_encryption(path: &str) -> Encryption {
         "lsblk",
         &["--noheadings", "--inverse", "--output", "TYPE", device],
         None,
-    ) {
+    )
+    .await
+    {
         Ok(types) if types.split_whitespace().any(|t| t == "crypt") => Encryption::Encrypted,
         Ok(_) => Encryption::Plain,
         Err(_) => Encryption::Unknown,

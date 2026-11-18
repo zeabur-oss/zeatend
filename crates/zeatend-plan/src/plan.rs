@@ -37,7 +37,7 @@ pub struct Facts {
     pub record: Option<Record>,
     /// The version of the zeatend that last applied, as kept on the host.
     #[serde(skip)]
-    pub installer: Option<String>,
+    pub zeatend_version: Option<String>,
     /// `kernel.apparmor_restrict_unprivileged_unconfined` is 1; see
     /// [`cluster::apparmor_profile`].
     #[serde(skip)]
@@ -66,13 +66,13 @@ impl Facts {
     /// # Errors
     ///
     /// [`PlanError::NewerZeatend`].
-    pub fn check_installer(&self) -> Result<(), PlanError> {
+    pub fn check_zeatend_version(&self) -> Result<(), PlanError> {
         if let Some(record) = &self.record {
-            record.check_installer()?;
+            record.check_zeatend_version()?;
         }
-        self.installer
+        self.zeatend_version
             .as_deref()
-            .map_or(Ok(()), crate::record::check_installer)
+            .map_or(Ok(()), crate::record::check_zeatend_version)
     }
 }
 
@@ -218,7 +218,7 @@ impl From<pins::Asset> for Download {
 /// When a newer zeatend applied, the architecture has no release, the node name cannot be used,
 /// or a first install of K3s or RKE2 does not fit in the host's memory.
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
-    facts.check_installer()?;
+    facts.check_zeatend_version()?;
     let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
     let mut warnings = Vec::new();
     let (release, calico, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
@@ -439,7 +439,7 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.5".to_owned()],
             record: None,
-            installer: None,
+            zeatend_version: None,
             apparmor_restricts_unconfined: false,
         }
     }
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn a_stopped_cluster_last_applied_by_a_newer_zeatend_is_left_alone() {
         let stopped = Facts {
-            installer: Some("99.0.0".to_owned()),
+            zeatend_version: Some("99.0.0".to_owned()),
             ..facts()
         };
         assert!(matches!(
@@ -459,7 +459,7 @@ mod tests {
             Err(PlanError::NewerZeatend { recorded, .. }) if recorded == "99.0.0"
         ));
         let own = Facts {
-            installer: Some(record::ZEATEND_VERSION.to_owned()),
+            zeatend_version: Some(record::ZEATEND_VERSION.to_owned()),
             ..facts()
         };
         plan(&config("{}"), &own).unwrap();
@@ -546,7 +546,7 @@ mod tests {
         assert!(err.to_string().contains("distribution: kubesolo"), "{err}");
         let installed = Facts {
             record: Some(Record {
-                installer: record::ZEATEND_VERSION.to_owned(),
+                zeatend_version: record::ZEATEND_VERSION.to_owned(),
                 distribution: Some("k3s".to_owned()),
                 version: Some("v1.0.0+k3s1".to_owned()),
             }),

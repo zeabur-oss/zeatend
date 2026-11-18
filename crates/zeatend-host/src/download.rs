@@ -3,18 +3,11 @@
 use std::fs::{self, File};
 use std::io::{self, BufRead as _, Write as _};
 use std::path::Path;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use bytes::Bytes;
-use http::header::{LOCATION, USER_AGENT};
-use http::{HeaderMap, Request, Response, Uri};
-use http_body_util::{BodyExt as _, Full, Limited};
-use hyper::body::Incoming;
-use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::Client;
-use hyper_util::client::legacy::connect::HttpConnector;
-use hyper_util::rt::TokioExecutor;
+use reqwest::header::HeaderMap;
+use reqwest::redirect::{self, Attempt};
+use reqwest::{Client, Response};
 use sha2::{Digest as _, Sha256};
 
 use crate::HostError;
@@ -35,23 +28,22 @@ const BACKOFF: Duration = if cfg!(test) {
 /// The longest `Retry-After` wait honoured; a longer one ends the retrying.
 const MAX_WAIT: Duration = Duration::from_secs(30);
 
-/// How long a request may wait for the answer's head, connection included.
+/// How long a request may wait for the answer's head, connection and redirects included.
 const HEAD_TIME: Duration = Duration::from_mins(1);
 
 /// How long reading an answer's body may take.
 const BODY_TIME: Duration = Duration::from_hours(1);
 
 /// How many redirects one request follows.
-const REDIRECTS: u32 = 10;
+const REDIRECTS: usize = 10;
 
 const AGENT: &str = concat!("zeatend/", env!("CARGO_PKG_VERSION"));
 
-type Https = Client<HttpsConnector<HttpConnector>, Full<Bytes>>;
-
-/// An HTTP and HTTPS client for zeatend's downloads. It trusts the platform's CA store and
-/// uses TLS from `aws-lc-rs`.
+/// An HTTP and HTTPS client for zeatend's downloads. It trusts the platform's CA store, uses TLS
+/// from `aws-lc-rs`, and goes through the proxy that `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`
+/// name.
 pub struct Agent {
-    client: Result<Https, String>,
+    client: Result<Client, String>,
 }
 
 impl std::fmt::Debug for Agent {
@@ -62,7 +54,7 @@ impl std::fmt::Debug for Agent {
 
 impl Agent {
     /// The client; a client that could not be made fails the download of `url`.
-    fn client(&self, url: &str) -> Result<&Https, HostError> {
+    fn client(&self, url: &str) -> Result<&Client, HostError> {
         self.client.as_ref().map_err(|reason| HostError::Download {
             url: url.to_owned(),
             reason: reason.clone(),
@@ -70,35 +62,34 @@ impl Agent {
     }
 }
 
-/// A client that trusts the platform's CA store. It must be made inside a Tokio runtime.
+/// A client that trusts the platform's CA store.
 ///
 /// A TLS setup that fails is reported by the first download.
 #[must_use]
 pub fn agent() -> Agent {
     Agent {
-        client: tls().map(|tls| {
-            let connector = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_tls_config(tls)
-                .https_or_http()
-                .enable_http1()
-                .build();
-            Client::builder(TokioExecutor::new()).build(connector)
-        }),
+        client: Client::builder()
+            .user_agent(AGENT)
+            .redirect(redirect::Policy::custom(follow))
+            .build()
+            .map_err(|e| describe(&e)),
     }
 }
 
-/// The TLS configuration: the `aws-lc-rs` provider and the platform's trust roots.
-fn tls() -> Result<rustls::ClientConfig, String> {
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier =
-        rustls_platform_verifier::Verifier::new_with_extra_roots(Vec::new(), Arc::clone(&provider))
-            .map_err(|e| e.to_string())?;
-    Ok(rustls::ClientConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|e| e.to_string())?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth())
+/// Follows up to [`REDIRECTS`] redirects. A redirect from `https` to `http` is refused.
+fn follow(attempt: Attempt<'_>) -> redirect::Action {
+    let from_https = attempt
+        .previous()
+        .last()
+        .is_some_and(|url| url.scheme() == "https");
+    if from_https && attempt.url().scheme() != "https" {
+        let reason = format!("refused the redirect from https to {}", attempt.url());
+        attempt.error(reason)
+    } else if attempt.previous().len() > REDIRECTS {
+        attempt.error(format!("more than {REDIRECTS} redirects"))
+    } else {
+        attempt.follow()
+    }
 }
 
 /// The innermost cause, which names what failed (DNS, TLS, a refused connection).
@@ -141,14 +132,10 @@ pub async fn fetch(
         let response = get_ok(https, url).await.map_err(fail)?;
         let mut file = File::create(&partial).map_err(HostError::io(&partial))?;
         let mut hasher = Sha256::new();
-        let mut body = response.into_body();
+        let mut response = response;
         let mut size: u64 = 0;
         let reading = async {
-            while let Some(frame) = body.frame().await {
-                let frame = frame.map_err(|e| fail(describe(&e)))?;
-                let Ok(chunk) = frame.into_data() else {
-                    continue;
-                };
+            while let Some(chunk) = response.chunk().await.map_err(|e| fail(describe(&e)))? {
                 size = size.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
                 if size > MAX_FILE {
                     return Err(fail("the file is larger than 4 GiB".to_owned()));
@@ -204,17 +191,24 @@ pub async fn fetch_text(
 }
 
 /// The body of `response`, at most `limit` bytes.
-async fn read_all(response: Response<Incoming>, limit: usize) -> Result<Vec<u8>, String> {
-    let reading = Limited::new(response.into_body(), limit).collect();
-    let body = tokio::time::timeout(BODY_TIME, reading)
+async fn read_all(mut response: Response, limit: usize) -> Result<Vec<u8>, String> {
+    let reading = async {
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| describe(&e))? {
+            if body.len().saturating_add(chunk.len()) > limit {
+                return Err(format!("the answer is larger than {limit} bytes"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    };
+    tokio::time::timeout(BODY_TIME, reading)
         .await
         .map_err(|_elapsed| "the download did not finish in time".to_owned())?
-        .map_err(|e| describe(&*e))?;
-    Ok(body.to_bytes().to_vec())
 }
 
 /// A GET that succeeds, or the reason it did not.
-async fn get_ok(https: &Https, url: &str) -> Result<Response<Incoming>, String> {
+async fn get_ok(https: &Client, url: &str) -> Result<Response, String> {
     let response = get_retrying(https, url).await?;
     if response.status().is_success() {
         Ok(response)
@@ -227,12 +221,11 @@ async fn get_ok(https: &Https, url: &str) -> Result<Response<Incoming>, String> 
 /// a status that RFC 9110 and RFC 6585 describe as temporary (see [`temporary`]). A
 /// `Retry-After` answer sets the wait; one longer than [`MAX_WAIT`] is not waited for and the
 /// response is returned. Any other status is returned as it is for the caller to judge.
-async fn get_retrying(https: &Https, url: &str) -> Result<Response<Incoming>, String> {
-    let uri: Uri = url.parse().map_err(|e| format!("{e}"))?;
+async fn get_retrying(https: &Client, url: &str) -> Result<Response, String> {
     let mut wait = BACKOFF;
     let mut attempt = 0;
     loop {
-        let asked = match get(https, uri.clone()).await {
+        let asked = match get(https, url).await {
             Ok(response) => {
                 if !temporary(response.status().as_u16()) || attempt == RETRIES {
                     return Ok(response);
@@ -256,96 +249,12 @@ async fn get_retrying(https: &Https, url: &str) -> Result<Response<Incoming>, St
     }
 }
 
-/// One GET that follows up to [`REDIRECTS`] redirects. A redirect from `https` to `http` is
-/// refused.
-async fn get(https: &Https, mut uri: Uri) -> Result<Response<Incoming>, String> {
-    for _ in 0..=REDIRECTS {
-        let request = Request::get(uri.clone())
-            .header(USER_AGENT, AGENT)
-            .body(Full::<Bytes>::default())
-            .map_err(|e| e.to_string())?;
-        let response = tokio::time::timeout(HEAD_TIME, https.request(request))
-            .await
-            .map_err(|_elapsed| "the server did not answer in time".to_owned())?
-            .map_err(|e| describe(&e))?;
-        if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-            return Ok(response);
-        }
-        let Some(location) = response
-            .headers()
-            .get(LOCATION)
-            .and_then(|v| v.to_str().ok())
-        else {
-            return Ok(response);
-        };
-        let next = resolve(&uri, location)?;
-        if uri.scheme_str() == Some("https") && next.scheme_str() != Some("https") {
-            return Err(format!("refused the redirect from https to {next}"));
-        }
-        uri = next;
-    }
-    Err(format!("more than {REDIRECTS} redirects"))
-}
-
-/// The target of a redirect from `base` to `location`: the reference resolution of RFC 3986
-/// section 5.2, as RFC 9110 section 10.2.2 asks.
-fn resolve(base: &Uri, location: &str) -> Result<Uri, String> {
-    let scheme = base.scheme_str().unwrap_or("https");
-    let authority = base.authority().map_or("", |a| a.as_str());
-    let location = location.split('#').next().unwrap_or_default();
-    let lower = location.to_ascii_lowercase();
-    let target = if lower.starts_with("http://") || lower.starts_with("https://") {
-        location.to_owned()
-    } else if let Some(rest) = location.strip_prefix("//") {
-        format!("{scheme}://{rest}")
-    } else if location.is_empty() {
-        base.to_string()
-    } else if location.starts_with('?') {
-        format!("{scheme}://{authority}{}{location}", base.path())
-    } else {
-        let (path, query) = location
-            .split_once('?')
-            .map_or((location, ""), |(p, q)| (p, q));
-        let joined = if path.starts_with('/') {
-            path.to_owned()
-        } else {
-            let own = base.path();
-            let dir = own.rfind('/').and_then(|i| own.get(..=i)).unwrap_or("/");
-            format!("{dir}{path}")
-        };
-        let query = if location.contains('?') {
-            format!("?{query}")
-        } else {
-            String::new()
-        };
-        format!("{scheme}://{authority}{}{query}", without_dots(&joined))
-    };
-    target
-        .parse()
-        .map_err(|e| format!("the redirect to {location}: {e}"))
-}
-
-/// `path` without its `.` and `..` segments (RFC 3986 section 5.2.4).
-fn without_dots(path: &str) -> String {
-    let mut kept: Vec<&str> = Vec::new();
-    let mut segments = path.split('/').skip(1).peekable();
-    while let Some(segment) = segments.next() {
-        let last = segments.peek().is_none();
-        match segment {
-            "." => {}
-            ".." => {
-                kept.pop();
-            }
-            _ => {
-                kept.push(segment);
-                continue;
-            }
-        }
-        if last {
-            kept.push("");
-        }
-    }
-    format!("/{}", kept.join("/"))
+/// One GET, with its redirects.
+async fn get(https: &Client, url: &str) -> Result<Response, String> {
+    tokio::time::timeout(HEAD_TIME, https.get(url).send())
+        .await
+        .map_err(|_elapsed| "the server did not answer in time".to_owned())?
+        .map_err(|e| describe(&e))
 }
 
 /// Whether the status says the same request may work later: 408 (RFC 9110 section 15.5.9),
@@ -622,25 +531,6 @@ mod tests {
             };
             assert!(heads[1].starts_with(target), "{heads:?}");
             assert!(heads[1].contains("user-agent: zeatend/"), "{heads:?}");
-        }
-    }
-
-    #[test]
-    fn redirect_targets_resolve_against_the_request() {
-        let base: Uri = "https://example.com/a/b".parse().unwrap();
-        for (location, target) in [
-            ("c", "https://example.com/a/c"),
-            ("/c", "https://example.com/c"),
-            ("//cdn.example.com/x", "https://cdn.example.com/x"),
-            ("HTTPS://cdn.example.com/y", "https://cdn.example.com/y"),
-            ("?token=abc", "https://example.com/a/b?token=abc"),
-            ("c?x=1#frag", "https://example.com/a/c?x=1"),
-            ("../c", "https://example.com/c"),
-            ("../../../c", "https://example.com/c"),
-            ("./c/./d/..", "https://example.com/a/c/"),
-            ("/p/../q?r=1", "https://example.com/q?r=1"),
-        ] {
-            assert_eq!(resolve(&base, location).unwrap().to_string(), target);
         }
     }
 
