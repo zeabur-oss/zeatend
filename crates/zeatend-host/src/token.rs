@@ -123,8 +123,8 @@ pub fn expires(ttl: Duration) -> String {
     rfc3339(jiff::Timestamp::now().as_second().saturating_add(ttl))
 }
 
-/// Seconds since the epoch in RFC 3339, UTC. Seconds outside the years -9999 to 9999 are
-/// clamped to them.
+/// Seconds since the epoch in RFC 3339, UTC. Seconds outside jiff's range
+/// (`-009999-01-02T01:59:59Z` to `9999-12-30T22:00:00Z`) are clamped to it.
 #[must_use]
 pub fn rfc3339(secs: i64) -> String {
     let secs = secs.clamp(
@@ -200,6 +200,6 @@ mod tests {
         assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
         assert_eq!(rfc3339(1_792_713_600 + 3_661), "2026-10-23T01:01:01Z");
-        assert_eq!(rfc3339(i64::MAX), "9999-12-31T23:59:59Z");
+        assert_eq!(rfc3339(i64::MAX), "9999-12-30T22:00:00Z");
     }
 }
