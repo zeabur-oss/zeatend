@@ -288,7 +288,7 @@ mod tests {
         assert_eq!(tw(&crypt), "/ 和 /var/lib/rancher 都在 dm-crypt 裝置上");
         assert_eq!(
             tw(&busy),
-            "已有程式使用 6443（Kubernetes API）、10250（kubelet）；用 `ss -ltnp` 找出是哪個程式"
+            "已有程式使用 6443（Kubernetes API）、10250（kubelet），用 `ss -ltnp` 找出是哪個程式"
         );
         let cn = Lang::ZhCn.messages().finding;
         assert_eq!(cn(&free), "80、443 和 10250 都没有程序占用");

@@ -8,7 +8,7 @@ use super::{Messages, gib, zh_list};
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在檢查主機",
     apply_stops: "修好失敗的項目之前，apply 不會繼續執行。",
-    host_not_ready: "主機還沒準備好；修好失敗的項目後，再執行一次 apply",
+    host_not_ready: "主機還沒準備好，修好失敗的項目後再執行一次 apply",
     status,
     topic,
     finding,
@@ -50,7 +50,7 @@ fn finding(finding: &Finding) -> String {
             "Kubernetes 以 systemd 服務執行，但這台主機沒有使用 systemd".to_owned()
         }
         Finding::TimeOk => "時鐘已同步".to_owned(),
-        Finding::TimeDrift => "時鐘沒有同步；時間一偏移，憑證和權杖就會失效（執行 \
+        Finding::TimeDrift => "時鐘沒有同步，時間一偏移，憑證和權杖就會失效（執行 \
                                timedatectl set-ntp true）"
             .to_owned(),
         Finding::TimeUnknown => "無法向 timedatectl 確認時鐘是否同步".to_owned(),
@@ -61,19 +61,16 @@ fn finding(finding: &Finding) -> String {
         Finding::SwapUnknown => "無法讀取 /proc/swaps".to_owned(),
         Finding::CrashNone => "核心沒有為 kdump 保留記憶體".to_owned(),
         Finding::CrashKept { mib } => format!(
-            "核心為 kdump 保留了 {mib} MiB 記憶體；要釋放這些記憶體，執行 sudo apt purge \
-             kdump-tools && sudo update-grub，再重新開機"
+            "核心為 kdump 保留了 {mib} MiB 記憶體，執行 sudo apt purge kdump-tools && sudo \
+             update-grub 再重新開機就能釋放"
         ),
         Finding::OthersNone => "沒有找到".to_owned(),
         Finding::OthersFound { found } => {
             let named: Vec<String> = found
                 .iter()
-                .map(|l| format!("{}（{}）", l.distribution, l.path))
+                .map(|l| format!("{} 的 {}", l.distribution, l.path))
                 .collect();
-            format!(
-                "找到其他發行版的檔案：{}；如果仍在執行，先解除安裝",
-                named.join("、")
-            )
+            format!("找到 {}，如果仍在執行，先解除安裝", and_list(&named))
         }
         Finding::PortsFree { ports } => {
             let numbers: Vec<String> = ports.iter().map(u16::to_string).collect();
@@ -85,7 +82,7 @@ fn finding(finding: &Finding) -> String {
                 .map(|p| format!("{}（{}）", p.port, port_use(p.purpose)))
                 .collect();
             format!(
-                "已有程式使用 {}；用 `ss -ltnp` 找出是哪個程式",
+                "已有程式使用 {}，用 `ss -ltnp` 找出是哪個程式",
                 named.join("、")
             )
         }
@@ -103,7 +100,7 @@ fn finding(finding: &Finding) -> String {
             path,
             roomy_gib,
         } => format!(
-            "{path} 有 {} GiB 可用空間；{roomy_gib} GiB 以上可為映像檔、日誌和磁碟區預留空間",
+            "{path} 有 {} GiB 可用空間，有 {roomy_gib} GiB 以上才能替映像檔、日誌和磁碟區預留空間",
             gib(*free_tenths_gib)
         ),
         Finding::DiskOk {
@@ -122,17 +119,17 @@ fn finding(finding: &Finding) -> String {
             format!("設定了 host.requireEncryptedDisk，但無法判斷 {path} 是否加密")
         }
         Finding::CryptNo { path } => format!(
-            "{path} 不在加密磁碟上，磁碟區和資料庫都會以未加密的形式儲存；大多數 VPS \
+            "{path} 不在加密磁碟上，磁碟區和資料庫都會以未加密的形式儲存。大多數 VPS \
              方案無法事後加密，要存放敏感資料，就選擇供應商會加密磁碟的方案"
         ),
         Finding::CryptUnknown { path } => format!("無法判斷 {path} 是否加密"),
         Finding::DockerNone => "沒有 Docker，iptables 的 FORWARD 原則也不是 DROP".to_owned(),
         Finding::DockerFound { found } => format!(
             "這台主機上有 Docker（{}），Docker 會把 iptables 的 FORWARD 原則設為 DROP，Pod \
-             就連不上網際網路；先停止並移除 Docker",
+             就連不上網際網路。先停止並移除 Docker",
             found.join("、")
         ),
-        Finding::ForwardDrop => "iptables 的 FORWARD 原則是 DROP，Pod 連不上網際網路；找出設定這項\
+        Finding::ForwardDrop => "iptables 的 FORWARD 原則是 DROP，Pod 連不上網際網路。找出設定這項\
                                  原則的程式（例如 Docker、ufw）再修改"
             .to_owned(),
     }
