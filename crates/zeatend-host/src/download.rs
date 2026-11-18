@@ -372,6 +372,18 @@ async fn attempt(
         part.append(&chunk)?;
         meter.add(chunk.len(), part.size, total);
     }
+    // A 206 may cover less than the rest of the file; ask again for what is missing.
+    if let Some(total) = total
+        && part.size != total
+    {
+        if part.size > total {
+            part.restart()?;
+        }
+        return Err(retry(format!(
+            "the server sent {} of {total} bytes",
+            part.size
+        )));
+    }
     meter.report(part.size, total);
     Ok(())
 }
@@ -723,9 +735,15 @@ mod tests {
 
     /// Bytes 5 to 10 of a file of 11 bytes.
     fn rest(body: &str) -> Reply {
+        range(5, body)
+    }
+
+    /// `body` as the bytes from `first` of a file of 11 bytes.
+    fn range(first: usize, body: &str) -> Reply {
+        let last = first + body.len() - 1;
         Reply {
             bytes: format!(
-                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 5-10/11\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {first}-{last}/11\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ),
             stall: false,
@@ -772,6 +790,23 @@ mod tests {
         assert!(heads[1].contains("if-range: \"v1\"\r\n"), "{heads:?}");
         assert_eq!(recorder.updates.last(), Some(&(11, Some(11))));
         assert_eq!(recorder.finished, 1);
+    }
+
+    #[tokio::test]
+    async fn a_short_range_is_followed_by_a_request_for_the_rest() {
+        let (url, seen) = serve_script(|n| match n {
+            0 => cut_short(false),
+            1 => range(5, " wo"),
+            _ => range(8, "rld"),
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f");
+        let digest = fetch(&agent(), &url, &dest, None, &mut ()).await.unwrap();
+        assert_eq!(digest, HELLO_SHA);
+        assert_eq!(fs::read_to_string(&dest).unwrap(), HELLO);
+        let heads = seen.lock().unwrap().clone();
+        assert_eq!(heads.len(), 3, "{heads:?}");
+        assert!(heads[2].contains("range: bytes=8-\r\n"), "{heads:?}");
     }
 
     #[tokio::test]
