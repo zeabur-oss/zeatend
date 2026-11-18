@@ -434,7 +434,14 @@ async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallE
             dir.join(&d.file)
         };
         output::err(&format!("    {}", d.url));
-        let actual = download::fetch(&agent, &d.url, &dest, d.sha256.as_deref()).await?;
+        let actual = download::fetch(
+            &agent,
+            &d.url,
+            &dest,
+            d.sha256.as_deref(),
+            &mut output::Meter::new(),
+        )
+        .await?;
         if cluster.checksums.as_ref() == Some(d) {
             list = Some(
                 fs::read_to_string(&dest)
@@ -483,7 +490,14 @@ async fn calico_manifest(calico: &Download) -> Result<(), InstallError> {
     let sha256 = calico.sha256.as_deref();
     if !is_current(&source, sha256) {
         output::err(&format!("    {}", calico.url));
-        download::fetch(&download::agent(), &calico.url, &source, sha256).await?;
+        download::fetch(
+            &download::agent(),
+            &calico.url,
+            &source,
+            sha256,
+            &mut output::Meter::new(),
+        )
+        .await?;
     }
     let manifest = fs::read_to_string(&source)
         .map_err(|e| InstallError::Message(format!("{}: {e}", source.display())))?;
