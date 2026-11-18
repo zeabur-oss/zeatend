@@ -56,7 +56,7 @@ fn finding(finding: &Finding) -> String {
         Finding::TimeUnknown => "無法向 timedatectl 確認時鐘是否同步".to_owned(),
         Finding::SwapOff => "置換空間已關閉".to_owned(),
         Finding::SwapOn => "置換空間已開啟，kubelet 要求關閉（執行 swapoff -a，並從 /etc/fstab \
-                            移除置換空間）"
+                            移除置換空間的設定）"
             .to_owned(),
         Finding::SwapUnknown => "無法讀取 /proc/swaps".to_owned(),
         Finding::CrashNone => "核心沒有為 kdump 保留記憶體".to_owned(),
@@ -103,7 +103,7 @@ fn finding(finding: &Finding) -> String {
             path,
             roomy_gib,
         } => format!(
-            "{path} 有 {} GiB 可用空間；有 {roomy_gib} GiB 以上，映像檔、日誌和磁碟區才有成長的空間",
+            "{path} 有 {} GiB 可用空間；{roomy_gib} GiB 以上可為映像檔、日誌和磁碟區預留空間",
             gib(*free_tenths_gib)
         ),
         Finding::DiskOk {
@@ -128,8 +128,8 @@ fn finding(finding: &Finding) -> String {
         Finding::CryptUnknown { path } => format!("無法判斷 {path} 是否加密"),
         Finding::DockerNone => "沒有 Docker，iptables 的 FORWARD 原則也不是 DROP".to_owned(),
         Finding::DockerFound { found } => format!(
-            "這台主機上有 Docker（{}）。Docker 會把 iptables 的 FORWARD 原則設為 DROP，Pod \
-             就連不上網際網路。先停止並移除 Docker",
+            "這台主機上有 Docker（{}），Docker 會把 iptables 的 FORWARD 原則設為 DROP，Pod \
+             就連不上網際網路；先停止並移除 Docker",
             found.join("、")
         ),
         Finding::ForwardDrop => "iptables 的 FORWARD 原則是 DROP，Pod 連不上網際網路；找出設定這項\
@@ -145,7 +145,7 @@ const fn port_use(port_use: PortUse) -> &'static str {
         PortUse::Rke2Supervisor => "RKE2 supervisor",
         PortUse::Kubelet => "kubelet",
         PortUse::EtcdClient => "etcd 用戶端",
-        PortUse::EtcdPeer => "etcd 節點之間",
+        PortUse::EtcdPeer => "etcd 節點間通訊",
         PortUse::ServiceLbHttp => {
             "HTTP ingress，ServiceLB 在每個節點上替 LoadBalancer Service 占用這個連接埠"
         }
@@ -153,10 +153,10 @@ const fn port_use(port_use: PortUse) -> &'static str {
             "HTTPS ingress，ServiceLB 在每個節點上替 LoadBalancer Service 占用這個連接埠"
         }
         PortUse::KubeSoloHttp => {
-            "HTTP ingress，KubeSolo 把這台主機的位址分配給 LoadBalancer Service"
+            "HTTP ingress，KubeSolo 把這台主機的位址配置給 LoadBalancer Service"
         }
         PortUse::KubeSoloHttps => {
-            "HTTPS ingress，KubeSolo 把這台主機的位址分配給 LoadBalancer Service"
+            "HTTPS ingress，KubeSolo 把這台主機的位址配置給 LoadBalancer Service"
         }
         PortUse::KubeSoloWebhook => "KubeSolo 指派節點的 webhook",
         PortUse::FlannelVxlan => "flannel VXLAN",

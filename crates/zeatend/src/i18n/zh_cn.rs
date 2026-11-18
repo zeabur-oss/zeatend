@@ -53,10 +53,10 @@ fn finding(finding: &Finding) -> String {
         Finding::TimeDrift => "时钟没有同步；时间一偏移，证书和令牌就会失效（运行 \
                                timedatectl set-ntp true）"
             .to_owned(),
-        Finding::TimeUnknown => "无法通过 timedatectl 确认时钟是否同步".to_owned(),
+        Finding::TimeUnknown => "无法用 timedatectl 确认时钟是否同步".to_owned(),
         Finding::SwapOff => "交换空间已关闭".to_owned(),
         Finding::SwapOn => "交换空间已开启，kubelet 要求关闭（运行 swapoff -a，并从 /etc/fstab \
-                            删除交换空间）"
+                            删除交换空间的配置）"
             .to_owned(),
         Finding::SwapUnknown => "无法读取 /proc/swaps".to_owned(),
         Finding::CrashNone => "内核没有为 kdump 预留内存".to_owned(),
@@ -103,7 +103,7 @@ fn finding(finding: &Finding) -> String {
             path,
             roomy_gib,
         } => format!(
-            "{path} 有 {} GiB 可用空间；有 {roomy_gib} GiB 以上，镜像、日志和存储卷才有增长的空间",
+            "{path} 有 {} GiB 可用空间；{roomy_gib} GiB 以上可为镜像、日志和存储卷预留空间",
             gib(*free_tenths_gib)
         ),
         Finding::DiskOk {
@@ -128,11 +128,11 @@ fn finding(finding: &Finding) -> String {
         Finding::CryptUnknown { path } => format!("无法判断 {path} 是否加密"),
         Finding::DockerNone => "没有 Docker，iptables 的 FORWARD 策略也不是 DROP".to_owned(),
         Finding::DockerFound { found } => format!(
-            "这台主机上有 Docker（{}）。Docker 会把 iptables 的 FORWARD 策略设为 DROP，Pod \
-             就连不上互联网。先停止并卸载 Docker",
+            "这台主机上有 Docker（{}），Docker 会把 iptables 的 FORWARD 策略设为 DROP，Pod \
+             就连不上互联网；先停止并卸载 Docker",
             found.join("、")
         ),
-        Finding::ForwardDrop => "iptables 的 FORWARD 策略是 DROP，Pod 连不上互联网；找出设置这条\
+        Finding::ForwardDrop => "iptables 的 FORWARD 策略是 DROP，Pod 连不上互联网；找出设置这项\
                                  策略的程序（例如 Docker、ufw）再修改"
             .to_owned(),
     }
@@ -145,7 +145,7 @@ const fn port_use(port_use: PortUse) -> &'static str {
         PortUse::Rke2Supervisor => "RKE2 supervisor",
         PortUse::Kubelet => "kubelet",
         PortUse::EtcdClient => "etcd 客户端",
-        PortUse::EtcdPeer => "etcd 节点之间",
+        PortUse::EtcdPeer => "etcd 节点间通信",
         PortUse::ServiceLbHttp => {
             "HTTP ingress，ServiceLB 在每个节点上为 LoadBalancer Service 占用这个端口"
         }
