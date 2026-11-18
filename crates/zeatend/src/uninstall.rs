@@ -679,17 +679,25 @@ fn mounts_under(mounts: &str, dir: &str) -> Vec<String> {
     found
 }
 
-/// `/proc/mounts` writes a space, tab, newline and backslash in a path as `\040`, `\011`, `\012`
-/// and `\134`.
+/// Decodes a `/proc/mounts` field. The kernel (`mangle` in `fs/proc_namespace.c`) writes a space,
+/// tab, newline and backslash in a path as an octal escape, a backslash and three digits. This
+/// decodes each such escape in one pass, as `unmangle` in util-linux does, so `\134040` is the
+/// text `\040` and not a space.
 fn unescape_mount(field: &str) -> String {
-    [
-        ("\\040", " "),
-        ("\\011", "\t"),
-        ("\\012", "\n"),
-        ("\\134", "\\"),
-    ]
-    .iter()
-    .fold(field.to_owned(), |text, (code, c)| text.replace(code, c))
+    let mut bytes = field.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    while let Some((&byte, rest)) = bytes.split_first() {
+        if let (b'\\', [a @ b'0'..=b'3', b @ b'0'..=b'7', c @ b'0'..=b'7', tail @ ..]) =
+            (byte, rest)
+        {
+            out.push(((a - b'0') << 6) | ((b - b'0') << 3) | (c - b'0'));
+            bytes = tail;
+        } else {
+            out.push(byte);
+            bytes = rest;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Moves the volumes that the uninstall would remove out of its way.
@@ -1052,6 +1060,15 @@ mod tests {
                 "/var/lib/kubesolo",
             ]
         );
+    }
+
+    #[test]
+    fn mount_escapes_are_decoded_once() {
+        assert_eq!(unescape_mount("/a\\040b\\011c\\012d"), "/a b\tc\nd");
+        assert_eq!(unescape_mount("/a\\134040"), "/a\\040");
+        assert_eq!(unescape_mount("/a\\04"), "/a\\04");
+        assert_eq!(unescape_mount("/a\\"), "/a\\");
+        assert_eq!(unescape_mount("/é\\040"), "/é ");
     }
 
     #[test]
