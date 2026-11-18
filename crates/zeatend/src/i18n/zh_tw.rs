@@ -1,4 +1,4 @@
-//! 繁體中文（臺灣）.
+//! Traditional Chinese, as written in Taiwan.
 
 use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::PortUse;

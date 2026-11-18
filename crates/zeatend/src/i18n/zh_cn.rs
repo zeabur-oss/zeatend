@@ -1,4 +1,4 @@
-//! 简体中文（中国大陆）.
+//! Simplified Chinese, as written in mainland China.
 
 use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::PortUse;
