@@ -1,4 +1,4 @@
-//! Checks before anything is changed.
+//! Checks before anything is changed. The checks produce data; an interface words a [`Finding`].
 
 use std::fs;
 use std::net::TcpListener;
@@ -22,47 +22,30 @@ pub enum Status {
     Fail,
 }
 
-/// Declares an enum whose variants each name a stable key, serialized as that key.
-macro_rules! keyed {
-    ($(#[$attr:meta])* pub enum $name:ident { $($variant:ident => $key:literal,)+ }) => {
-        $(#[$attr])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum $name {
-            $(#[doc = concat!("`", $key, "`.")] $variant,)+
-        }
-
-        impl $name {
-            /// The stable key.
-            #[must_use]
-            pub const fn key(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $key,)+
-                }
-            }
-        }
-
-        impl Serialize for $name {
-            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-                serializer.serialize_str(self.key())
-            }
-        }
-    };
-}
-
-keyed! {
-    /// What a check looks at. An interface words it as `check.<key>`.
-    pub enum Topic {
-        Root => "root",
-        Systemd => "systemd",
-        Time => "time",
-        Swap => "swap",
-        CrashKernel => "crashKernel",
-        OtherKubernetes => "otherKubernetes",
-        Ports => "ports",
-        DiskSpace => "diskSpace",
-        DiskEncryption => "diskEncryption",
-        Docker => "docker",
-    }
+/// What a check looks at, serialized as a camelCase key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Topic {
+    /// The process runs as root.
+    Root,
+    /// systemd is the init system.
+    Systemd,
+    /// The clock is synchronised.
+    Time,
+    /// Swap is off.
+    Swap,
+    /// No memory is kept for a crash kernel.
+    CrashKernel,
+    /// No files of another Kubernetes distribution.
+    OtherKubernetes,
+    /// The node's ports are free.
+    Ports,
+    /// The data directory has room.
+    DiskSpace,
+    /// Secrets and data are on encrypted disks.
+    DiskEncryption,
+    /// No Docker, and the FORWARD policy lets Pods out.
+    Docker,
 }
 
 impl Topic {
@@ -84,54 +67,248 @@ impl Topic {
     }
 }
 
-keyed! {
-    /// How a check came out, as a sentence an interface words as `code.<key>` with the check's
-    /// values.
-    pub enum Code {
-        RootOk => "root.ok",
-        RootNo => "root.no",
-        SystemdOk => "systemd.ok",
-        SystemdNo => "systemd.no",
-        TimeOk => "time.ok",
-        TimeDrift => "time.drift",
-        TimeUnknown => "time.unknown",
-        SwapOff => "swap.off",
-        SwapOn => "swap.on",
-        SwapUnknown => "swap.unknown",
-        CrashNone => "crash.none",
-        CrashKept => "crash.kept",
-        OthersNone => "others.none",
-        OthersFound => "others.found",
-        PortsFree => "ports.free",
-        PortsBusy => "ports.busy",
-        DiskUnknown => "disk.unknown",
-        DiskLow => "disk.low",
-        DiskTight => "disk.tight",
-        DiskOk => "disk.ok",
-        CryptYes => "crypt.yes",
-        CryptRequiredPlain => "crypt.requiredPlain",
-        CryptRequiredUnknown => "crypt.requiredUnknown",
-        CryptNo => "crypt.no",
-        CryptUnknown => "crypt.unknown",
-        DockerNone => "docker.none",
-        DockerFound => "docker.found",
-        ForwardDrop => "docker.forwardDrop",
+/// Files of another Kubernetes distribution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Leftover {
+    /// The distribution's name, such as `K3s`.
+    pub distribution: &'static str,
+    /// The file or directory.
+    pub path: &'static str,
+}
+
+/// A port that is in use.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BusyPort {
+    /// The TCP port.
+    pub port: u16,
+    /// What the node needs it for, in English.
+    pub purpose: &'static str,
+}
+
+/// How a check came out, with what it found. Serialized with the outcome's key as `code` and
+/// the fields in camelCase.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "code", rename_all_fields = "camelCase")]
+pub enum Finding {
+    /// The process runs as root.
+    #[serde(rename = "root.ok")]
+    RootOk,
+    /// The process does not run as root.
+    #[serde(rename = "root.no")]
+    RootNo,
+    /// systemd is the init system.
+    #[serde(rename = "systemd.ok")]
+    SystemdOk,
+    /// The host does not run systemd.
+    #[serde(rename = "systemd.no")]
+    SystemdNo,
+    /// The clock is synchronised.
+    #[serde(rename = "time.ok")]
+    TimeOk,
+    /// The clock is not synchronised.
+    #[serde(rename = "time.drift")]
+    TimeDrift,
+    /// `timedatectl` did not answer.
+    #[serde(rename = "time.unknown")]
+    TimeUnknown,
+    /// Swap is off.
+    #[serde(rename = "swap.off")]
+    SwapOff,
+    /// Swap is on.
+    #[serde(rename = "swap.on")]
+    SwapOn,
+    /// `/proc/swaps` could not be read.
+    #[serde(rename = "swap.unknown")]
+    SwapUnknown,
+    /// No memory is kept for a crash kernel.
+    #[serde(rename = "crash.none")]
+    CrashNone,
+    /// The kernel keeps memory for a crash kernel.
+    #[serde(rename = "crash.kept")]
+    CrashKept {
+        /// The memory kept, in MiB.
+        mib: u64,
+    },
+    /// No files of another distribution.
+    #[serde(rename = "others.none")]
+    OthersNone,
+    /// Files of other distributions.
+    #[serde(rename = "others.found")]
+    OthersFound {
+        /// What was found, in the order of the list of known files.
+        found: Vec<Leftover>,
+    },
+    /// Every port the node needs is free.
+    #[serde(rename = "ports.free")]
+    PortsFree {
+        /// The ports.
+        ports: Vec<u16>,
+    },
+    /// Some ports the node needs are in use.
+    #[serde(rename = "ports.busy")]
+    PortsBusy {
+        /// The ports in use.
+        ports: Vec<BusyPort>,
+    },
+    /// The free space could not be read.
+    #[serde(rename = "disk.unknown")]
+    DiskUnknown {
+        /// Where it was read.
+        path: String,
+    },
+    /// Less free space than the cluster needs.
+    #[serde(rename = "disk.low")]
+    DiskLow {
+        /// The free space in tenths of a GiB, rounded down.
+        free_tenths_gib: u64,
+        /// Where it was read.
+        path: String,
+        /// The least the cluster needs, in GiB.
+        needed_gib: u64,
+    },
+    /// Enough free space, but little room for growth.
+    #[serde(rename = "disk.tight")]
+    DiskTight {
+        /// The free space in tenths of a GiB, rounded down.
+        free_tenths_gib: u64,
+        /// Where it was read.
+        path: String,
+        /// The free space that leaves room, in GiB.
+        roomy_gib: u64,
+    },
+    /// Room to spare.
+    #[serde(rename = "disk.ok")]
+    DiskOk {
+        /// The free space in tenths of a GiB, rounded down.
+        free_tenths_gib: u64,
+        /// Where it was read.
+        path: String,
+    },
+    /// Every path is on a dm-crypt device.
+    #[serde(rename = "crypt.yes")]
+    CryptYes {
+        /// The paths, one per file system.
+        paths: Vec<&'static str>,
+    },
+    /// A path is not encrypted, and encryption is required.
+    #[serde(rename = "crypt.requiredPlain")]
+    CryptRequiredPlain {
+        /// The path.
+        path: &'static str,
+    },
+    /// Whether a path is encrypted could not be told, and encryption is required.
+    #[serde(rename = "crypt.requiredUnknown")]
+    CryptRequiredUnknown {
+        /// The path.
+        path: &'static str,
+    },
+    /// A path is not encrypted.
+    #[serde(rename = "crypt.no")]
+    CryptNo {
+        /// The path.
+        path: &'static str,
+    },
+    /// Whether a path is encrypted could not be told.
+    #[serde(rename = "crypt.unknown")]
+    CryptUnknown {
+        /// The path.
+        path: &'static str,
+    },
+    /// No Docker, and the FORWARD policy is not DROP.
+    #[serde(rename = "docker.none")]
+    DockerNone,
+    /// Docker is on the host.
+    #[serde(rename = "docker.found")]
+    DockerFound {
+        /// Its paths and active units.
+        found: Vec<String>,
+    },
+    /// The iptables FORWARD policy is DROP.
+    #[serde(rename = "docker.forwardDrop")]
+    ForwardDrop,
+}
+
+impl Finding {
+    /// What the check looked at.
+    #[must_use]
+    pub const fn topic(&self) -> Topic {
+        match self {
+            Self::RootOk | Self::RootNo => Topic::Root,
+            Self::SystemdOk | Self::SystemdNo => Topic::Systemd,
+            Self::TimeOk | Self::TimeDrift | Self::TimeUnknown => Topic::Time,
+            Self::SwapOff | Self::SwapOn | Self::SwapUnknown => Topic::Swap,
+            Self::CrashNone | Self::CrashKept { .. } => Topic::CrashKernel,
+            Self::OthersNone | Self::OthersFound { .. } => Topic::OtherKubernetes,
+            Self::PortsFree { .. } | Self::PortsBusy { .. } => Topic::Ports,
+            Self::DiskUnknown { .. }
+            | Self::DiskLow { .. }
+            | Self::DiskTight { .. }
+            | Self::DiskOk { .. } => Topic::DiskSpace,
+            Self::CryptYes { .. }
+            | Self::CryptRequiredPlain { .. }
+            | Self::CryptRequiredUnknown { .. }
+            | Self::CryptNo { .. }
+            | Self::CryptUnknown { .. } => Topic::DiskEncryption,
+            Self::DockerNone | Self::DockerFound { .. } | Self::ForwardDrop => Topic::Docker,
+        }
+    }
+
+    /// Whether it passes, warns or stops `apply`.
+    #[must_use]
+    pub const fn status(&self) -> Status {
+        match self {
+            Self::RootOk
+            | Self::SystemdOk
+            | Self::TimeOk
+            | Self::SwapOff
+            | Self::CrashNone
+            | Self::OthersNone
+            | Self::PortsFree { .. }
+            | Self::DiskOk { .. }
+            | Self::CryptYes { .. }
+            | Self::DockerNone => Status::Pass,
+            Self::TimeDrift
+            | Self::TimeUnknown
+            | Self::SwapOn
+            | Self::SwapUnknown
+            | Self::CrashKept { .. }
+            | Self::OthersFound { .. }
+            | Self::DiskUnknown { .. }
+            | Self::DiskTight { .. }
+            | Self::CryptNo { .. }
+            | Self::CryptUnknown { .. } => Status::Warn,
+            Self::RootNo
+            | Self::SystemdNo
+            | Self::PortsBusy { .. }
+            | Self::DiskLow { .. }
+            | Self::CryptRequiredPlain { .. }
+            | Self::CryptRequiredUnknown { .. }
+            | Self::DockerFound { .. }
+            | Self::ForwardDrop => Status::Fail,
+        }
     }
 }
 
-/// One check.
+/// One check: what it looked at, how it came out and what it found.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Check {
     /// What was checked.
     pub name: Topic,
     /// The outcome.
     pub status: Status,
-    /// What was found and what to do, in English.
-    pub detail: String,
-    /// The outcome as a key, for an interface that words it itself.
-    pub code: Code,
-    /// The values `code` names, in order: names, paths, numbers; never words.
-    pub values: Vec<String>,
+    /// What was found.
+    #[serde(flatten)]
+    pub finding: Finding,
+}
+
+impl From<Finding> for Check {
+    fn from(finding: Finding) -> Self {
+        Self {
+            name: finding.topic(),
+            status: finding.status(),
+            finding,
+        }
+    }
 }
 
 /// Whether a disk is encrypted, as far as the block devices tell.
@@ -239,27 +416,6 @@ pub async fn run(options: Options) -> Vec<Check> {
     checks
 }
 
-fn check(name: Topic, status: Status, detail: impl Into<String>, code: Code) -> Check {
-    Check::new(name, status, detail, code)
-}
-
-impl Check {
-    pub(crate) fn new(name: Topic, status: Status, detail: impl Into<String>, code: Code) -> Self {
-        Self {
-            name,
-            status,
-            detail: detail.into(),
-            code,
-            values: Vec::new(),
-        }
-    }
-
-    pub(crate) fn values(mut self, values: &[&str]) -> Self {
-        self.values = values.iter().map(|&v| v.to_owned()).collect();
-        self
-    }
-}
-
 /// Whether this process runs as root.
 #[must_use]
 fn is_root() -> bool {
@@ -268,15 +424,11 @@ fn is_root() -> bool {
 
 fn root() -> Check {
     if is_root() {
-        check(Topic::Root, Status::Pass, "running as root", Code::RootOk)
+        Finding::RootOk
     } else {
-        check(
-            Topic::Root,
-            Status::Fail,
-            "run apply as root (sudo)",
-            Code::RootNo,
-        )
+        Finding::RootNo
     }
+    .into()
 }
 
 fn effective_uid(status: &str) -> Option<u32> {
@@ -286,20 +438,11 @@ fn effective_uid(status: &str) -> Option<u32> {
 
 fn systemd() -> Check {
     if Path::new("/run/systemd/system").is_dir() {
-        check(
-            Topic::Systemd,
-            Status::Pass,
-            "systemd is the init system",
-            Code::SystemdOk,
-        )
+        Finding::SystemdOk
     } else {
-        check(
-            Topic::Systemd,
-            Status::Fail,
-            "Kubernetes runs as a systemd service; this host does not run systemd",
-            Code::SystemdNo,
-        )
+        Finding::SystemdNo
     }
+    .into()
 }
 
 async fn time_sync() -> Check {
@@ -310,43 +453,20 @@ async fn time_sync() -> Check {
     )
     .await
     {
-        Ok(out) if out.trim() == "yes" => check(
-            Topic::Time,
-            Status::Pass,
-            "the clock is synchronised",
-            Code::TimeOk,
-        ),
-        Ok(_) => check(
-            Topic::Time,
-            Status::Warn,
-            "the clock is not synchronised; certificates and tokens fail when it drifts (timedatectl set-ntp true)",
-            Code::TimeDrift,
-        ),
-        Err(_) => check(
-            Topic::Time,
-            Status::Warn,
-            "could not ask timedatectl whether the clock is synchronised",
-            Code::TimeUnknown,
-        ),
+        Ok(out) if out.trim() == "yes" => Finding::TimeOk,
+        Ok(_) => Finding::TimeDrift,
+        Err(_) => Finding::TimeUnknown,
     }
+    .into()
 }
 
 fn swap() -> Check {
     match fs::read_to_string("/proc/swaps") {
-        Ok(swaps) if swaps.lines().skip(1).any(|l| !l.trim().is_empty()) => check(
-            Topic::Swap,
-            Status::Warn,
-            "swap is on; the kubelet expects it off (swapoff -a, and remove it from /etc/fstab)",
-            Code::SwapOn,
-        ),
-        Ok(_) => check(Topic::Swap, Status::Pass, "swap is off", Code::SwapOff),
-        Err(_) => check(
-            Topic::Swap,
-            Status::Warn,
-            "could not read /proc/swaps",
-            Code::SwapUnknown,
-        ),
+        Ok(swaps) if swaps.lines().skip(1).any(|l| !l.trim().is_empty()) => Finding::SwapOn,
+        Ok(_) => Finding::SwapOff,
+        Err(_) => Finding::SwapUnknown,
     }
+    .into()
 }
 
 fn crash_kernel() -> Check {
@@ -355,60 +475,33 @@ fn crash_kernel() -> Check {
             .ok()
             .as_deref(),
     )
+    .into()
 }
 
-fn crash_reserve(raw: Option<&str>) -> Check {
+fn crash_reserve(raw: Option<&str>) -> Finding {
     let mib = raw
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .map_or(0, |bytes| bytes >> 20);
     if mib == 0 {
-        return check(
-            Topic::CrashKernel,
-            Status::Pass,
-            "no memory kept for a crash kernel",
-            Code::CrashNone,
-        );
+        Finding::CrashNone
+    } else {
+        Finding::CrashKept { mib }
     }
-    check(
-        Topic::CrashKernel,
-        Status::Warn,
-        format!("the kernel keeps {mib} MiB for a crash kernel (kdump); to free it: sudo apt purge kdump-tools && sudo update-grub, then reboot"),
-        Code::CrashKept,
-    )
-    .values(&[&mib.to_string()])
 }
 
 fn other_distributions(node: Node) -> Check {
-    let found: Vec<(&str, &str)> = OTHERS
+    let found: Vec<Leftover> = OTHERS
         .iter()
         .filter(|(_, _, own)| own.is_none_or(|own| own != node.kind()))
         .filter(|(path, ..)| Path::new(path).exists())
-        .map(|&(path, name, _)| (path, name))
+        .map(|&(path, distribution, _)| Leftover { distribution, path })
         .collect();
     if found.is_empty() {
-        check(
-            Topic::OtherKubernetes,
-            Status::Pass,
-            "none found",
-            Code::OthersNone,
-        )
+        Finding::OthersNone
     } else {
-        let named: Vec<String> = found
-            .iter()
-            .map(|(path, name)| format!("{name} ({path})"))
-            .collect();
-        let paths: Vec<&str> = found.iter().map(|(path, _)| *path).collect();
-        check(
-            Topic::OtherKubernetes,
-            Status::Warn,
-            format!(
-                "found files of {}; if it still runs, uninstall it first",
-                named.join(", ")
-            ),
-            Code::OthersFound,
-        )
-        .values(&paths)
+        Finding::OthersFound { found }
     }
+    .into()
 }
 
 /// Where Docker's binary and socket are. Docker sets the iptables FORWARD policy to DROP, so
@@ -436,36 +529,16 @@ async fn docker() -> Check {
     let iptables = cmd::run("iptables", &["-S", "FORWARD"], None)
         .await
         .unwrap_or_default();
-    docker_check(&found, &iptables)
+    docker_check(found, &iptables).into()
 }
 
-fn docker_check(found: &[String], iptables: &str) -> Check {
+fn docker_check(found: Vec<String>, iptables: &str) -> Finding {
     if !found.is_empty() {
-        let names: Vec<&str> = found.iter().map(String::as_str).collect();
-        check(
-            Topic::Docker,
-            Status::Fail,
-            format!(
-                "Docker is on this host ({}). It sets the iptables FORWARD policy to DROP, so Pods cannot reach the internet. Stop and remove Docker first",
-                names.join(", ")
-            ),
-            Code::DockerFound,
-        )
-        .values(&names)
+        Finding::DockerFound { found }
     } else if iptables.lines().any(|l| l.trim() == "-P FORWARD DROP") {
-        check(
-            Topic::Docker,
-            Status::Fail,
-            "the iptables FORWARD policy is DROP, so Pods cannot reach the internet; find what sets it (Docker, ufw) and change it",
-            Code::ForwardDrop,
-        )
+        Finding::ForwardDrop
     } else {
-        check(
-            Topic::Docker,
-            Status::Pass,
-            "no Docker, and the iptables FORWARD policy is not DROP",
-            Code::DockerNone,
-        )
+        Finding::DockerNone
     }
 }
 
@@ -481,42 +554,19 @@ fn needed_ports(node: Node) -> Vec<(u16, &'static str)> {
 
 fn ports(node: Node) -> Check {
     let ports = needed_ports(node);
-    let busy: Vec<&(u16, &str)> = ports
+    let busy: Vec<BusyPort> = ports
         .iter()
         .filter(|(port, _)| TcpListener::bind(("0.0.0.0", *port)).is_err())
+        .map(|&(port, purpose)| BusyPort { port, purpose })
         .collect();
     if busy.is_empty() {
-        let numbers: Vec<String> = ports.iter().map(|(port, _)| port.to_string()).collect();
-        check(
-            Topic::Ports,
-            Status::Pass,
-            format!("{} are free", and_list(&numbers)),
-            Code::PortsFree,
-        )
-        .values(&numbers.iter().map(String::as_str).collect::<Vec<_>>())
+        Finding::PortsFree {
+            ports: ports.iter().map(|(port, _)| *port).collect(),
+        }
     } else {
-        let named: Vec<String> = busy
-            .iter()
-            .map(|(port, what)| format!("{port} ({what})"))
-            .collect();
-        let numbers: Vec<String> = busy.iter().map(|(port, _)| port.to_string()).collect();
-        check(
-            Topic::Ports,
-            Status::Fail,
-            format!("in use: {}; `ss -ltnp` shows by what", named.join(", ")),
-            Code::PortsBusy,
-        )
-        .values(&numbers.iter().map(String::as_str).collect::<Vec<_>>())
+        Finding::PortsBusy { ports: busy }
     }
-}
-
-/// `a, b and c`.
-fn and_list(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
+    .into()
 }
 
 fn existing_or_var_lib(dir: &str) -> &str {
@@ -529,53 +579,42 @@ fn existing_or_var_lib(dir: &str) -> &str {
 
 async fn disk_space(data_dir: &str) -> Check {
     let target = existing_or_var_lib(data_dir);
-    let Some(kib) = cmd::run("df", &["-Pk", target], None)
+    let kib = cmd::run("df", &["-Pk", target], None)
         .await
         .ok()
-        .and_then(|out| available_kib(&out))
-    else {
-        return check(
-            Topic::DiskSpace,
-            Status::Warn,
-            format!("could not read the free space of {target}"),
-            Code::DiskUnknown,
-        )
-        .values(&[target]);
+        .and_then(|out| available_kib(&out));
+    disk_finding(kib, target).into()
+}
+
+fn disk_finding(kib: Option<u64>, target: &str) -> Finding {
+    let path = target.to_owned();
+    let Some(kib) = kib else {
+        return Finding::DiskUnknown { path };
     };
-    let gib = gib(kib);
+    let free_tenths_gib = tenths_gib(kib);
     if kib < DISK_NEEDED_GIB << 20 {
-        check(
-            Topic::DiskSpace,
-            Status::Fail,
-            format!("{gib} GiB free under {target}; the cluster's images and data need at least {DISK_NEEDED_GIB} GiB"),
-            Code::DiskLow,
-        )
-        .values(&[&gib, target, &DISK_NEEDED_GIB.to_string()])
+        Finding::DiskLow {
+            free_tenths_gib,
+            path,
+            needed_gib: DISK_NEEDED_GIB,
+        }
     } else if kib < DISK_ROOMY_GIB << 20 {
-        check(
-            Topic::DiskSpace,
-            Status::Warn,
-            format!(
-                "{gib} GiB free under {target}; {DISK_ROOMY_GIB} GiB or more leaves room for images, logs and volumes"
-            ),
-            Code::DiskTight,
-        )
-        .values(&[&gib, target, &DISK_ROOMY_GIB.to_string()])
+        Finding::DiskTight {
+            free_tenths_gib,
+            path,
+            roomy_gib: DISK_ROOMY_GIB,
+        }
     } else {
-        check(
-            Topic::DiskSpace,
-            Status::Pass,
-            format!("{gib} GiB free under {target}"),
-            Code::DiskOk,
-        )
-        .values(&[&gib, target])
+        Finding::DiskOk {
+            free_tenths_gib,
+            path,
+        }
     }
 }
 
-/// KiB as GiB with one decimal, rounded down.
-fn gib(kib: u64) -> String {
-    let tenths = kib * 10 / (1 << 20);
-    format!("{}.{}", tenths / 10, tenths % 10)
+/// KiB as tenths of a GiB, rounded down.
+const fn tenths_gib(kib: u64) -> u64 {
+    kib * 10 / (1 << 20)
 }
 
 fn available_kib(df: &str) -> Option<u64> {
@@ -620,51 +659,19 @@ async fn encryption(node: Node, required: bool) -> Check {
             sources.push(source);
         }
     }
-    let (found, paths) = least_encrypted(&found);
-    let target = paths.first().copied().unwrap_or("/");
-    let (status, detail, code) = match (found, required) {
-        (Encryption::Encrypted, _) => (
-            Status::Pass,
-            format!(
-                "{} {} on dm-crypt devices",
-                and_list(&paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>()),
-                if paths.len() == 1 { "is" } else { "are" }
-            ),
-            Code::CryptYes,
-        ),
-        (Encryption::Plain, true) => (
-            Status::Fail,
-            format!("{target} is not on an encrypted device, and host.requireEncryptedDisk is set"),
-            Code::CryptRequiredPlain,
-        ),
-        (Encryption::Unknown, true) => (
-            Status::Fail,
-            format!(
-                "could not tell whether {target} is encrypted, and host.requireEncryptedDisk is set"
-            ),
-            Code::CryptRequiredUnknown,
-        ),
-        (Encryption::Plain, false) => (
-            Status::Warn,
-            format!(
-                "{target} is not on an encrypted disk, so volumes and databases are stored \
-                 unencrypted; most VPS plans can't encrypt it afterwards, so for sensitive data \
-                 choose a plan whose provider encrypts disks"
-            ),
-            Code::CryptNo,
-        ),
-        (Encryption::Unknown, false) => (
-            Status::Warn,
-            format!("could not tell whether {target} is encrypted"),
-            Code::CryptUnknown,
-        ),
-    };
-    let values = if found == Encryption::Encrypted {
-        paths
-    } else {
-        vec![target]
-    };
-    check(Topic::DiskEncryption, status, detail, code).values(&values)
+    encryption_finding(&found, required).into()
+}
+
+fn encryption_finding(found: &[(&'static str, Encryption)], required: bool) -> Finding {
+    let (found, paths) = least_encrypted(found);
+    let path = paths.first().copied().unwrap_or("/");
+    match (found, required) {
+        (Encryption::Encrypted, _) => Finding::CryptYes { paths },
+        (Encryption::Plain, true) => Finding::CryptRequiredPlain { path },
+        (Encryption::Unknown, true) => Finding::CryptRequiredUnknown { path },
+        (Encryption::Plain, false) => Finding::CryptNo { path },
+        (Encryption::Unknown, false) => Finding::CryptUnknown { path },
+    }
 }
 
 /// The device of the file system that holds `path`; `None` when it cannot be read.
@@ -702,19 +709,18 @@ mod tests {
 
     #[test]
     fn docker_or_a_dropping_forward_policy_stops_the_install() {
-        let found = vec!["/usr/bin/docker".to_owned()];
+        let docker = || vec!["/usr/bin/docker".to_owned()];
+        let found = Finding::DockerFound { found: docker() };
         let policy = "-P FORWARD ACCEPT\n";
         let drop = "-P FORWARD DROP\n-A FORWARD -j DOCKER-USER\n";
-        let case = |found: &[String], iptables: &str| {
-            let c = docker_check(found, iptables);
-            (c.status, c.code)
-        };
-        assert_eq!(case(&[], policy), (Status::Pass, Code::DockerNone));
-        assert_eq!(case(&[], ""), (Status::Pass, Code::DockerNone));
-        assert_eq!(case(&found, policy), (Status::Fail, Code::DockerFound));
-        assert_eq!(case(&[], drop), (Status::Fail, Code::ForwardDrop));
-        assert_eq!(case(&found, drop), (Status::Fail, Code::DockerFound));
-        assert_eq!(docker_check(&found, policy).values, ["/usr/bin/docker"]);
+        assert_eq!(docker_check(vec![], policy), Finding::DockerNone);
+        assert_eq!(docker_check(vec![], ""), Finding::DockerNone);
+        assert_eq!(docker_check(docker(), policy), found);
+        assert_eq!(docker_check(vec![], drop), Finding::ForwardDrop);
+        assert_eq!(docker_check(docker(), drop), found);
+        assert_eq!(found.status(), Status::Fail);
+        assert_eq!(Finding::ForwardDrop.status(), Status::Fail);
+        assert_eq!(Finding::DockerNone.status(), Status::Pass);
     }
 
     #[test]
@@ -723,37 +729,153 @@ mod tests {
         assert_eq!(effective_uid("Uid:\t0\t1000\t1000\t1000\n"), Some(1000));
         let df = "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda2 61255492 9032 49094708 16% /\n";
         assert_eq!(available_kib(df), Some(49_094_708));
-        assert_eq!(gib(3_250_586), "3.1");
-        assert_eq!(gib(10 << 20), "10.0");
-        let crash = |raw| {
-            let c = crash_reserve(raw);
-            (c.status, c.code)
-        };
-        assert_eq!(crash(None), (Status::Pass, Code::CrashNone));
-        assert_eq!(crash(Some("0\n")), (Status::Pass, Code::CrashNone));
-        assert_eq!(crash(Some("536870912\n")), (Status::Warn, Code::CrashKept));
-        assert_eq!(crash_reserve(Some("536870912\n")).values, ["512"]);
-        let ports = |node| -> Vec<String> {
-            needed_ports(node)
-                .iter()
-                .map(|(p, _)| p.to_string())
-                .collect()
-        };
+        assert_eq!(tenths_gib(3_250_586), 31);
+        assert_eq!(tenths_gib(10 << 20), 100);
+        assert_eq!(crash_reserve(None), Finding::CrashNone);
+        assert_eq!(crash_reserve(Some("0\n")), Finding::CrashNone);
         assert_eq!(
-            and_list(&ports(Node::Agent(Rancher::Rke2))),
-            "80, 443 and 10250"
+            crash_reserve(Some("536870912\n")),
+            Finding::CrashKept { mib: 512 }
+        );
+        assert_eq!(Finding::CrashKept { mib: 512 }.status(), Status::Warn);
+        let ports = |node| -> Vec<u16> { needed_ports(node).iter().map(|(p, _)| *p).collect() };
+        assert_eq!(ports(Node::Agent(Rancher::Rke2)), [80, 443, 10250]);
+        assert_eq!(
+            ports(Node::Server(Rancher::Rke2)),
+            [80, 443, 6443, 9345, 10250]
+        );
+        assert_eq!(ports(Node::Server(Rancher::K3s)), [80, 443, 6443, 10250]);
+        assert_eq!(ports(Node::KubeSolo), [80, 443, 6443, 10250, 10443]);
+    }
+
+    #[test]
+    fn free_space_sets_the_outcome() {
+        let path = || "/var/lib".to_owned();
+        assert_eq!(
+            disk_finding(None, "/var/lib"),
+            Finding::DiskUnknown { path: path() }
         );
         assert_eq!(
-            and_list(&ports(Node::Server(Rancher::Rke2))),
-            "80, 443, 6443, 9345 and 10250"
+            disk_finding(Some(3_250_586), "/var/lib"),
+            Finding::DiskLow {
+                free_tenths_gib: 31,
+                path: path(),
+                needed_gib: 10
+            }
         );
         assert_eq!(
-            and_list(&ports(Node::Server(Rancher::K3s))),
-            "80, 443, 6443 and 10250"
+            disk_finding(Some(10 << 20), "/var/lib"),
+            Finding::DiskTight {
+                free_tenths_gib: 100,
+                path: path(),
+                roomy_gib: 30
+            }
         );
         assert_eq!(
-            and_list(&ports(Node::KubeSolo)),
-            "80, 443, 6443, 10250 and 10443"
+            disk_finding(Some(30 << 20), "/var/lib"),
+            Finding::DiskOk {
+                free_tenths_gib: 300,
+                path: path()
+            }
+        );
+    }
+
+    #[test]
+    fn a_check_serializes_its_finding_with_a_code_and_named_fields() {
+        let check = |finding| serde_json::to_value(Check::from(finding)).unwrap();
+        assert_eq!(
+            check(Finding::DiskLow {
+                free_tenths_gib: 31,
+                path: "/var/lib".to_owned(),
+                needed_gib: 10,
+            }),
+            serde_json::json!({
+                "name": "diskSpace",
+                "status": "fail",
+                "code": "disk.low",
+                "freeTenthsGib": 31,
+                "path": "/var/lib",
+                "neededGib": 10,
+            })
+        );
+        assert_eq!(
+            check(Finding::RootOk),
+            serde_json::json!({"name": "root", "status": "pass", "code": "root.ok"})
+        );
+        assert_eq!(
+            check(Finding::PortsBusy {
+                ports: vec![BusyPort {
+                    port: 6443,
+                    purpose: "Kubernetes API"
+                }],
+            }),
+            serde_json::json!({
+                "name": "ports",
+                "status": "fail",
+                "code": "ports.busy",
+                "ports": [{"port": 6443, "purpose": "Kubernetes API"}],
+            })
+        );
+        assert_eq!(
+            check(Finding::OthersFound {
+                found: vec![Leftover {
+                    distribution: "K3s",
+                    path: "/etc/rancher/k3s"
+                }],
+            }),
+            serde_json::json!({
+                "name": "otherKubernetes",
+                "status": "warn",
+                "code": "others.found",
+                "found": [{"distribution": "K3s", "path": "/etc/rancher/k3s"}],
+            })
+        );
+        assert_eq!(
+            check(Finding::CryptRequiredPlain { path: "/" }),
+            serde_json::json!({
+                "name": "diskEncryption",
+                "status": "fail",
+                "code": "crypt.requiredPlain",
+                "path": "/",
+            })
+        );
+    }
+
+    #[test]
+    fn encryption_names_the_paths_or_the_worst_one() {
+        use Encryption::{Encrypted, Plain, Unknown};
+        let both = [("/", Encrypted), ("/var/lib/rancher", Encrypted)];
+        assert_eq!(
+            encryption_finding(&both, true),
+            Finding::CryptYes {
+                paths: vec!["/", "/var/lib/rancher"]
+            }
+        );
+        let plain = [("/", Encrypted), ("/var/lib/rancher", Plain)];
+        assert_eq!(
+            encryption_finding(&plain, true),
+            Finding::CryptRequiredPlain {
+                path: "/var/lib/rancher"
+            }
+        );
+        assert_eq!(
+            encryption_finding(&plain, false),
+            Finding::CryptNo {
+                path: "/var/lib/rancher"
+            }
+        );
+        let unknown = [("/etc/rancher/rke2", Unknown)];
+        assert_eq!(
+            encryption_finding(&unknown, true),
+            Finding::CryptRequiredUnknown {
+                path: "/etc/rancher/rke2"
+            }
+        );
+        assert_eq!(
+            encryption_finding(&unknown, false),
+            Finding::CryptUnknown {
+                path: "/etc/rancher/rke2"
+            }
         );
     }
 
