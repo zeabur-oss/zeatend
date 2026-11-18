@@ -9,7 +9,7 @@
 /// An RKE2 release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rke2 {
-    /// `v1.36.5+rke2r1`.
+    /// `v1.36.6+rke2r1`.
     pub version: &'static str,
     /// The Kubernetes minor it ships.
     pub kubernetes: &'static str,
@@ -30,19 +30,19 @@ pub struct Rke2Files {
     pub images_canal: &'static str,
 }
 
-/// The RKE2 release zeatend installs: the `stable` channel on 2026-10-21.
+/// The RKE2 release zeatend installs: the `stable` channel on 2026-11-18.
 pub const RKE2: Rke2 = Rke2 {
-    version: "v1.36.5+rke2r1",
+    version: "v1.36.6+rke2r1",
     kubernetes: "1.36",
     amd64: Rke2Files {
-        tarball: "4fdbe8a8a32517fbcb6e80c71ca393b96828fbb87685102d9058b51527f9278d",
-        images_core: "adc5fe6ca25a3ebc8866e3dad3ff3690d38c8af4a5d312e71bf954e6e3213203",
-        images_canal: "294426213e146205f37037d2ab7bc629225d53a785e3f89d5a5f7405d2f0c98d",
+        tarball: "e111ac6333ddb2b819d133a413914d4456dd2195a3d694865cb7acda5bf81ae4",
+        images_core: "58c153e94944039fc05b8e23de9e8f489df049519e55dd33e5790bf5ae19a217",
+        images_canal: "40a09eb8460e27e79dc13247517445c9d94461ef5078ef9e4d7fe1f95aced8b0",
     },
     arm64: Rke2Files {
-        tarball: "244454bed11d9525452e10a2e5055da5d5fc6b61928ca3fae778bc4254ce467f",
-        images_core: "5030039486973fc679224bf297116df99972cb41ef4dc3387334685c6e1f170f",
-        images_canal: "626bb4dc147d51b909aa73fbdaaad4104001ec6a92680be04ed2e974fb3a145c",
+        tarball: "19988cc4e78a9e04cfdec3977c2cada60975b0c401e44cb7406159e7154482e3",
+        images_core: "ff198bb9d9a0a73d273cf185af30abd03dfd92d5b3b7feec47d7aa34fe0f5563",
+        images_canal: "deb2e4bce4613633897bf4fd41c0941bc73dfee195f04aad96d138a1d186c537",
     },
 };
 
@@ -70,7 +70,7 @@ pub fn rke2_url(version: &str, file: &str) -> String {
 /// A K3s release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct K3s {
-    /// `v1.36.5+k3s1`.
+    /// `v1.36.6+k3s1`.
     pub version: &'static str,
     /// The Kubernetes minor it ships.
     pub kubernetes: &'static str,
@@ -83,18 +83,18 @@ pub struct K3s {
     pub install_script: &'static str,
 }
 
-/// The K3s release zeatend installs, published 2026-09-30: the Kubernetes release of
+/// The K3s release zeatend installs, published 2026-11-03: the Kubernetes release of
 /// [`RKE2`].
 pub const K3S: K3s = K3s {
-    version: "v1.36.5+k3s1",
+    version: "v1.36.6+k3s1",
     kubernetes: "1.36",
     binary: ArchFiles {
-        amd64: "d73847bcd3c5fccef0115b372e2f9a91f3032dc84bbf71518a4617565294d313",
-        arm64: "135e34cb9e8a1cfae3cb55577789e93501efe7edc080a8b2630458a85b07721e",
+        amd64: "66ceb8e67edfa547195135d74783bfadc2ecc04a91059e90ae5f70a3dbc98c15",
+        arm64: "49dcecdb4f64f5e92bdc52d204d407fb39729e492f09074488125ee58b6f2895",
     },
     images: ArchFiles {
-        amd64: "7d939471907df2d4e537a9c308bf94173e453fff4a2e9e77e9ae92a64be3007f",
-        arm64: "aeb7b47b0f0cb1356a5f0bc1c11b7c499deceeeafcd411963064e02bfc77da84",
+        amd64: "b3029b1a682b8597587e89f5b1c48493e579a6ea1d0ec6a9aac718a8c356e5be",
+        arm64: "881b93edba1b9d91cb0a4ea09ca08298d0f22ec9442ce9a80e697da97945532c",
     },
     install_script: "46177d4c99440b4c0311b67233823a8e8a2fc09693f6c89af1a7161e152fbfad",
 };
@@ -210,7 +210,7 @@ impl ArchFiles {
 /// A `KubeSolo` release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KubeSolo {
-    /// `v1.2.3`.
+    /// `v1.3.0`.
     pub version: &'static str,
     /// The Kubernetes minor it ships.
     pub kubernetes: &'static str,
@@ -222,11 +222,11 @@ pub struct KubeSolo {
 /// The `KubeSolo` release zeatend installs. Upstream publishes checksums only on the
 /// release page, so the digests are copied here as for RKE2.
 pub const KUBESOLO: KubeSolo = KubeSolo {
-    version: "v1.2.3",
-    kubernetes: "1.35",
+    version: "v1.3.0",
+    kubernetes: "1.36",
     offline: ArchFiles {
-        amd64: "87dfdb609cc7700dfb4cdd7dcb0750f6fc9c1898710fb9dedc0996bc43d522ef",
-        arm64: "c5104f127b2e437ed457c8eba0d6c73e07369526fbbea779bfc24e8745f82f19",
+        amd64: "32956d77c00990676dd9b28b99bbc02f6fb8abdcd410d294aae93a4d8e2c6786",
+        arm64: "3f401b96d5d88f913c3ade2538aa471a73feba1ec5eff484c6d2ed6d930553dd",
     },
 };
 
@@ -250,7 +250,7 @@ impl KubeSolo {
 /// kubectl of the Kubernetes release `KubeSolo` ships; `KubeSolo` has none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Kubectl {
-    /// `v1.35.7`.
+    /// `v1.36.6`.
     pub version: &'static str,
     /// SHA-256 of the binary.
     pub binary: ArchFiles,
@@ -258,10 +258,10 @@ pub struct Kubectl {
 
 /// The kubectl zeatend uses with `KubeSolo`.
 pub const KUBECTL: Kubectl = Kubectl {
-    version: "v1.35.7",
+    version: "v1.36.6",
     binary: ArchFiles {
-        amd64: "12e97f9d23a9f6cbb87b89becd6bd291e1a858a3379a4e11e2c822c4c1530052",
-        arm64: "5103d45b8881434d417694057b8ccb5ae79fd310a5c5c13e403c5e62e15909be",
+        amd64: "29818b6729dc9262b692307470d0558d027725e738be5dd47c760261868a2634",
+        arm64: "35507ef408c3d38849e5d3203e18f8e861db822aa664101a9ced0869edd06046",
     },
 };
 
