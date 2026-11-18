@@ -7,6 +7,7 @@ mod kubesolo;
 mod load;
 mod output;
 mod render;
+mod uninstall;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -40,6 +41,17 @@ enum Command {
     },
     /// Install, or bring an existing install in line with the configuration. Safe to run again.
     Apply,
+    /// Remove K3s, RKE2 or KubeSolo and zeatend's files from this host. Volumes stay. Safe to run
+    /// again.
+    Uninstall {
+        /// Remove without asking first.
+        #[arg(long, short)]
+        yes: bool,
+        /// Also remove the volumes: the local-path storage of K3s and KubeSolo,
+        /// /var/lib/zeabur/storage and /var/lib/longhorn.
+        #[arg(long)]
+        delete_volumes: bool,
+    },
 }
 
 /// Why zeatend stopped.
@@ -66,6 +78,13 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: &Cli) -> Result<(), InstallError> {
+    if let Command::Uninstall {
+        yes,
+        delete_volumes,
+    } = cli.command
+    {
+        return uninstall::run(yes, delete_volumes).await;
+    }
     let (document, defaults) = load::document_or_defaults(&cli.config)?;
     if defaults && !matches!(cli.command, Command::Plan { json: true }) {
         output::err(&format!(
@@ -90,6 +109,7 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
                 kubesolo::apply(&config).await
             }
         }
+        (Command::Uninstall { .. }, _) => Ok(()),
     }
 }
 
@@ -106,14 +126,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_and_apply_are_the_commands() {
+    fn plan_apply_and_uninstall_are_the_commands() {
         let cli = Cli::try_parse_from(["zeatend", "plan", "--json"]).unwrap();
         assert!(matches!(cli.command, Command::Plan { json: true }));
         assert_eq!(cli.config, PathBuf::from(load::DEFAULT_CONFIG));
         let cli = Cli::try_parse_from(["zeatend", "apply", "--config", "/tmp/c.yaml"]).unwrap();
         assert!(matches!(cli.command, Command::Apply));
         assert_eq!(cli.config, PathBuf::from("/tmp/c.yaml"));
-        for removed in ["doctor", "node", "uninstall", "gui", "manifests"] {
+        let cli =
+            Cli::try_parse_from(["zeatend", "uninstall", "--yes", "--delete-volumes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Uninstall {
+                yes: true,
+                delete_volumes: true
+            }
+        ));
+        let cli = Cli::try_parse_from(["zeatend", "uninstall"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Uninstall {
+                yes: false,
+                delete_volumes: false
+            }
+        ));
+        for removed in ["doctor", "node", "gui", "manifests"] {
             assert!(
                 Cli::try_parse_from(["zeatend", removed]).is_err(),
                 "{removed}"

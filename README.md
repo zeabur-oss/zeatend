@@ -24,6 +24,9 @@ Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to
   run again.
+- `zeatend uninstall` removes K3s, RKE2 or KubeSolo and the files zeatend wrote. It shows what it
+  removes and keeps, and asks first (`--yes` skips the question). Volumes stay unless you add
+  `--delete-volumes`.
 
 A configuration with a `join` section joins this host to an existing K3s or RKE2 cluster:
 
