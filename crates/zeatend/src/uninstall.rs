@@ -526,10 +526,15 @@ async fn stop(node: Node) -> Result<(), InstallError> {
 
 /// The cgroups of `KubeSolo`'s pods and of its unit. With `KillMode=process`, stopping the unit
 /// leaves the containers and their shims running in them.
-const KUBESOLO_CGROUPS: [&str; 3] = [
+/// The first three are cgroup v2; the rest are the `pids` hierarchy of cgroup v1, which lists
+/// every process.
+const KUBESOLO_CGROUPS: [&str; 6] = [
     "/sys/fs/cgroup/kubepods.slice",
     "/sys/fs/cgroup/kubepods",
     "/sys/fs/cgroup/system.slice/kubesolo.service",
+    "/sys/fs/cgroup/pids/kubepods.slice",
+    "/sys/fs/cgroup/pids/kubepods",
+    "/sys/fs/cgroup/pids/system.slice/kubesolo.service",
 ];
 
 async fn stop_kubesolo() -> Result<(), InstallError> {
@@ -546,26 +551,56 @@ async fn stop_kubesolo() -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Kills every process in a cgroup v2 tree (`cgroup.kill`) and waits until it is empty.
+/// Kills every process in a cgroup tree and waits until it is empty. `cgroup.kill` (Linux 5.14)
+/// kills the tree at once; without it, each process in its `cgroup.procs` files gets `SIGKILL`,
+/// again on each round, so a process forked in between is killed too. A tree that still has
+/// processes after 10 seconds stops the uninstall before anything is removed.
 async fn kill_cgroup(cgroup: &Path) -> Result<(), InstallError> {
-    let kill = cgroup.join("cgroup.kill");
-    if !kill.exists() {
+    if !cgroup.is_dir() {
         return Ok(());
     }
-    fs::write(&kill, "1").map_err(io(&kill))?;
-    let events = cgroup.join("cgroup.events");
+    let kill = cgroup.join("cgroup.kill");
+    let has_kill = kill.exists();
+    if has_kill {
+        fs::write(&kill, "1").map_err(io(&kill))?;
+    }
     for _ in 0..100 {
-        let populated =
-            fs::read_to_string(&events).is_ok_and(|text| text.lines().any(|l| l == "populated 1"));
-        if !populated {
+        let pids = cgroup_pids(cgroup);
+        if pids.is_empty() {
             return Ok(());
+        }
+        if !has_kill {
+            let mut args = vec!["-s", "KILL", "--"];
+            args.extend(pids.iter().map(String::as_str));
+            // A process may end between the read and the kill; the next round checks again.
+            drop(cmd::run("kill", &args, None).await);
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Err(InstallError::Message(format!(
-        "{}: processes are still running after cgroup.kill",
+        "{}: processes still run after SIGKILL; nothing was removed",
         cgroup.display()
     )))
+}
+
+/// The process ids in the `cgroup.procs` files of a cgroup and the cgroups under it.
+fn cgroup_pids(cgroup: &Path) -> Vec<String> {
+    let mut pids = Vec::new();
+    let mut dirs = vec![cgroup.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        if let Ok(text) = fs::read_to_string(dir.join("cgroup.procs")) {
+            push_all(&mut pids, text.split_whitespace().map(str::to_owned));
+        }
+        dirs.extend(
+            fs::read_dir(&dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.path()),
+        );
+    }
+    pids
 }
 
 /// The mount points in `mounts` (as in `/proc/mounts`) at or under `dir`, deepest first.
@@ -955,6 +990,32 @@ mod tests {
                 "/var/lib/kubesolo",
             ]
         );
+    }
+
+    #[test]
+    fn the_pids_of_a_cgroup_tree_are_read_from_every_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let cgroup = dir.path().join("kubepods.slice");
+        let pod = cgroup.join("pod-a/container-1");
+        fs::create_dir_all(&pod).unwrap();
+        fs::write(cgroup.join("cgroup.procs"), "").unwrap();
+        fs::write(pod.join("cgroup.procs"), "101\n102\n").unwrap();
+        fs::write(cgroup.join("pod-a/cgroup.procs"), "100\n101\n").unwrap();
+        let mut pids = cgroup_pids(&cgroup);
+        pids.sort();
+        assert_eq!(pids, ["100", "101", "102"]);
+        assert_eq!(
+            cgroup_pids(&dir.path().join("missing")),
+            Vec::<String>::new()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_or_missing_cgroup_needs_no_kill() {
+        let dir = tempfile::tempdir().unwrap();
+        kill_cgroup(&dir.path().join("missing")).await.unwrap();
+        fs::write(dir.path().join("cgroup.procs"), "").unwrap();
+        kill_cgroup(dir.path()).await.unwrap();
     }
 
     fn touch(root: &Path, path: &str) {
