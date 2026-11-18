@@ -57,7 +57,8 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
     Ok(())
 }
 
-fn kubectl() -> Kubectl {
+/// `KubeSolo`'s admin `kubectl`.
+pub(crate) fn kubectl() -> Kubectl {
     Kubectl::new(KUBECTL, ADMIN_KUBECONFIG)
 }
 

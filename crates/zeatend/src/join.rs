@@ -76,7 +76,7 @@ const fn node(plan: &JoinPlan) -> preflight::Node {
 }
 
 /// The node's own `kubectl`, with the kubelet's credentials, which an agent also has.
-fn own_kubectl(distribution: Rancher) -> Kubectl {
+pub(crate) fn own_kubectl(distribution: Rancher) -> Kubectl {
     let layout = distribution.layout();
     Kubectl::new(layout.kubectl, layout.kubelet_kubeconfig)
 }
@@ -154,7 +154,7 @@ pub(crate) async fn node_ready(
     Ok(node.as_ref().is_some_and(|n| ready_since(n, since)))
 }
 
-fn ready_since(node: &Value, since: Option<u64>) -> bool {
+pub(crate) fn ready_since(node: &Value, since: Option<u64>) -> bool {
     node.pointer("/status/conditions")
         .and_then(Value::as_array)
         .into_iter()

@@ -1,7 +1,8 @@
 //! English.
 
 use zeatend_host::preflight::{Finding, Status, Topic};
-use zeatend_plan::cluster::PortUse;
+use zeatend_plan::cluster::{Distribution, PortUse};
+use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Messages, gib};
 
@@ -9,6 +10,8 @@ pub(super) const MESSAGES: Messages = Messages {
     checking_host: "Checking the host",
     apply_stops: "apply stops until what failed is fixed.",
     host_not_ready: "the host is not ready; fix what failed and run apply again",
+    doctor_needs_root: "run doctor as root (sudo): the checks read the cluster's files and \
+                        credentials",
     status,
     topic,
     finding,
@@ -34,6 +37,12 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::DiskSpace => "disk space",
         Topic::DiskEncryption => "disk encryption",
         Topic::Docker => "Docker",
+        Topic::Service => "service",
+        Topic::Api => "Kubernetes API",
+        Topic::InstallRecord => "install record",
+        Topic::Nodes => "nodes",
+        Topic::KubeletReserves => "kubelet reserves",
+        Topic::SecretsEncryption => "Secrets encryption",
     }
 }
 
@@ -46,6 +55,10 @@ pub(crate) fn and_list(items: &[String]) -> String {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each finding, so a finding without words does not compile"
+)]
 fn finding(finding: &Finding) -> String {
     match finding {
         Finding::RootOk => "running as root".to_owned(),
@@ -141,6 +154,90 @@ fn finding(finding: &Finding) -> String {
         Finding::ForwardDrop => "the iptables FORWARD policy is DROP, so Pods cannot reach the \
                                  internet; find what sets it (Docker, ufw) and change it"
             .to_owned(),
+        Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
+                                  with `sudo zeatend apply`"
+            .to_owned(),
+        Finding::ServiceRunning { unit } => format!("{unit} is running"),
+        Finding::ServiceStopped { unit } => format!(
+            "{unit} is not running; `sudo journalctl -u {unit} -n 100` shows why, and `sudo \
+             systemctl restart {unit}` starts it again"
+        ),
+        Finding::ApiReady => "the API server answers /readyz".to_owned(),
+        Finding::ApiDown { unit } => format!(
+            "the API server does not answer /readyz within 30 seconds; `sudo journalctl -u {unit} \
+             -n 100` shows why"
+        ),
+        Finding::RecordOk { zeatend_version } => {
+            format!("zeatend {zeatend_version} wrote the install record")
+        }
+        Finding::RecordMissing { path } => format!(
+            "no install record at {path}: zeatend did not install this node, or apply stopped \
+             before the end; run `sudo zeatend apply`"
+        ),
+        Finding::RecordNewer { zeatend_version } => format!(
+            "zeatend {zeatend_version} wrote the install record, and this is zeatend \
+             {ZEATEND_VERSION}; use zeatend {zeatend_version} or newer"
+        ),
+        Finding::NodesReady { names } => format!("{} {} Ready", and_list(names), be(names.len())),
+        Finding::NodesNotReady { names, command } => format!(
+            "{} {} not Ready; `{command}` shows why",
+            and_list(names),
+            be(names.len())
+        ),
+        Finding::NodesNone { unit } => format!(
+            "the cluster has no nodes; `sudo journalctl -u {unit} -n 100` shows why the kubelet \
+             did not register"
+        ),
+        Finding::NodesUnknown { reason } => format!("could not read the nodes: {reason}"),
+        Finding::ReservesSet { names } => format!(
+            "the kubelet on {} keeps at least the memory the OS needs from pods",
+            and_list(names)
+        ),
+        Finding::ReservesLow {
+            nodes,
+            needed_mib,
+            distribution,
+        } => {
+            let kept: Vec<String> = nodes
+                .iter()
+                .map(|k| format!("{} MiB on {}", k.mib, k.name))
+                .collect();
+            format!(
+                "the kubelet keeps only {} from pods, less than the {needed_mib} MiB the OS needs \
+                 at idle, so pods can take the memory the OS and the kubelet need (no \
+                 system-reserved or kube-reserved); {}",
+                and_list(&kept),
+                reserves_fix(*distribution)
+            )
+        }
+        Finding::ReservesUnknown { name } => {
+            format!("node {name} reports no memory capacity or allocatable memory")
+        }
+        Finding::SecretsEncrypted { provider } => {
+            format!("the API server stores Secrets encrypted ({provider})")
+        }
+        Finding::SecretsPlain { distribution } => format!(
+            "the API server stores Secrets unencrypted; `sudo {} secrets-encrypt status` shows \
+             the state",
+            distribution.id()
+        ),
+    }
+}
+
+/// `is` or `are`, for a list of `count` items.
+const fn be(count: usize) -> &'static str {
+    if count == 1 { "is" } else { "are" }
+}
+
+/// How to set the kubelet's reserves on the nodes of `distribution`.
+const fn reserves_fix(distribution: Distribution) -> &'static str {
+    match distribution {
+        Distribution::KubeSolo => {
+            "zeatend does not set them on KubeSolo yet (zeabur-oss/zeatend#4)"
+        }
+        Distribution::K3s | Distribution::Rke2 => {
+            "run `sudo zeatend apply` on each one to set them"
+        }
     }
 }
 
@@ -327,6 +424,75 @@ mod tests {
             (
                 Finding::ForwardDrop,
                 "the iptables FORWARD policy is DROP, so Pods cannot reach the internet; find what sets it (Docker, ufw) and change it",
+            ),
+        ];
+        for (f, text) in cases {
+            assert_eq!(finding(&f), text, "{f:?}");
+        }
+    }
+
+    #[test]
+    fn doctor_findings_say_what_to_run() {
+        use zeatend_host::preflight::Kept;
+
+        let nodes = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        let cases = [
+            (
+                Finding::ServiceStopped { unit: "k3s" },
+                "k3s is not running; `sudo journalctl -u k3s -n 100` shows why, and `sudo systemctl restart k3s` starts it again",
+            ),
+            (
+                Finding::NodesReady {
+                    names: nodes(&["vps-1"]),
+                },
+                "vps-1 is Ready",
+            ),
+            (
+                Finding::NodesNotReady {
+                    names: nodes(&["vps-2", "vps-3"]),
+                    command: "sudo kubectl describe node vps-2".to_owned(),
+                },
+                "vps-2 and vps-3 are not Ready; `sudo kubectl describe node vps-2` shows why",
+            ),
+            (
+                Finding::NodesNone {
+                    unit: "rke2-server",
+                },
+                "the cluster has no nodes; `sudo journalctl -u rke2-server -n 100` shows why the kubelet did not register",
+            ),
+            (
+                Finding::ReservesLow {
+                    nodes: vec![
+                        Kept {
+                            name: "solo".to_owned(),
+                            mib: 100,
+                        },
+                        Kept {
+                            name: "bare".to_owned(),
+                            mib: 0,
+                        },
+                    ],
+                    needed_mib: 350,
+                    distribution: Distribution::KubeSolo,
+                },
+                "the kubelet keeps only 100 MiB on solo and 0 MiB on bare from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved); zeatend does not set them on KubeSolo yet (zeabur-oss/zeatend#4)",
+            ),
+            (
+                Finding::ReservesLow {
+                    nodes: vec![Kept {
+                        name: "vps-2".to_owned(),
+                        mib: 100,
+                    }],
+                    needed_mib: 350,
+                    distribution: Distribution::K3s,
+                },
+                "the kubelet keeps only 100 MiB on vps-2 from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved); run `sudo zeatend apply` on each one to set them",
+            ),
+            (
+                Finding::SecretsPlain {
+                    distribution: zeatend_plan::cluster::Rancher::Rke2,
+                },
+                "the API server stores Secrets unencrypted; `sudo rke2 secrets-encrypt status` shows the state",
             ),
         ];
         for (f, text) in cases {

@@ -117,6 +117,8 @@ pub(crate) struct Messages {
     pub(crate) apply_stops: &'static str,
     /// The error of `apply` when a check failed.
     pub(crate) host_not_ready: &'static str,
+    /// `doctor` without root, which cannot read the cluster's files.
+    pub(crate) doctor_needs_root: &'static str,
     /// How a check came out, four cells wide.
     pub(crate) status: fn(Status) -> &'static str,
     /// What a check looked at.

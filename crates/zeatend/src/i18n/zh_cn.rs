@@ -1,7 +1,8 @@
 //! Simplified Chinese, as written in mainland China.
 
 use zeatend_host::preflight::{Finding, Status, Topic};
-use zeatend_plan::cluster::PortUse;
+use zeatend_plan::cluster::{Distribution, PortUse};
+use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Messages, gib, zh_list};
 
@@ -9,6 +10,7 @@ pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在检查主机",
     apply_stops: "修复失败的项目之前，apply 不会继续运行。",
     host_not_ready: "主机还没准备好，修复失败的项目后再运行一次 apply",
+    doctor_needs_root: "用 root 身份运行 doctor（加上 sudo），检查需要读取集群的文件和凭据",
     status,
     topic,
     finding,
@@ -34,6 +36,12 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::DiskSpace => "磁盘空间",
         Topic::DiskEncryption => "磁盘加密",
         Topic::Docker => "Docker",
+        Topic::Service => "服务",
+        Topic::Api => "Kubernetes API",
+        Topic::InstallRecord => "安装记录",
+        Topic::Nodes => "节点",
+        Topic::KubeletReserves => "kubelet 预留资源",
+        Topic::SecretsEncryption => "Secret 加密",
     }
 }
 
@@ -41,6 +49,10 @@ fn and_list(items: &[String]) -> String {
     zh_list(items, "和")
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm for each finding, so a finding without words does not compile"
+)]
 fn finding(finding: &Finding) -> String {
     match finding {
         Finding::RootOk => "以 root 身份运行".to_owned(),
@@ -132,6 +144,82 @@ fn finding(finding: &Finding) -> String {
         Finding::ForwardDrop => "iptables 的 FORWARD 策略是 DROP，Pod 连不上互联网。找出设置这项\
                                  策略的程序（例如 Docker、ufw）再修改"
             .to_owned(),
+        Finding::NotInstalled => {
+            "这台主机没有安装 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安装".to_owned()
+        }
+        Finding::ServiceRunning { unit } => format!("{unit} 正在运行"),
+        Finding::ServiceStopped { unit } => format!(
+            "{unit} 没有运行，用 `sudo journalctl -u {unit} -n 100` 查看原因，再用 `sudo \
+             systemctl restart {unit}` 重新启动"
+        ),
+        Finding::ApiReady => "API 服务器有响应 /readyz".to_owned(),
+        Finding::ApiDown { unit } => format!(
+            "API 服务器 30 秒内没有响应 /readyz，用 `sudo journalctl -u {unit} -n 100` 查看原因"
+        ),
+        Finding::RecordOk { zeatend_version } => {
+            format!("安装记录由 zeatend {zeatend_version} 写入")
+        }
+        Finding::RecordMissing { path } => format!(
+            "{path} 没有安装记录，这个节点不是 zeatend 安装的，或者 apply 没有运行完。运行 `sudo \
+             zeatend apply`"
+        ),
+        Finding::RecordNewer { zeatend_version } => format!(
+            "安装记录由 zeatend {zeatend_version} 写入，这里的是 zeatend {ZEATEND_VERSION}。改用 \
+             zeatend {zeatend_version} 或更新的版本"
+        ),
+        Finding::NodesReady { names } => format!("{} {}已就绪", and_list(names), all(names)),
+        Finding::NodesNotReady { names, command } => {
+            format!("{} 尚未就绪，用 `{command}` 查看原因", and_list(names))
+        }
+        Finding::NodesNone { unit } => format!(
+            "集群没有任何节点，用 `sudo journalctl -u {unit} -n 100` 查看 kubelet 为什么没有注册"
+        ),
+        Finding::NodesUnknown { reason } => format!("无法读取节点：{reason}"),
+        Finding::ReservesSet { names } => format!(
+            "{} 的 kubelet {}为系统预留了足够的内存",
+            and_list(names),
+            all(names)
+        ),
+        Finding::ReservesLow {
+            nodes,
+            needed_mib,
+            distribution,
+        } => {
+            let kept: Vec<String> = nodes
+                .iter()
+                .map(|k| format!("{} 只有 {} MiB", k.name, k.mib))
+                .collect();
+            format!(
+                "kubelet 不让 Pod 使用的内存：{}，少于系统空闲时需要的 {needed_mib} MiB，Pod \
+                 可能占用系统和 kubelet 需要的内存（没有设置 system-reserved 或 \
+                 kube-reserved）。{}",
+                kept.join("、"),
+                reserves_fix(*distribution)
+            )
+        }
+        Finding::ReservesUnknown { name } => {
+            format!("节点 {name} 没有报告内存容量或可分配的内存")
+        }
+        Finding::SecretsEncrypted { provider } => {
+            format!("API 服务器以加密形式存储 Secret（{provider}）")
+        }
+        Finding::SecretsPlain { distribution } => format!(
+            "API 服务器以未加密形式存储 Secret，用 `sudo {} secrets-encrypt status` 查看状态",
+            distribution.id()
+        ),
+    }
+}
+
+/// `都` before the verb, for a list of more than one item.
+const fn all(names: &[String]) -> &'static str {
+    if names.len() == 1 { "" } else { "都" }
+}
+
+/// How to set the kubelet's reserves on the nodes of `distribution`.
+const fn reserves_fix(distribution: Distribution) -> &'static str {
+    match distribution {
+        Distribution::KubeSolo => "zeatend 目前还不会为 KubeSolo 设置（zeabur-oss/zeatend#4）",
+        Distribution::K3s | Distribution::Rke2 => "在这些节点上运行 `sudo zeatend apply` 来设置",
     }
 }
 
