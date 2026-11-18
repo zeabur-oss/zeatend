@@ -15,8 +15,6 @@ use zeatend_plan::plan::MANAGER;
 
 use crate::HostError;
 
-/// How long a token joins workers unless told otherwise.
-pub const TTL: Duration = Duration::from_hours(1);
 /// The longest lifetime `parse_ttl` accepts.
 pub const MAX_TTL: Duration = Duration::from_hours(24);
 

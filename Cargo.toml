@@ -16,7 +16,7 @@ zeatend-plan = { path = "crates/zeatend-plan" }
 # The crypto backend rustls already uses; only its random number generator is called directly.
 aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 base64 = { version = "0.23", default-features = false, features = ["alloc"] }
-clap = { version = "4", default-features = false, features = ["std", "derive", "env", "help", "usage", "error-context"] }
+clap = { version = "4", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 hex = "0.4"
 httpdate = "1"

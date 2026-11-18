@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 /// How long one connection may take.
-pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
 async fn address(host: &str, port: u16) -> Option<SocketAddr> {
     tokio::net::lookup_host((host, port)).await.ok()?.next()

@@ -14,20 +14,21 @@ use crate::apply::{self, ClusterInstall};
 use crate::{InstallError, output, render};
 
 /// The join token, from the configuration or its file, checked against the role.
+/// [`JoinConfig::check`] checked a token in the configuration already.
 fn token(config: &JoinConfig) -> Result<String, InstallError> {
-    let token = match (&config.join.token, &config.join.token_file) {
-        (Some(token), _) => token.clone(),
-        (None, Some(file)) => String::from_utf8(files::read_secret(Path::new(file))?)
-            .map_err(|_e| InstallError::Message(format!("{file}: not text")))?,
-        (None, None) => {
-            return Err(InstallError::Message(
-                "join: no token or tokenFile".to_owned(),
-            ));
+    match (&config.join.token, &config.join.token_file) {
+        (Some(token), _) => Ok(token.trim().to_owned()),
+        (None, Some(file)) => {
+            let token = String::from_utf8(files::read_secret(Path::new(file))?)
+                .map_err(|_e| InstallError::Message(format!("{file}: not text")))?;
+            let token = token.trim().to_owned();
+            config::check_token(&token, config.join.role)?;
+            Ok(token)
         }
-    };
-    let token = token.trim().to_owned();
-    config::check_token(&token, config.join.role)?;
-    Ok(token)
+        (None, None) => Err(InstallError::Message(
+            "join: no token or tokenFile".to_owned(),
+        )),
+    }
 }
 
 /// Reads the host and the way to the server.

@@ -52,15 +52,6 @@ impl Facts {
             .then(cluster::apparmor_profile)
     }
 
-    /// The name this host has as a node: [`Self::node_name`], else the host name in lower case,
-    /// as K3s, RKE2 and `KubeSolo` name a node they are not told the name of.
-    #[must_use]
-    pub fn own_node_name(&self) -> String {
-        self.node_name
-            .clone()
-            .unwrap_or_else(|| self.hostname.to_ascii_lowercase())
-    }
-
     /// Stops when a newer zeatend applied, as the record or the host says.
     ///
     /// # Errors
@@ -394,7 +385,7 @@ pub(crate) fn cluster_plan(
 }
 
 /// The namespace where K3s and RKE2 run the `ServiceLB` pods.
-pub const SERVICELB_NAMESPACE: &str = "kube-system";
+const SERVICELB_NAMESPACE: &str = "kube-system";
 
 /// The `NetworkPolicy` that lets outside traffic into the `ServiceLB` pods.
 ///

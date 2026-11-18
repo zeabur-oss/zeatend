@@ -39,16 +39,6 @@ impl Kubectl {
         }
     }
 
-    /// The same `kubectl` as a command line a person can run on this machine.
-    #[must_use]
-    pub fn command_line(&self) -> String {
-        format!(
-            "{} --kubeconfig {}",
-            self.binary.display(),
-            self.kubeconfig.display()
-        )
-    }
-
     /// Runs `kubectl` with the kubeconfig.
     ///
     /// # Errors
@@ -61,23 +51,10 @@ impl Kubectl {
         cmd::run(&self.binary, &all, stdin).await
     }
 
-    /// Server-side applies YAML or JSON documents as zeatend's field manager.
-    ///
-    /// # Errors
-    ///
-    /// When the server rejects them.
-    pub async fn apply(&self, documents: &[u8]) -> Result<String, HostError> {
-        self.apply_as(MANAGER, documents).await
-    }
-
-    /// Server-side applies documents as `manager`. Fields another manager set stay; only the ones
-    /// `manager` set before and leaves out now are removed.
-    ///
-    /// # Errors
-    ///
-    /// When the server rejects them.
-    pub async fn apply_as(&self, manager: &str, documents: &[u8]) -> Result<String, HostError> {
-        let manager = format!("--field-manager={manager}");
+    /// Server-side applies YAML or JSON documents as zeatend's field manager. Fields another
+    /// manager set stay; only the ones zeatend set before and leaves out now are removed.
+    async fn apply(&self, documents: &[u8]) -> Result<String, HostError> {
+        let manager = format!("--field-manager={MANAGER}");
         self.run(
             &[
                 "apply",
@@ -94,8 +71,9 @@ impl Kubectl {
 
     /// Server-side applies documents into `namespace` when they name none.
     ///
-    /// A chart's install job finishes before its pods serve, so objects checked by its webhook or
-    /// of a kind it has only just defined are retried for a few minutes.
+    /// An admission webhook can be registered before its pods serve, and a kind can be applied
+    /// just after its `CustomResourceDefinition`, before the API server serves it. Such objects
+    /// are retried for a few minutes.
     ///
     /// # Errors
     ///
@@ -123,12 +101,6 @@ impl Kubectl {
                 result => return result,
             }
         }
-    }
-
-    /// The kubeconfig, for other tools such as a person's shell.
-    #[must_use]
-    pub fn kubeconfig(&self) -> &std::path::Path {
-        &self.kubeconfig
     }
 
     /// Server-side applies one object.
@@ -282,11 +254,16 @@ mod tests {
     fn webhooks_not_yet_serving_are_retried() {
         assert!(not_serving_yet(
             "exit status: 1\nError from server (InternalError): Internal error occurred: failed \
-             calling webhook \"vlsingles.operator.victoriametrics.com\": failed to call webhook: \
-             no endpoints available for service \"victoria-metrics-operator\""
+             calling webhook \"validate.widgets.example.com\": failed to call webhook: no \
+             endpoints available for service \"widget-webhook\""
+        ));
+        assert!(not_serving_yet(
+            "error: resource mapping not found for name: \"one\" namespace: \"\" from \"STDIN\": \
+             no matches for kind \"Widget\" in version \"example.com/v1\"\nensure CRDs are \
+             installed first"
         ));
         assert!(!not_serving_yet(
-            "Error from server (Invalid): VLSingle.operator.victoriametrics.com \"logs\" is invalid"
+            "Error from server (Invalid): Widget.example.com \"one\" is invalid"
         ));
     }
 }

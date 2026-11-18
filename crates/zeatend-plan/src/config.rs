@@ -335,7 +335,7 @@ fn is_release_tag(version: &str, build: &str) -> bool {
 /// # Errors
 ///
 /// When it is malformed, or a bootstrap token is given to a server.
-pub fn check_token(token: &str, role: Role) -> Result<TokenKind, PlanError> {
+pub fn check_token(token: &str, role: Role) -> Result<(), PlanError> {
     let token = token.trim();
     let credentials = match token.strip_prefix("K10") {
         Some(rest) => {
@@ -355,15 +355,10 @@ pub fn check_token(token: &str, role: Role) -> Result<TokenKind, PlanError> {
     if credentials.is_empty() || credentials.chars().any(char::is_whitespace) {
         return Err(PlanError::Config("join token: no credentials".to_owned()));
     }
-    let kind = if is_bootstrap_token(credentials) {
-        TokenKind::Bootstrap
-    } else {
-        TokenKind::Server
-    };
-    if kind == TokenKind::Bootstrap && role == Role::Server {
+    if role == Role::Server && is_bootstrap_token(credentials) {
         return Err(PlanError::BootstrapTokenForServer);
     }
-    Ok(kind)
+    Ok(())
 }
 
 /// Whether a join token pins the cluster CA.
@@ -374,15 +369,6 @@ pub fn token_pins_ca(token: &str) -> bool {
         .strip_prefix("K10")
         .and_then(|rest| rest.split_once("::"))
         .is_some_and(|(hash, _)| !hash.is_empty())
-}
-
-/// What a join token authenticates as.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TokenKind {
-    /// A Kubernetes bootstrap token, `<id>.<secret>`: joins workers, expires.
-    Bootstrap,
-    /// The cluster's server or agent token.
-    Server,
 }
 
 /// `[a-z0-9]{6}.[a-z0-9]{16}`.
@@ -559,19 +545,17 @@ mod tests {
         ] {
             assert!(server_address(bad, 9345).is_err(), "{bad}");
         }
-        assert_eq!(
-            check_token("abcdef.0123456789abcdef", Role::Worker).unwrap(),
-            TokenKind::Bootstrap
-        );
+        check_token("abcdef.0123456789abcdef", Role::Worker).unwrap();
+        assert!(matches!(
+            check_token("abcdef.0123456789abcdef", Role::Server),
+            Err(PlanError::BootstrapTokenForServer)
+        ));
         assert!(!token_pins_ca("abcdef.0123456789abcdef"));
         assert!(token_pins_ca(&format!(
             "K10{HASH}::abcdef.0123456789abcdef"
         )));
         assert!(check_token("K10abc::abcdef.0123456789abcdef", Role::Worker).is_err());
         assert!(check_token("K10", Role::Worker).is_err());
-        assert_eq!(
-            check_token(&format!("K10{HASH}::server:x"), Role::Server).unwrap(),
-            TokenKind::Server
-        );
+        check_token(&format!("K10{HASH}::server:x"), Role::Server).unwrap();
     }
 }

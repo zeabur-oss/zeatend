@@ -20,6 +20,17 @@ pub fn write(path: &Path, mode: u32, content: &[u8]) -> Result<bool, HostError> 
     {
         return Ok(false);
     }
+    replace(path, mode, |file| file.write_all(content))?;
+    Ok(true)
+}
+
+/// Writes a temporary file next to `path` with `mode`, fills it with `content`, and renames it to
+/// `path`, so a reader sees the old file or the new one.
+fn replace(
+    path: &Path,
+    mode: u32,
+    content: impl FnOnce(&mut File) -> std::io::Result<()>,
+) -> Result<(), HostError> {
     let dir = path.parent().unwrap_or_else(|| Path::new("/"));
     fs::create_dir_all(dir).map_err(HostError::io(dir))?;
     let name = path
@@ -36,10 +47,9 @@ pub fn write(path: &Path, mode: u32, content: &[u8]) -> Result<bool, HostError> 
     // `mode` above is masked by the umask; set it exactly.
     file.set_permissions(Permissions::from_mode(mode))
         .map_err(HostError::io(&temp))?;
-    file.write_all(content).map_err(HostError::io(&temp))?;
+    content(&mut file).map_err(HostError::io(&temp))?;
     file.sync_all().map_err(HostError::io(&temp))?;
-    fs::rename(&temp, path).map_err(HostError::io(path))?;
-    Ok(true)
+    fs::rename(&temp, path).map_err(HostError::io(path))
 }
 
 /// Makes a directory and its parents, and sets its mode.
@@ -59,15 +69,10 @@ pub fn make_dir(path: &Path, mode: u32) -> Result<(), HostError> {
 ///
 /// When it cannot be read or written.
 pub fn install(source: &Path, dest: &Path, mode: u32) -> Result<(), HostError> {
-    let dir = dest.parent().unwrap_or_else(|| Path::new("/"));
-    fs::create_dir_all(dir).map_err(HostError::io(dir))?;
-    let name = dest
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let temp = dir.join(format!(".{name}.zeatend"));
-    fs::copy(source, &temp).map_err(HostError::io(&temp))?;
-    fs::set_permissions(&temp, Permissions::from_mode(mode)).map_err(HostError::io(&temp))?;
-    fs::rename(&temp, dest).map_err(HostError::io(dest))
+    let mut source_file = File::open(source).map_err(HostError::io(source))?;
+    replace(dest, mode, |file| {
+        std::io::copy(&mut source_file, file).map(drop)
+    })
 }
 
 /// Removes the file at `path`. A missing file is not an error.

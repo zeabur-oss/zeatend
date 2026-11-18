@@ -197,8 +197,8 @@ pub fn warnings(plan: &Plan, nodes: &[NodeMemory]) -> Vec<Warning> {
             format!(
                 "The Pods on node {name} already request {requested} MiB of memory, but only \
                  {left} MiB is left for Pods once the system and {title} have their share. Pods \
-                 that don't fit stay Pending. To make room, delete a service on {name} or lower \
-                 its replicas, move a service to another node, or add a node."
+                 that don't fit stay Pending. To make room, delete a workload on {name} or lower \
+                 its replicas, move a workload to another node, or add a node."
             ),
         ));
     }

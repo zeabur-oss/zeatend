@@ -223,7 +223,7 @@ fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
     let text = fs::read_to_string(path).map_err(io(path))?;
     let admin: Value = serde_saphyr::from_str(&text)
         .map_err(|e| InstallError::Message(format!("{ADMIN_KUBECONFIG}: {e}")))?;
-    let config = zeatend_plan::kubesolo::kubeconfig(&admin, name, None)?;
+    let config = zeatend_plan::kubesolo::kubeconfig(&admin, name)?;
     let yaml =
         serde_saphyr::to_string(&config).map_err(|e| InstallError::Message(e.to_string()))?;
     files::write(Path::new(KUBECONFIG), 0o600, yaml.as_bytes())?;

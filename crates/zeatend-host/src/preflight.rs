@@ -32,9 +32,6 @@ macro_rules! keyed {
         }
 
         impl $name {
-            /// Every value.
-            pub const ALL: &[Self] = &[$(Self::$variant),+];
-
             /// The stable key.
             #[must_use]
             pub const fn key(self) -> &'static str {
@@ -64,10 +61,6 @@ keyed! {
         Ports => "ports",
         DiskSpace => "diskSpace",
         DiskEncryption => "diskEncryption",
-        NodePackages => "nodePackages",
-        KernelModules => "kernelModules",
-        Services => "services",
-        Multipathd => "multipathd",
         Docker => "docker",
     }
 }
@@ -86,10 +79,6 @@ impl Topic {
             Self::Ports => "ports",
             Self::DiskSpace => "disk space",
             Self::DiskEncryption => "disk encryption",
-            Self::NodePackages => "node packages",
-            Self::KernelModules => "kernel modules",
-            Self::Services => "services",
-            Self::Multipathd => "multipathd",
             Self::Docker => "Docker",
         }
     }
@@ -124,17 +113,6 @@ keyed! {
         CryptRequiredUnknown => "crypt.requiredUnknown",
         CryptNo => "crypt.no",
         CryptUnknown => "crypt.unknown",
-        PackageOk => "prep.package.ok",
-        PackageToInstall => "prep.package.toInstall",
-        PackageMissing => "prep.package.missing",
-        ModuleOk => "prep.module.ok",
-        ModuleToLoad => "prep.module.toLoad",
-        ModuleMissing => "prep.module.missing",
-        ServiceOk => "prep.service.ok",
-        ServiceToStart => "prep.service.toStart",
-        ServiceStopped => "prep.service.stopped",
-        MultipathToBlock => "prep.multipath.toBlock",
-        MultipathOpen => "prep.multipath.open",
         DockerNone => "docker.none",
         DockerFound => "docker.found",
         ForwardDrop => "docker.forwardDrop",
@@ -267,7 +245,7 @@ impl Check {
 
 /// Whether this process runs as root.
 #[must_use]
-pub fn is_root() -> bool {
+fn is_root() -> bool {
     effective_uid(&fs::read_to_string("/proc/self/status").unwrap_or_default()) == Some(0)
 }
 
@@ -417,7 +395,7 @@ fn other_distributions(node: Node) -> Check {
 }
 
 /// Where Docker's binary and socket are. Docker sets the iptables FORWARD policy to DROP, so
-/// Pods of `KubeSolo` cannot reach the internet and ACME fails.
+/// Pods of `KubeSolo` cannot reach the internet.
 const DOCKER_PATHS: [&str; 5] = [
     "/usr/bin/docker",
     "/usr/local/bin/docker",
@@ -451,7 +429,7 @@ fn docker_check(found: &[String], iptables: &str) -> Check {
             Topic::Docker,
             Status::Fail,
             format!(
-                "Docker is on this host ({}). It sets the iptables FORWARD policy to DROP, so Pods cannot reach the internet and certificates fail. Stop and remove Docker first",
+                "Docker is on this host ({}). It sets the iptables FORWARD policy to DROP, so Pods cannot reach the internet. Stop and remove Docker first",
                 names.join(", ")
             ),
             Code::DockerFound,
@@ -461,7 +439,7 @@ fn docker_check(found: &[String], iptables: &str) -> Check {
         check(
             Topic::Docker,
             Status::Fail,
-            "the iptables FORWARD policy is DROP, so Pods cannot reach the internet and certificates fail; find what sets it (Docker, ufw) and change it",
+            "the iptables FORWARD policy is DROP, so Pods cannot reach the internet; find what sets it (Docker, ufw) and change it",
             Code::ForwardDrop,
         )
     } else {
@@ -476,7 +454,7 @@ fn docker_check(found: &[String], iptables: &str) -> Check {
 
 /// The TCP ports a node needs free.
 #[must_use]
-pub fn needed_ports(node: Node) -> Vec<(u16, &'static str)> {
+fn needed_ports(node: Node) -> Vec<(u16, &'static str)> {
     match node {
         Node::Server(d) => d.node_ports(true),
         Node::Agent(d) => d.node_ports(false),
@@ -561,7 +539,7 @@ async fn disk_space(data_dir: &str) -> Check {
             Topic::DiskSpace,
             Status::Warn,
             format!(
-                "{gib} GiB free under {target}; {DISK_ROOMY_GIB} GiB or more leaves room for logs, metrics and apps"
+                "{gib} GiB free under {target}; {DISK_ROOMY_GIB} GiB or more leaves room for images, logs and volumes"
             ),
             Code::DiskTight,
         )
@@ -628,7 +606,7 @@ async fn encryption(data_dir: &str, required: bool) -> Check {
 
 /// Whether the device holding `path` has a dm-crypt device beneath it.
 #[must_use]
-pub async fn disk_encryption(path: &str) -> Encryption {
+async fn disk_encryption(path: &str) -> Encryption {
     let Ok(source) = cmd::run(
         "findmnt",
         &["--noheadings", "--output", "SOURCE", "--target", path],

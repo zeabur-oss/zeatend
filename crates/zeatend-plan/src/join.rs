@@ -83,7 +83,7 @@ pub struct Rtt {
 
 /// How far the server is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Latency {
+enum Latency {
     /// Within what one region gives.
     Fine,
     /// More than one region gives.
@@ -94,7 +94,7 @@ pub enum Latency {
 
 /// The latency class of a median round trip.
 #[must_use]
-pub const fn latency(median_us: u64) -> Latency {
+const fn latency(median_us: u64) -> Latency {
     if median_us > RTT_CRITICAL_US {
         Latency::Critical
     } else if median_us > RTT_WARN_US {

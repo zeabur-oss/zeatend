@@ -8,15 +8,6 @@ use tokio::process::Command;
 
 use crate::HostError;
 
-/// What a command printed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Output {
-    /// Standard output.
-    pub stdout: String,
-    /// Standard error.
-    pub stderr: String,
-}
-
 /// Runs a command, feeding it `stdin`, and returns its standard output.
 ///
 /// # Errors
@@ -27,10 +18,10 @@ pub async fn run(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<String, HostError> {
-    run_with(program, args, &[], stdin).await.map(|o| o.stdout)
+    run_with(program, args, &[], stdin).await
 }
 
-/// Runs a command with extra environment variables and returns both outputs.
+/// Runs a command with extra environment variables and returns its standard output.
 ///
 /// # Errors
 ///
@@ -40,7 +31,7 @@ pub async fn run_with(
     args: &[&str],
     env: &[(&str, &str)],
     stdin: Option<&[u8]>,
-) -> Result<Output, HostError> {
+) -> Result<String, HostError> {
     let program = program.as_ref();
     let line = format!("{} {}", program.display(), args.join(" "));
     let fail = |reason: String| HostError::Command {
@@ -70,16 +61,15 @@ pub async fn run_with(
         .wait_with_output()
         .await
         .map_err(|e| fail(e.to_string()))?;
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         let lines: Vec<&str> = stderr.trim_end().lines().collect();
         let tail = lines
             .get(lines.len().saturating_sub(20)..)
             .unwrap_or_default();
         return Err(fail(format!("{}\n{}", output.status, tail.join("\n"))));
     }
-    let stdout = String::from_utf8(output.stdout).map_err(|e| fail(e.to_string()))?;
-    Ok(Output { stdout, stderr })
+    String::from_utf8(output.stdout).map_err(|e| fail(e.to_string()))
 }
 
 /// Whether a command exits successfully; output is discarded.

@@ -34,7 +34,8 @@ pub const KUBECONFIG: &str = "/etc/zeatend/kubeconfig.yaml";
 ///
 /// It is a host with 1.5 GiB, less what the kernel and firmware keep. `KubeSolo` with its own pods
 /// (`CoreDNS`, local-path-provisioner) and a helm-controller used about 670 MiB on a 1 CPU /
-/// 1.5 GiB arm64 VM; without the helm-controller it uses less.
+/// 1.5 GiB arm64 VM. `KubeSolo` does not run a helm-controller and zeatend does not install one,
+/// so it uses less.
 pub const MIN_MEMORY_MIB: u64 = 1400;
 
 /// The TCP ports `KubeSolo` listens on, and what for.
@@ -132,12 +133,12 @@ WantedBy=multi-user.target
 ";
 
 /// The admin kubeconfig as a file for the person's computer: only the certificate user, with the
-/// cluster, user and context all named `name`. `server` replaces the API address when given.
+/// cluster, user and context all named `name`.
 ///
 /// # Errors
 ///
 /// When the file has no context with a client certificate.
-pub fn kubeconfig(admin: &Value, name: &str, server: Option<&str>) -> Result<Value, PlanError> {
+pub fn kubeconfig(admin: &Value, name: &str) -> Result<Value, PlanError> {
     let bad = |reason: &str| PlanError::Kubeconfig(format!("{ADMIN_KUBECONFIG}: {reason}"));
     let named = |list: &str, key: &str| -> Option<Value> {
         admin
@@ -161,10 +162,7 @@ pub fn kubeconfig(admin: &Value, name: &str, server: Option<&str>) -> Result<Val
             Some((cluster, user))
         })
         .ok_or_else(|| bad("no context with a client certificate"))?;
-    let mut cluster = cluster.get("cluster").cloned().unwrap_or_default();
-    if let (Some(server), Some(map)) = (server, cluster.as_object_mut()) {
-        map.insert("server".to_owned(), json!(server));
-    }
+    let cluster = cluster.get("cluster").cloned().unwrap_or_default();
     Ok(json!({
         "apiVersion": "v1",
         "kind": "Config",
@@ -225,18 +223,18 @@ mod tests {
             ],
             "current-context": "admin-token@kubesolo",
         });
-        let config = kubeconfig(&admin, "solo", Some("https://solo.example.com:6443")).unwrap();
+        let config = kubeconfig(&admin, "solo").unwrap();
         assert_eq!(config["current-context"], "solo");
         assert!(!config.to_string().contains("admin-token"));
         assert_eq!(config["users"][0]["user"]["client-key-data"], "S0VZ");
         assert_eq!(
             config["clusters"][0]["cluster"]["server"],
-            "https://solo.example.com:6443"
+            "https://10.0.0.5:6443"
         );
         assert_eq!(
             config["clusters"][0]["cluster"]["certificate-authority-data"],
             "Q0E="
         );
-        assert!(kubeconfig(&json!({"contexts": []}), "solo", None).is_err());
+        assert!(kubeconfig(&json!({"contexts": []}), "solo").is_err());
     }
 }

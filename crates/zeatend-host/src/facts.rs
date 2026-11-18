@@ -115,32 +115,28 @@ fn cert_node_name(pem: &str) -> Option<String> {
 
 /// A global address of the host, as `ip -o addr` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostAddress {
+struct HostAddress {
     /// The interface.
-    pub interface: String,
+    interface: String,
     /// The address, without its prefix length.
-    pub address: String,
-    /// The prefix length of the address.
-    pub prefix: Option<u8>,
+    address: String,
     /// An IPv6 privacy address, which the kernel replaces about once a day (RFC 8981).
-    pub temporary: bool,
+    temporary: bool,
     /// Past its preferred lifetime, or not yet usable (tentative, failed duplicate detection).
-    pub unusable: bool,
+    unusable: bool,
     /// Configured by the system, not learnt from router advertisements or DHCP.
-    pub permanent: bool,
+    permanent: bool,
 }
 
 impl HostAddress {
     /// An IPv6 address.
-    #[must_use]
-    pub fn is_v6(&self) -> bool {
+    fn is_v6(&self) -> bool {
         self.address.contains(':')
     }
 }
 
 /// The host's global addresses with their flags.
-#[must_use]
-pub async fn host_addresses() -> Vec<HostAddress> {
+async fn host_addresses() -> Vec<HostAddress> {
     parse_addresses(
         &crate::cmd::run("ip", &["-o", "addr", "show", "scope", "global"], None)
             .await
@@ -156,8 +152,8 @@ fn parse_addresses(text: &str) -> Vec<HostAddress> {
             if !matches!(words.next()?, "inet" | "inet6") {
                 return None;
             }
-            let (address, prefix) = words.next()?.split_once('/')?;
-            let (address, prefix) = (address.to_owned(), prefix.parse().ok());
+            let (address, _prefix) = words.next()?.split_once('/')?;
+            let address = address.to_owned();
             let flags: Vec<&str> = words
                 .take_while(|w| *w != "\\" && *w != "valid_lft")
                 .collect();
@@ -165,7 +161,6 @@ fn parse_addresses(text: &str) -> Vec<HostAddress> {
             Some(HostAddress {
                 interface,
                 address,
-                prefix,
                 temporary: has("temporary"),
                 unusable: has("deprecated") || has("tentative") || has("dadfailed"),
                 permanent: !has("dynamic"),
@@ -189,14 +184,14 @@ fn route_interface(routes: &str) -> Option<String> {
     words.next().map(str::to_owned)
 }
 
-/// The addresses RKE2 registers the node with, never a temporary IPv6 address.
+/// The addresses the node registers with, never a temporary IPv6 address.
 ///
-/// These are the IPv4 and the IPv6 address of the interfaces with default routes, as RKE2 picks
-/// them itself. RKE2 takes the first IPv6 address it finds, which is often the temporary one; it
-/// changes within a day, and the node's address in the network policies goes stale. A configured
-/// address comes first, then one from SLAAC (EUI-64 or stable-privacy), which keeps its value.
-#[must_use]
-pub async fn node_ips() -> Vec<String> {
+/// These are the IPv4 and the IPv6 address of the interfaces with default routes, as K3s and RKE2
+/// pick them themselves. They take the first IPv6 address they find, which is often the temporary
+/// one; it changes within a day, and the node's address in the network policies goes stale. A
+/// configured address comes first, then one from SLAAC (EUI-64 or stable-privacy), which keeps its
+/// value.
+async fn node_ips() -> Vec<String> {
     choose_node_ips(
         &host_addresses().await,
         default_interface("-4").await.as_deref(),
@@ -205,8 +200,7 @@ pub async fn node_ips() -> Vec<String> {
 }
 
 /// [`node_ips`] from what it reads.
-#[must_use]
-pub fn choose_node_ips(
+fn choose_node_ips(
     addresses: &[HostAddress],
     v4_interface: Option<&str>,
     v6_interface: Option<&str>,
@@ -248,21 +242,9 @@ fn memory_mib(meminfo: &str) -> Option<u64> {
 /// The host's global addresses, IPv4 first, from `ip`; empty when it cannot run.
 #[must_use]
 pub async fn addresses() -> Vec<String> {
-    let mut found: Vec<String> =
-        crate::cmd::run("ip", &["-o", "addr", "show", "scope", "global"], None)
-            .await
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| {
-                line.split_whitespace()
-                    .nth(3)?
-                    .split('/')
-                    .next()
-                    .map(str::to_owned)
-            })
-            .collect();
-    found.sort_by_key(|a| a.contains(':'));
-    found
+    let mut found = host_addresses().await;
+    found.sort_by_key(HostAddress::is_v6);
+    found.into_iter().map(|a| a.address).collect()
 }
 
 #[cfg(test)]

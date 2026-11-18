@@ -26,9 +26,6 @@ pub enum Distribution {
 }
 
 impl Distribution {
-    /// Every distribution, in the order an interface lists them.
-    pub const ALL: [Self; 3] = [Self::KubeSolo, Self::K3s, Self::Rke2];
-
     /// Its name in configuration files.
     #[must_use]
     pub const fn id(self) -> &'static str {
@@ -323,8 +320,8 @@ impl Rancher {
     }
 
     /// The kubelet's arguments. With the reserves, the pods' cgroup ends short of the OS and the
-    /// distribution, so memory running out kills or evicts a pod, a build first, and not
-    /// `k3s-server`. A worker has no control plane and reserves only the OS.
+    /// distribution, so memory running out kills or evicts a pod, and not `k3s-server`. A worker
+    /// has no control plane and reserves only the OS.
     pub(crate) fn kubelet_args(self, server: bool) -> String {
         let kube_reserved = if server {
             format!("  - kube-reserved=memory={}Mi\n", self.kube_reserved_mib())
@@ -470,7 +467,7 @@ impl Rancher {
 
     /// Where [`Self::node_name_file`] goes.
     #[must_use]
-    pub fn node_name_path(self) -> String {
+    fn node_name_path(self) -> String {
         format!(
             "{}/config.yaml.d/15-node-name.yaml",
             self.layout().config_dir

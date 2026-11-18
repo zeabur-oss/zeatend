@@ -102,7 +102,7 @@ fn describe(error: &(dyn std::error::Error + 'static)) -> String {
 }
 
 /// Downloads `url` to `dest` unless a file with the expected digest is already there. Returns the
-/// digest. With no expected digest the file is always downloaded; check it with [`sha256_file`]
+/// digest. With no expected digest the file is always downloaded; check the returned digest
 /// against a list.
 ///
 /// # Errors
@@ -163,48 +163,6 @@ pub async fn fetch(
     }
     fs::rename(&partial, dest).map_err(HostError::io(dest))?;
     Ok(actual)
-}
-
-/// Downloads a text document, such as a manifest, of at most 64 MiB, and checks it against
-/// `sha256` (`sha256:<hex>`) when one is given.
-///
-/// # Errors
-///
-/// When the download fails or the digest differs.
-pub async fn fetch_text(
-    agent: &Agent,
-    url: &str,
-    sha256: Option<&str>,
-) -> Result<String, HostError> {
-    let fail = |reason: String| HostError::Download {
-        url: url.to_owned(),
-        reason,
-    };
-    let https = agent.client(url)?;
-    let response = get_ok(https, url).await.map_err(fail)?;
-    let bytes = read_all(response, 64 << 20).await.map_err(fail)?;
-    let text = String::from_utf8(bytes).map_err(|e| fail(e.to_string()))?;
-    if let Some(expected) = sha256 {
-        check(url, expected, text.as_bytes())?;
-    }
-    Ok(text)
-}
-
-/// The body of `response`, at most `limit` bytes.
-async fn read_all(mut response: Response, limit: usize) -> Result<Vec<u8>, String> {
-    let reading = async {
-        let mut body = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| describe(&e))? {
-            if body.len().saturating_add(chunk.len()) > limit {
-                return Err(format!("the answer is larger than {limit} bytes"));
-            }
-            body.extend_from_slice(&chunk);
-        }
-        Ok(body)
-    };
-    tokio::time::timeout(BODY_TIME, reading)
-        .await
-        .map_err(|_elapsed| "the download did not finish in time".to_owned())?
 }
 
 /// A GET that succeeds, or the reason it did not.
@@ -276,30 +234,12 @@ fn retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     Some(date.duration_since(now).unwrap_or_default())
 }
 
-/// Checks `bytes` against `expected`, `sha256:<hex>` or bare hex.
-///
-/// # Errors
-///
-/// When the digest differs.
-pub fn check(what: &str, expected: &str, bytes: &[u8]) -> Result<(), HostError> {
-    let expected = expected.strip_prefix("sha256:").unwrap_or(expected);
-    let actual = hex::encode(Sha256::digest(bytes));
-    if actual == expected {
-        return Ok(());
-    }
-    Err(HostError::Digest {
-        file: what.to_owned(),
-        expected: expected.to_owned(),
-        actual,
-    })
-}
-
 /// The SHA-256 of a file.
 ///
 /// # Errors
 ///
 /// When it cannot be read.
-pub fn sha256_file(path: &Path) -> Result<String, HostError> {
+fn sha256_file(path: &Path) -> Result<String, HostError> {
     let mut file = io::BufReader::new(File::open(path).map_err(HostError::io(path))?);
     let mut hasher = Sha256::new();
     loop {
@@ -316,7 +256,7 @@ pub fn sha256_file(path: &Path) -> Result<String, HostError> {
 
 /// The digest of `file` in a `sha256sum` list.
 #[must_use]
-pub fn digest_in_list<'a>(list: &'a str, file: &str) -> Option<&'a str> {
+fn digest_in_list<'a>(list: &'a str, file: &str) -> Option<&'a str> {
     list.lines().find_map(|line| {
         let (digest, name) = line.split_once(char::is_whitespace)?;
         (name.trim_start().trim_start_matches('*') == file).then_some(digest)
@@ -399,6 +339,14 @@ mod tests {
         (url, seen)
     }
 
+    /// Downloads `url` to a temporary file and returns its text.
+    async fn fetch_text(url: &str) -> Result<String, HostError> {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f");
+        fetch(&agent(), url, &dest, None).await?;
+        Ok(fs::read_to_string(&dest).unwrap())
+    }
+
     const ABC: &str = "abc";
     const ABC_SHA: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
@@ -414,9 +362,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_is_retried_too() {
+    async fn rate_limits_and_gateway_timeouts_are_retried() {
         let (url, _) = serve(&[429, 504, 200], ABC);
-        assert_eq!(fetch_text(&agent(), &url, None).await.unwrap(), ABC);
+        assert_eq!(fetch_text(&url).await.unwrap(), ABC);
     }
 
     #[tokio::test]
@@ -433,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn gives_up_after_the_limit() {
         let (url, seen) = serve(&[503], "");
-        let err = fetch_text(&agent(), &url, None).await.unwrap_err();
+        let err = fetch_text(&url).await.unwrap_err();
         assert!(err.to_string().contains("503"), "{err}");
         assert_eq!(seen.load(Ordering::SeqCst), 4);
     }
@@ -441,15 +389,12 @@ mod tests {
     #[tokio::test]
     async fn only_temporary_statuses_are_retried() {
         let (url, seen) = serve(&[408, 502, 200], ABC);
-        assert_eq!(fetch_text(&agent(), &url, None).await.unwrap(), ABC);
+        assert_eq!(fetch_text(&url).await.unwrap(), ABC);
         assert_eq!(seen.load(Ordering::SeqCst), 3);
         let fixed: [&'static [u16]; 3] = [&[500, 200], &[501, 200], &[505, 200]];
         for statuses in fixed {
             let (url, seen) = serve(statuses, ABC);
-            assert!(
-                fetch_text(&agent(), &url, None).await.is_err(),
-                "{statuses:?}"
-            );
+            assert!(fetch_text(&url).await.is_err(), "{statuses:?}");
             assert_eq!(seen.load(Ordering::SeqCst), 1, "{statuses:?}");
         }
     }
@@ -457,21 +402,21 @@ mod tests {
     #[tokio::test]
     async fn retry_after_is_honoured_as_seconds_or_a_date() {
         let (url, seen) = serve_with(&[503, 200], "Retry-After: 0\r\n", ABC);
-        assert_eq!(fetch_text(&agent(), &url, None).await.unwrap(), ABC);
+        assert_eq!(fetch_text(&url).await.unwrap(), ABC);
         assert_eq!(seen.load(Ordering::SeqCst), 2);
         let (url, seen) = serve_with(
             &[429, 200],
             "Retry-After: Fri, 31 Dec 1999 23:59:59 GMT\r\n",
             ABC,
         );
-        assert_eq!(fetch_text(&agent(), &url, None).await.unwrap(), ABC);
+        assert_eq!(fetch_text(&url).await.unwrap(), ABC);
         assert_eq!(seen.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn a_retry_after_beyond_the_cap_is_not_waited_for() {
         let (url, seen) = serve_with(&[503, 200], "Retry-After: 3600\r\n", ABC);
-        let err = fetch_text(&agent(), &url, None).await.unwrap_err();
+        let err = fetch_text(&url).await.unwrap_err();
         assert!(err.to_string().contains("503"), "{err}");
         assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
@@ -522,7 +467,7 @@ mod tests {
     async fn redirects_are_followed() {
         for location in ["/moved/file", "moved/file"] {
             let (url, seen) = serve_redirect(location);
-            assert_eq!(fetch_text(&agent(), &url, None).await.unwrap(), ABC);
+            assert_eq!(fetch_text(&url).await.unwrap(), ABC);
             let heads = seen.lock().unwrap().clone();
             let target = if location.starts_with('/') {
                 "get /moved/file "

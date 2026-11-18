@@ -106,9 +106,9 @@ impl Changes {
         }
     }
 
-    /// Records the host files whose content changes.
+    /// Records the host files whose content changes; a change restarts the service.
     pub fn set_host_files(&mut self, paths: Vec<String>) {
-        self.restart = self.version.is_some() || !paths.is_empty();
+        self.restart |= !paths.is_empty();
         self.host_files = paths;
     }
 }
@@ -116,7 +116,7 @@ impl Changes {
 /// The precedence of two versions as Semantic Versioning 2.0.0 orders them
 /// (<https://semver.org/#spec-item-11>); `None` when either is not one.
 #[must_use]
-pub fn precedence(a: &str, b: &str) -> Option<Ordering> {
+fn precedence(a: &str, b: &str) -> Option<Ordering> {
     let a = semver::Version::parse(a).ok()?;
     let b = semver::Version::parse(b).ok()?;
     Some(a.cmp_precedence(&b))
