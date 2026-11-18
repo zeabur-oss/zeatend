@@ -143,13 +143,13 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
     output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
     let agent = download::agent();
     let kubectl = Path::new(KUBECTL);
-    output::err(&format!("    {}", solo.kubectl.url));
+    output::note(&solo.kubectl.url);
     download::fetch(
         &agent,
         &solo.kubectl.url,
         kubectl,
         solo.kubectl.sha256.as_deref(),
-        &mut output::Meter::new(),
+        &mut output::Meter,
     )
     .await?;
     fs::set_permissions(kubectl, Permissions::from_mode(0o755)).map_err(io(kubectl))?;
@@ -169,13 +169,13 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         let dir = PathBuf::from(STATE_DIR)
             .join("downloads")
             .join(&solo.version);
-        output::err(&format!("    {}", download.url));
+        output::note(&download.url);
         download::fetch(
             &agent,
             &download.url,
             &dir.join(&download.file),
             download.sha256.as_deref(),
-            &mut output::Meter::new(),
+            &mut output::Meter,
         )
         .await?;
         let unpacked = dir.join("unpacked");
@@ -188,12 +188,12 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         systemd::daemon_reload().await?;
     }
     if !systemd::is_active(UNIT).await {
-        output::err(&format!(
-            "    starting {UNIT}; the first start takes a few minutes"
+        output::note(&format!(
+            "starting {UNIT}; the first start takes a few minutes"
         ));
         systemd::enable_now(UNIT).await?;
     } else if changed {
-        output::err(&format!("    restarting {UNIT} for the new configuration"));
+        output::note(&format!("restarting {UNIT} for the new configuration"));
         systemd::restart(UNIT).await?;
     }
     restarted(STATE_DIR)?;
