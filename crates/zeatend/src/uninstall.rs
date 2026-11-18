@@ -244,7 +244,9 @@ struct Uninstall {
 fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
     let mut nodes = Vec::new();
     if exists(K3S_UNINSTALL) {
-        nodes.push(Node::new(Distribution::K3s, Role::Server, false));
+        // `join` takes no K3s server today; a server with a join token joined all the same.
+        let joined = exists(Rancher::K3s.layout().join_token_file);
+        nodes.push(Node::new(Distribution::K3s, Role::Server, joined));
     }
     if exists(K3S_AGENT_UNINSTALL) {
         nodes.push(Node::new(Distribution::K3s, Role::Worker, true));
@@ -708,6 +710,10 @@ mod tests {
         let host = |paths: &'static [&'static str]| detect(move |p| paths.contains(&p));
         assert_eq!(host(&[]), Vec::new());
         assert_eq!(host(&[K3S_UNINSTALL]), vec![K3S_SERVER]);
+        assert_eq!(
+            host(&[K3S_UNINSTALL, "/etc/rancher/k3s/zeatend-join-token"]),
+            vec![Node::new(Distribution::K3s, Role::Server, true)]
+        );
         assert_eq!(host(&[K3S_AGENT_UNINSTALL]), vec![K3S_WORKER]);
         let layout = Rancher::Rke2.layout();
         assert_eq!(host(&[RKE2_UNINSTALL]), vec![RKE2_WORKER]);
