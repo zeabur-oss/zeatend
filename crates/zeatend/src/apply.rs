@@ -23,6 +23,26 @@ use crate::{InstallError, output, render};
 pub(crate) const STATE_DIR: &str = "/var/lib/rancher/zeatend";
 /// The `ConfigMap` in `kube-system` that records what was installed.
 pub(crate) const STATE_CONFIGMAP: &str = "zeatend";
+/// The file in a state directory that says a restart is owed.
+const RESTART_OWED: &str = "restart-owed";
+
+/// Whether an earlier `apply` changed the host and stopped before the service restarted.
+pub(crate) fn restart_owed(state_dir: &str) -> bool {
+    Path::new(state_dir).join(RESTART_OWED).exists()
+}
+
+/// Records that a restart is owed. Call it before the files or the binary change, so an `apply`
+/// that stops before the restart restarts the service on the next run.
+pub(crate) fn owe_restart(state_dir: &str) -> Result<(), InstallError> {
+    files::write(&Path::new(state_dir).join(RESTART_OWED), 0o600, b"")?;
+    Ok(())
+}
+
+/// Records that the service runs with the files and the binary on disk.
+pub(crate) fn restarted(state_dir: &str) -> Result<(), InstallError> {
+    files::remove(&Path::new(state_dir).join(RESTART_OWED))?;
+    Ok(())
+}
 
 /// The K3s or RKE2 of a plan; a `KubeSolo` plan is an error.
 fn cluster(plan: &Plan) -> Result<&ClusterPlan, InstallError> {
@@ -144,6 +164,7 @@ async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallErr
                 pending.retain(|path| *path != binary);
             }
             changes.set_host_files(pending);
+            changes.restart |= restart_owed(STATE_DIR);
         }
         // The check is advice; a failed read skips it.
         if running && let Some(nodes) = node_memory(&kubectl).await {
@@ -384,7 +405,10 @@ pub(crate) async fn install_cluster(
         distribution.title(),
         cluster.version
     ));
-    let changed = install.changed || !pending(install).await?.is_empty();
+    let changed = install.changed || restart_owed(STATE_DIR) || !pending(install).await?.is_empty();
+    if changed {
+        owe_restart(STATE_DIR)?;
+    }
     for file in install.files {
         files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
@@ -423,11 +447,13 @@ pub(crate) async fn install_cluster(
         ));
         let started = now();
         systemd::enable_now(unit).await?;
+        restarted(STATE_DIR)?;
         Ok(Some(started))
     } else if changed {
         output::err(&format!("    restarting {unit} for the new configuration"));
         let started = now();
         systemd::restart(unit).await?;
+        restarted(STATE_DIR)?;
         Ok(Some(started))
     } else {
         Ok(None)
@@ -545,6 +571,20 @@ mod tests {
         assert_eq!(kept_version(dir.path()), None);
         keep_version(dir.path()).unwrap();
         assert_eq!(kept_version(dir.path()).as_deref(), Some(ZEATEND_VERSION));
+    }
+
+    #[test]
+    fn a_restart_stays_owed_until_the_service_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let state = state.to_str().unwrap();
+        assert!(!restart_owed(state));
+        owe_restart(state).unwrap();
+        // An apply that stops here leaves the marker for the next run.
+        assert!(restart_owed(state));
+        restarted(state).unwrap();
+        assert!(!restart_owed(state));
+        restarted(state).unwrap();
     }
 
     #[test]

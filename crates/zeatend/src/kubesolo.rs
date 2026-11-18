@@ -14,7 +14,10 @@ use zeatend_plan::config::Config;
 use zeatend_plan::kubesolo::{ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, STATE_DIR, UNIT};
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
 
-use crate::apply::{changed_files, check_host, kept_version, read_record, show_checks};
+use crate::apply::{
+    changed_files, check_host, kept_version, owe_restart, read_record, restart_owed, restarted,
+    show_checks,
+};
 use crate::{InstallError, output, render};
 
 /// The `KubeSolo` release of a plan.
@@ -40,7 +43,7 @@ async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
     let changed = changed_files(plan.host_files.iter());
     if let Some(changes) = &mut plan.changes {
         changes.set_host_files(changed);
-        changes.restart |= outdated;
+        changes.restart |= outdated || restart_owed(STATE_DIR);
     }
     Ok(plan)
 }
@@ -156,12 +159,17 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
     .await?;
     fs::set_permissions(kubectl, Permissions::from_mode(0o755)).map_err(io(kubectl))?;
 
-    let mut changed = false;
+    let outdated = binary_outdated(Path::new(BINARY), &solo.version).await;
+    let changed =
+        outdated || restart_owed(STATE_DIR) || !changed_files(plan.host_files.iter()).is_empty();
+    if changed {
+        owe_restart(STATE_DIR)?;
+    }
     for file in &plan.host_files {
-        changed |= files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
+        files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
     crate::apply::load_apparmor_profile(plan.host_files.iter()).await?;
-    if binary_outdated(Path::new(BINARY), &solo.version).await {
+    if outdated {
         let download = &solo.download;
         let dir = PathBuf::from(STATE_DIR)
             .join("downloads")
@@ -179,7 +187,6 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         let source = unpacked.join("kubesolo");
         files::install(&source, Path::new(BINARY), 0o755)?;
         fs::remove_dir_all(&unpacked).map_err(io(&unpacked))?;
-        changed = true;
     }
     if changed {
         systemd::daemon_reload().await?;
@@ -193,6 +200,7 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         output::err(&format!("    restarting {UNIT} for the new configuration"));
         systemd::restart(UNIT).await?;
     }
+    restarted(STATE_DIR)?;
     Ok(())
 }
 

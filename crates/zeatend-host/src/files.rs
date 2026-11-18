@@ -70,6 +70,18 @@ pub fn install(source: &Path, dest: &Path, mode: u32) -> Result<(), HostError> {
     fs::rename(&temp, dest).map_err(HostError::io(dest))
 }
 
+/// Removes the file at `path`. A missing file is not an error.
+///
+/// # Errors
+///
+/// When it exists and cannot be removed.
+pub fn remove(path: &Path) -> Result<(), HostError> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(HostError::io(path)(e)),
+        _ => Ok(()),
+    }
+}
+
 /// Sets `mode` on the regular files in `dir` whose names end with `suffix`. Returns how many
 /// changed.
 ///
