@@ -2,4 +2,5 @@
 
 What `zeatend` does to the host: reading facts, preflight checks, verified downloads, files,
 systemd and `kubectl`. Each operation is small and safe to repeat, so an interrupted `apply`
-resumes by running again.
+resumes by running again. `progress` holds the events an install prints, and `journal` reads
+them back from the systemd journal.

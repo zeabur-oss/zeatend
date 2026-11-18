@@ -25,6 +25,13 @@ Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to
   run again.
 
+On a host with systemd, `apply` runs the install in the transient unit
+`zeatend-install-<id>.service` and shows its progress. When the SSH session ends, the install goes
+on. Run `sudo zeatend apply` again to follow it: while an install unit runs, `apply` shows that
+unit's progress from the journal and starts nothing new. `journalctl -u 'zeatend-install-*'` has the
+full output. `apply --foreground` runs the install in the same process instead, and `apply --json`
+prints the progress as JSON lines.
+
 A configuration with a `join` section joins this host to an existing K3s or RKE2 cluster:
 
 ```yaml
