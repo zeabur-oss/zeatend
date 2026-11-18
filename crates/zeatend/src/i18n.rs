@@ -61,8 +61,11 @@ impl Lang {
 
     /// The language that `get`, a lookup of environment variables, asks for.
     ///
-    /// The language comes from `LC_ALL`, then `LC_MESSAGES`, then `LANG`, as the C library reads
-    /// them: an empty variable counts as unset. Chinese needs a terminal that draws it: the
+    /// The locale comes from `LC_ALL`, then `LC_MESSAGES`, then `LANG`, as the C library reads
+    /// them: an empty variable counts as unset. As in GNU gettext, `LANGUAGE`, a list such as
+    /// `zh_TW:en`, wins over the locale unless the locale is `C` or `POSIX`: the first entry
+    /// zeatend has messages for is the language, and English if there is none. Chinese needs a
+    /// terminal that draws it: the
     /// character set from `LC_ALL`, `LC_CTYPE` or `LANG` must be UTF-8, and `TERM` must not be
     /// `linux` (the Linux console font has no CJK glyphs). Otherwise the language is English.
     fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
@@ -71,9 +74,16 @@ impl Lang {
                 .into_iter()
                 .find_map(|name| get(name).filter(|v| !v.is_empty()))
         };
-        let lang = first(["LC_ALL", "LC_MESSAGES", "LANG"])
-            .and_then(|value| Self::from_locale(&value))
-            .unwrap_or(Self::En);
+        let lang = match first(["LC_ALL", "LC_MESSAGES", "LANG"]).as_deref() {
+            None | Some("C" | "POSIX") => Self::En,
+            Some(locale) => get("LANGUAGE")
+                .filter(|list| !list.is_empty())
+                .map_or_else(
+                    || Self::from_locale(locale),
+                    |list| list.split(':').find_map(Self::from_locale),
+                )
+                .unwrap_or(Self::En),
+        };
         if lang == Self::En {
             return lang;
         }
@@ -207,6 +217,29 @@ mod tests {
         assert_eq!(env(&[("LC_ALL", ""), ("LANG", "zh_TW.UTF-8")]), Lang::ZhTw);
         assert_eq!(env(&[("LANG", "fr_FR.UTF-8")]), Lang::En);
         assert_eq!(env(&[]), Lang::En);
+    }
+
+    #[test]
+    fn language_wins_over_the_locale_unless_the_locale_is_c() {
+        let utf8 = ("LANG", "en_US.UTF-8");
+        assert_eq!(env(&[utf8, ("LANGUAGE", "zh_TW:en")]), Lang::ZhTw);
+        // Entries without messages are skipped.
+        assert_eq!(env(&[utf8, ("LANGUAGE", "fr:zh_CN")]), Lang::ZhCn);
+        // No entry has messages: English, not the locale's language.
+        assert_eq!(
+            env(&[("LANG", "zh_TW.UTF-8"), ("LANGUAGE", "fr:de")]),
+            Lang::En
+        );
+        assert_eq!(
+            env(&[("LANG", "zh_TW.UTF-8"), ("LANGUAGE", "")]),
+            Lang::ZhTw
+        );
+        assert_eq!(env(&[("LANG", "C"), ("LANGUAGE", "zh_TW")]), Lang::En);
+        assert_eq!(env(&[("LANGUAGE", "zh_TW")]), Lang::En);
+        assert_eq!(
+            env(&[("LC_ALL", "C.UTF-8"), ("LANGUAGE", "zh_TW")]),
+            Lang::ZhTw
+        );
     }
 
     #[test]

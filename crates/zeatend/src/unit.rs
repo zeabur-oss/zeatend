@@ -21,8 +21,9 @@ const PREFIX: &str = "zeatend-install-";
 /// The environment variables the unit gets from this process. A unit does not get the
 /// session's environment: downloads need the proxy, and the locale and `TERM` choose the language
 /// of the progress (see [`crate::i18n`]).
-const PASSED_ENV: [&str; 13] = [
+const PASSED_ENV: [&str; 14] = [
     "LANG",
+    "LANGUAGE",
     "LC_ALL",
     "LC_CTYPE",
     "LC_MESSAGES",
