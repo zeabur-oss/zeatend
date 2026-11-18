@@ -71,7 +71,7 @@ pub enum Followed {
 }
 
 /// Passes each line the unit wrote, from its first one, to `on_line` as it arrives, with
-/// `journalctl --unit=<unit> --follow --output=json`.
+/// `journalctl --unit=<unit> --follow --output=json --all`.
 ///
 /// `journalctl --follow` does not end with the unit, so this asks `systemctl is-active` every two
 /// seconds. When the unit no longer runs, it reads the rest of the journal after the last entry
@@ -95,6 +95,8 @@ pub async fn follow(
             &format!("--unit={unit}"),
             "--follow",
             "--output=json",
+            // Without it, a field longer than 4096 bytes reads as `null`.
+            "--all",
             "--lines=all",
             "--no-pager",
         ])
@@ -134,7 +136,7 @@ pub async fn follow(
 
     // What the unit wrote after the last line read above.
     let unit_arg = format!("--unit={unit}");
-    let mut args = vec![unit_arg.as_str(), "--output=json", "--no-pager"];
+    let mut args = vec![unit_arg.as_str(), "--output=json", "--all", "--no-pager"];
     let after = cursor.as_ref().map(|c| format!("--after-cursor={c}"));
     args.extend(after.as_deref());
     let rest = cmd::run("journalctl", &args, None).await?;
