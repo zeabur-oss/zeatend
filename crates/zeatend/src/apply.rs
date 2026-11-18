@@ -224,8 +224,8 @@ pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: b
             Status::Warn => "warn",
             Status::Fail => "FAIL",
         };
-        output::err(&format!(
-            "    {mark} {:<18} {}",
+        output::note(&format!(
+            "{mark} {:<18} {}",
             check.name.label(),
             check.detail
         ));
@@ -384,15 +384,15 @@ pub(crate) async fn install_cluster(
             .map_or(0, |d| d.as_secs())
     };
     if !systemd::is_active(unit).await {
-        output::err(&format!(
-            "    starting {unit}; the first start takes a few minutes"
+        output::note(&format!(
+            "starting {unit}; the first start takes a few minutes"
         ));
         let started = now();
         systemd::enable_now(unit).await?;
         restarted(STATE_DIR)?;
         Ok(Some(started))
     } else if changed {
-        output::err(&format!("    restarting {unit} for the new configuration"));
+        output::note(&format!("restarting {unit} for the new configuration"));
         let started = now();
         systemd::restart(unit).await?;
         restarted(STATE_DIR)?;
@@ -424,13 +424,13 @@ async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallE
         } else {
             dir.join(&d.file)
         };
-        output::err(&format!("    {}", d.url));
+        output::note(&d.url);
         let actual = download::fetch(
             &agent,
             &d.url,
             &dest,
             d.sha256.as_deref(),
-            &mut output::Meter::new(),
+            &mut output::Meter,
         )
         .await?;
         if cluster.checksums.as_ref() == Some(d) {
