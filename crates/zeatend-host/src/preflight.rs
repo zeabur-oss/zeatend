@@ -1,11 +1,12 @@
-//! Checks before anything is changed. The checks produce data; an interface words a [`Finding`].
+//! Checks of the host: before `apply` changes anything, and by `doctor` on a host with a cluster.
+//! The checks produce data; an interface words a [`Finding`].
 
 use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 
 use serde::Serialize;
-use zeatend_plan::cluster::{PortUse, Rancher};
+use zeatend_plan::cluster::{Distribution, PortUse, Rancher};
 use zeatend_plan::kubesolo;
 
 use crate::{cmd, systemd};
@@ -16,9 +17,9 @@ use crate::{cmd, systemd};
 pub enum Status {
     /// Fine.
     Pass,
-    /// Worth reading; does not stop `apply`.
+    /// Worth reading; does not stop `apply`. A warning in `doctor`.
     Warn,
-    /// Stops `apply`.
+    /// Stops `apply`. Critical in `doctor`.
     Fail,
 }
 
@@ -46,6 +47,18 @@ pub enum Topic {
     DiskEncryption,
     /// No Docker, and the FORWARD policy lets Pods out.
     Docker,
+    /// The service of K3s, RKE2 or `KubeSolo` runs.
+    Service,
+    /// The Kubernetes API answers.
+    Api,
+    /// The install record of zeatend.
+    InstallRecord,
+    /// The nodes are Ready.
+    Nodes,
+    /// Each kubelet keeps memory from pods for the OS.
+    KubeletReserves,
+    /// The API server stores Secrets encrypted.
+    SecretsEncryption,
 }
 
 /// Files of another Kubernetes distribution.
@@ -64,6 +77,15 @@ pub struct BusyPort {
     pub port: u16,
     /// What the node needs it for.
     pub purpose: PortUse,
+}
+
+/// The memory a node's kubelet keeps from pods.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Kept {
+    /// The node.
+    pub name: String,
+    /// Its memory less what pods may take, in MiB.
+    pub mib: u64,
 }
 
 /// How a check came out, with what it found. Serialized with the outcome's key as `code` and
@@ -207,6 +229,103 @@ pub enum Finding {
     /// The iptables FORWARD policy is DROP.
     #[serde(rename = "docker.forwardDrop")]
     ForwardDrop,
+    /// K3s, RKE2 and `KubeSolo` are not installed.
+    #[serde(rename = "service.none")]
+    NotInstalled,
+    /// The service runs.
+    #[serde(rename = "service.running")]
+    ServiceRunning {
+        /// The systemd unit.
+        unit: &'static str,
+    },
+    /// The service does not run.
+    #[serde(rename = "service.stopped")]
+    ServiceStopped {
+        /// The systemd unit.
+        unit: &'static str,
+    },
+    /// The API server answers `/readyz`.
+    #[serde(rename = "api.ready")]
+    ApiReady,
+    /// The API server does not answer `/readyz`.
+    #[serde(rename = "api.down")]
+    ApiDown {
+        /// The systemd unit that runs it.
+        unit: &'static str,
+    },
+    /// zeatend recorded the install.
+    #[serde(rename = "record.ok")]
+    RecordOk {
+        /// The version of the zeatend that wrote the record.
+        zeatend_version: String,
+    },
+    /// No install record could be read.
+    #[serde(rename = "record.missing")]
+    RecordMissing {
+        /// Where the record is kept.
+        path: String,
+    },
+    /// A newer zeatend wrote the record.
+    #[serde(rename = "record.newer")]
+    RecordNewer {
+        /// The version of the zeatend that wrote it.
+        zeatend_version: String,
+    },
+    /// Every node is Ready.
+    #[serde(rename = "nodes.ready")]
+    NodesReady {
+        /// The nodes.
+        names: Vec<String>,
+    },
+    /// Some nodes are not Ready.
+    #[serde(rename = "nodes.notReady")]
+    NodesNotReady {
+        /// The nodes that are not Ready.
+        names: Vec<String>,
+        /// The command that shows why.
+        command: String,
+    },
+    /// The nodes could not be read.
+    #[serde(rename = "nodes.unknown")]
+    NodesUnknown {
+        /// Why.
+        reason: String,
+    },
+    /// Every kubelet keeps at least the memory the OS needs from pods.
+    #[serde(rename = "reserves.set")]
+    ReservesSet {
+        /// The nodes.
+        names: Vec<String>,
+    },
+    /// Kubelets that keep less memory from pods than the OS needs: no `system-reserved` or
+    /// `kube-reserved`, at most a hard eviction threshold.
+    #[serde(rename = "reserves.low")]
+    ReservesLow {
+        /// The nodes, with what each keeps.
+        nodes: Vec<Kept>,
+        /// What the OS needs at idle, in MiB.
+        needed_mib: u64,
+        /// The cluster's distribution, which says how to set them.
+        distribution: Distribution,
+    },
+    /// A node reports no memory that can be read.
+    #[serde(rename = "reserves.unknown")]
+    ReservesUnknown {
+        /// The node.
+        name: String,
+    },
+    /// The API server writes Secrets encrypted.
+    #[serde(rename = "secrets.encrypted")]
+    SecretsEncrypted {
+        /// The provider it writes them with, such as `aescbc`.
+        provider: String,
+    },
+    /// The API server writes Secrets as they are.
+    #[serde(rename = "secrets.plain")]
+    SecretsPlain {
+        /// The distribution.
+        distribution: Rancher,
+    },
 }
 
 impl Finding {
@@ -231,6 +350,20 @@ impl Finding {
             | Self::CryptNo { .. }
             | Self::CryptUnknown { .. } => Topic::DiskEncryption,
             Self::DockerNone | Self::DockerFound { .. } | Self::ForwardDrop => Topic::Docker,
+            Self::NotInstalled | Self::ServiceRunning { .. } | Self::ServiceStopped { .. } => {
+                Topic::Service
+            }
+            Self::ApiReady | Self::ApiDown { .. } => Topic::Api,
+            Self::RecordOk { .. } | Self::RecordMissing { .. } | Self::RecordNewer { .. } => {
+                Topic::InstallRecord
+            }
+            Self::NodesReady { .. } | Self::NodesNotReady { .. } | Self::NodesUnknown { .. } => {
+                Topic::Nodes
+            }
+            Self::ReservesSet { .. } | Self::ReservesLow { .. } | Self::ReservesUnknown { .. } => {
+                Topic::KubeletReserves
+            }
+            Self::SecretsEncrypted { .. } | Self::SecretsPlain { .. } => Topic::SecretsEncryption,
         }
     }
 
@@ -247,7 +380,13 @@ impl Finding {
             | Self::PortsFree { .. }
             | Self::DiskOk { .. }
             | Self::CryptYes { .. }
-            | Self::DockerNone => Status::Pass,
+            | Self::DockerNone
+            | Self::ServiceRunning { .. }
+            | Self::ApiReady
+            | Self::RecordOk { .. }
+            | Self::NodesReady { .. }
+            | Self::ReservesSet { .. }
+            | Self::SecretsEncrypted { .. } => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -257,7 +396,11 @@ impl Finding {
             | Self::DiskUnknown { .. }
             | Self::DiskTight { .. }
             | Self::CryptNo { .. }
-            | Self::CryptUnknown { .. } => Status::Warn,
+            | Self::CryptUnknown { .. }
+            | Self::RecordMissing { .. }
+            | Self::RecordNewer { .. }
+            | Self::ReservesLow { .. }
+            | Self::ReservesUnknown { .. } => Status::Warn,
             Self::RootNo
             | Self::SystemdNo
             | Self::PortsBusy { .. }
@@ -265,7 +408,13 @@ impl Finding {
             | Self::CryptRequiredPlain { .. }
             | Self::CryptRequiredUnknown { .. }
             | Self::DockerFound { .. }
-            | Self::ForwardDrop => Status::Fail,
+            | Self::ForwardDrop
+            | Self::NotInstalled
+            | Self::ServiceStopped { .. }
+            | Self::ApiDown { .. }
+            | Self::NodesNotReady { .. }
+            | Self::NodesUnknown { .. }
+            | Self::SecretsPlain { .. } => Status::Fail,
         }
     }
 }
@@ -399,7 +548,7 @@ pub async fn run(options: Options) -> Vec<Check> {
 
 /// Whether this process runs as root.
 #[must_use]
-fn is_root() -> bool {
+pub fn is_root() -> bool {
     effective_uid(&fs::read_to_string("/proc/self/status").unwrap_or_default()) == Some(0)
 }
 

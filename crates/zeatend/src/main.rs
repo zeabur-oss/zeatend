@@ -2,6 +2,7 @@
 //! benchmark, from one configuration file.
 
 mod apply;
+mod doctor;
 mod i18n;
 mod join;
 mod kubesolo;
@@ -66,6 +67,9 @@ enum Command {
         #[arg(long)]
         delete_volumes: bool,
     },
+    /// Check this host and the cluster on it. Exits 0 when all is well, 1 for a warning, 2 for
+    /// something critical and 3 when the checks cannot run, as monitoring plugins do.
+    Doctor,
 }
 
 /// Why zeatend stopped.
@@ -87,6 +91,9 @@ enum InstallError {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if matches!(cli.command, Command::Doctor) {
+        return doctor::run(&cli.config).await;
+    }
     if let Command::Apply { json: true, .. } = cli.command {
         output::print_json_events();
     }
@@ -148,7 +155,7 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
                 kubesolo::apply(&config).await
             }
         }
-        (Command::Uninstall { .. }, _) => Ok(()),
+        (Command::Uninstall { .. } | Command::Doctor, _) => Ok(()),
     }
 }
 
@@ -165,7 +172,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_apply_and_uninstall_are_the_commands() {
+    fn plan_apply_uninstall_and_doctor_are_the_commands() {
         let cli = Cli::try_parse_from(["zeatend", "plan", "--json"]).unwrap();
         assert!(matches!(cli.command, Command::Plan { json: true }));
         assert_eq!(cli.config, PathBuf::from(load::DEFAULT_CONFIG));
@@ -206,7 +213,9 @@ mod tests {
                 delete_volumes: false
             }
         ));
-        for removed in ["doctor", "node", "gui", "manifests"] {
+        let cli = Cli::try_parse_from(["zeatend", "doctor"]).unwrap();
+        assert!(matches!(cli.command, Command::Doctor));
+        for removed in ["node", "gui", "manifests"] {
             assert!(
                 Cli::try_parse_from(["zeatend", removed]).is_err(),
                 "{removed}"

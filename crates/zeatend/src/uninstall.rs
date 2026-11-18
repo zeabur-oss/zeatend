@@ -45,16 +45,16 @@ const LONGHORN: &str = "/var/lib/longhorn";
 
 /// A cluster node on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Node {
-    distribution: Distribution,
+pub(crate) struct Node {
+    pub(crate) distribution: Distribution,
     /// `KubeSolo` is a server.
-    role: Role,
+    pub(crate) role: Role,
     /// It joined a cluster that another host runs.
     joined: bool,
 }
 
 impl Node {
-    const fn new(distribution: Distribution, role: Role, joined: bool) -> Self {
+    pub(crate) const fn new(distribution: Distribution, role: Role, joined: bool) -> Self {
         Self {
             distribution,
             role,
@@ -241,7 +241,7 @@ struct Uninstall {
 }
 
 /// The nodes on a host where `exists` says which paths exist.
-fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
+pub(crate) fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
     let mut nodes = Vec::new();
     if exists(K3S_UNINSTALL) {
         // `join` takes no K3s server today; a server with a join token joined all the same.
@@ -390,7 +390,7 @@ fn at(root: &Path, path: &str) -> PathBuf {
     root.join(path.trim_start_matches('/'))
 }
 
-fn exists(root: &Path, path: &str) -> bool {
+pub(crate) fn exists(root: &Path, path: &str) -> bool {
     at(root, path).symlink_metadata().is_ok()
 }
 

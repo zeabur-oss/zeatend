@@ -63,7 +63,7 @@ pub struct KubeletReserves {
 }
 
 /// The OS at idle.
-const OS_IDLE_MIB: u64 = 350;
+pub const OS_IDLE_MIB: u64 = 350;
 /// Twice the kubelet's default of 100Mi, so it evicts before the kernel has to kill.
 const EVICTION_HARD_MIB: u64 = 200;
 /// Catches memory that grows slowly before it reaches the hard threshold, on a host with room for

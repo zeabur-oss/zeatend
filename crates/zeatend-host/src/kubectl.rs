@@ -108,6 +108,20 @@ impl Kubectl {
             })
     }
 
+    /// Gets an API path as JSON, such as `/api/v1/nodes`.
+    ///
+    /// # Errors
+    ///
+    /// When the request fails or the answer is not JSON.
+    pub async fn raw(&self, path: &str) -> Result<Value, HostError> {
+        let raw = format!("--raw={path}");
+        let out = self.run(&["get", &raw], None).await?;
+        serde_json::from_str(&out).map_err(|e| HostError::Parse {
+            what: format!("kubectl get --raw {path}"),
+            reason: e.to_string(),
+        })
+    }
+
     /// `kubectl wait` with the given arguments.
     ///
     /// # Errors
