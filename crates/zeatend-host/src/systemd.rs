@@ -142,8 +142,16 @@ pub async fn run_transient(transient: &Transient<'_>) -> Result<(), HostError> {
     ];
     args.extend(env_args.iter().map(String::as_str));
     args.push("--");
-    args.extend_from_slice(transient.command);
+    let command: Vec<String> = transient.command.iter().map(|a| literal(a)).collect();
+    args.extend(command.iter().map(String::as_str));
     cmd::run("systemd-run", &args, None).await.map(drop)
+}
+
+/// `arg` with each `$` doubled. systemd expands `$NAME` and `${NAME}` in the command of a
+/// transient service as in `ExecStart=`, where `$$` is a literal `$` (systemd.service(5),
+/// "Command lines"). `--expand-environment=no` does the same but needs systemd 254.
+fn literal(arg: &str) -> String {
+    arg.replace('$', "$$")
 }
 
 /// A transient service for [`run_transient`].
@@ -157,13 +165,23 @@ pub struct Transient<'a> {
     pub dir: &'a str,
     /// `NAME=value` entries for the unit's environment, which starts empty.
     pub env: &'a [String],
-    /// The program and its arguments.
+    /// The program and its arguments, passed as they are.
     pub command: &'a [&'a str],
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dollar_signs_stay_literal() {
+        assert_eq!(literal("/root/${CLUSTER}.yaml"), "/root/$${CLUSTER}.yaml");
+        assert_eq!(literal("a$b$$c"), "a$$b$$$$c");
+        assert_eq!(
+            literal("/etc/zeatend/config.yaml"),
+            "/etc/zeatend/config.yaml"
+        );
+    }
 
     #[test]
     fn running_states() {
