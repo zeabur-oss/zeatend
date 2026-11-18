@@ -88,6 +88,39 @@ impl From<Rancher> for Distribution {
     }
 }
 
+/// What a node or the server uses a port for. Serialized as a camelCase key; an interface words
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PortUse {
+    /// The Kubernetes API server.
+    KubernetesApi,
+    /// The K3s server, where the Kubernetes API and the K3s supervisor share one port.
+    K3sApiAndSupervisor,
+    /// The RKE2 supervisor, which nodes join through.
+    Rke2Supervisor,
+    /// The kubelet.
+    Kubelet,
+    /// etcd's clients.
+    EtcdClient,
+    /// etcd's peers.
+    EtcdPeer,
+    /// HTTP ingress: `ServiceLB` holds it on every node for a `LoadBalancer` Service.
+    ServiceLbHttp,
+    /// HTTPS ingress: `ServiceLB` holds it on every node for a `LoadBalancer` Service.
+    ServiceLbHttps,
+    /// HTTP ingress: `KubeSolo` gives a `LoadBalancer` Service this host's address.
+    KubeSoloHttp,
+    /// HTTPS ingress: `KubeSolo` gives a `LoadBalancer` Service this host's address.
+    KubeSoloHttps,
+    /// `KubeSolo`'s node-assignment webhook.
+    KubeSoloWebhook,
+    /// flannel's VXLAN, between pods on different K3s nodes.
+    FlannelVxlan,
+    /// Canal's VXLAN, between pods on different RKE2 nodes.
+    CanalVxlan,
+}
+
 /// K3s or RKE2: the distributions that run the same server, take workers and read
 /// `/etc/rancher/<name>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -354,10 +387,10 @@ impl Rancher {
 
     /// The UDP port pods on different nodes reach each other through, and what uses it.
     #[must_use]
-    pub const fn vxlan(self) -> (u16, &'static str) {
+    pub const fn vxlan(self) -> (u16, PortUse) {
         match self {
-            Self::K3s => (8472, "flannel VXLAN"),
-            Self::Rke2 => (8472, "Canal VXLAN"),
+            Self::K3s => (8472, PortUse::FlannelVxlan),
+            Self::Rke2 => (8472, PortUse::CanalVxlan),
         }
     }
 
@@ -367,24 +400,15 @@ impl Rancher {
     /// each node that holds them as host ports, so a request to any node's address reaches the
     /// ingress. A worker runs no API server or supervisor.
     #[must_use]
-    pub fn node_ports(self, server: bool) -> Vec<(u16, &'static str)> {
-        let mut ports = vec![
-            (
-                80,
-                "HTTP ingress: ServiceLB holds it on every node for a LoadBalancer Service",
-            ),
-            (
-                443,
-                "HTTPS ingress: ServiceLB holds it on every node for a LoadBalancer Service",
-            ),
-        ];
+    pub fn node_ports(self, server: bool) -> Vec<(u16, PortUse)> {
+        let mut ports = vec![(80, PortUse::ServiceLbHttp), (443, PortUse::ServiceLbHttps)];
         if server {
-            ports.push((6443, "Kubernetes API"));
+            ports.push((6443, PortUse::KubernetesApi));
             if self == Self::Rke2 {
-                ports.push((9345, "RKE2 supervisor"));
+                ports.push((9345, PortUse::Rke2Supervisor));
             }
         }
-        ports.push((10250, "kubelet"));
+        ports.push((10250, PortUse::Kubelet));
         ports
     }
 

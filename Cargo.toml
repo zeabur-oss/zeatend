@@ -31,6 +31,8 @@ tar = { version = "0.4", default-features = false }
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "signal", "time", "sync", "io-util"] }
+# Terminal cells of a string, so CJK text lines up.
+unicode-width = { version = "0.2", default-features = false }
 
 # Lint policy (see CONTRIBUTING.md), shared with Zeabur Builder and Zeabur Identity.
 # Everything is `warn` so work in progress still compiles; CI runs with `-D warnings`.

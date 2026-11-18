@@ -88,7 +88,7 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
     }
     output::line(render::join_plan(&plan).trim_end());
     if apply::show_checks(node(&plan), config.host.require_encrypted_disk).await {
-        output::line("apply stops until what failed is fixed.");
+        output::line(crate::i18n::messages().apply_stops);
     }
     Ok(())
 }

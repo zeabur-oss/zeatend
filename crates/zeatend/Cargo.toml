@@ -17,6 +17,7 @@ serde_json.workspace = true
 serde-saphyr = { workspace = true, features = ["serialize"] }
 thiserror.workspace = true
 tokio.workspace = true
+unicode-width.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

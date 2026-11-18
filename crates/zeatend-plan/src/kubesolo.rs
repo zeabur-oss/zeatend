@@ -7,7 +7,7 @@
 use serde_json::{Value, json};
 
 use crate::PlanError;
-use crate::cluster::HostFile;
+use crate::cluster::{HostFile, PortUse};
 use crate::tuning::HostTuning;
 
 /// The systemd unit.
@@ -41,19 +41,13 @@ pub const MIN_MEMORY_MIB: u64 = 1400;
 
 /// The TCP ports `KubeSolo` listens on, and what for.
 #[must_use]
-pub fn ports() -> Vec<(u16, &'static str)> {
+pub fn ports() -> Vec<(u16, PortUse)> {
     vec![
-        (
-            80,
-            "HTTP ingress: KubeSolo gives a LoadBalancer Service this host's address",
-        ),
-        (
-            443,
-            "HTTPS ingress: KubeSolo gives a LoadBalancer Service this host's address",
-        ),
-        (6443, "Kubernetes API"),
-        (10250, "kubelet"),
-        (10443, "KubeSolo's node-assignment webhook"),
+        (80, PortUse::KubeSoloHttp),
+        (443, PortUse::KubeSoloHttps),
+        (6443, PortUse::KubernetesApi),
+        (10250, PortUse::Kubelet),
+        (10443, PortUse::KubeSoloWebhook),
     ]
 }
 

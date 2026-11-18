@@ -18,9 +18,16 @@ use crate::{InstallError, output};
 /// The start of the name of an install unit; the rest is its id and `.service`.
 pub(crate) const PREFIX: &str = "zeatend-install-";
 
-/// The environment variables the unit gets from this process. A unit starts with an empty
-/// environment, and downloads need the proxy.
-const PASSED_ENV: [&str; 8] = [
+/// The environment variables the unit gets from this process. A unit does not get the
+/// session's environment: downloads need the proxy, and the locale and `TERM` choose the language
+/// of the progress (see [`crate::i18n`]).
+const PASSED_ENV: [&str; 14] = [
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "TERM",
     "http_proxy",
     "https_proxy",
     "no_proxy",

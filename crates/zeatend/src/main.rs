@@ -2,6 +2,7 @@
 //! benchmark, from one configuration file.
 
 mod apply;
+mod i18n;
 mod join;
 mod kubesolo;
 mod load;

@@ -1860,6 +1860,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "unicode-width",
  "zeatend-host",
  "zeatend-plan",
 ]
