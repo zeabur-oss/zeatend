@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
 use crate::config::Config;
-use crate::pins::{self, CALICO, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
+use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::record::{Changes, Record};
+use crate::tuning::{HostTuning, MemoryTier};
 use crate::{PlanError, kubesolo, node_name};
 
 /// The label and field manager on everything zeatend creates.
@@ -38,6 +39,10 @@ pub struct Facts {
     /// [`cluster::apparmor_profile`].
     #[serde(skip)]
     pub apparmor_restricts_unconfined: bool,
+    /// The K3s configuration on the host turns flannel off: an earlier install gave the cluster a
+    /// network plugin of its own, which zeatend keeps. See [`crate::k3s::runs_own_network`].
+    #[serde(default)]
+    pub k3s_own_network: bool,
 }
 
 impl Facts {
@@ -72,9 +77,10 @@ pub struct Plan {
     pub node_name: String,
     /// The release and its downloads.
     pub release: Release,
-    /// Calico's manifest, applied once K3s's API answers; `None` on RKE2, which brings Canal, and
-    /// on `KubeSolo`.
-    pub calico: Option<Download>,
+    /// The host's memory class.
+    pub memory_tier: MemoryTier,
+    /// What the host's memory class sets.
+    pub tuning: HostTuning,
     /// Files written before the distribution starts.
     #[serde(skip)]
     pub host_files: Vec<HostFile>,
@@ -205,16 +211,19 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
     let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
     let mut warnings = Vec::new();
-    let (release, calico, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
+    let memory_tier = MemoryTier::of(facts.memory_mib);
+    let tuning = HostTuning::new(config.distribution, memory_tier);
+    let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
         memory(rancher, facts, &mut warnings)?;
         let cluster = cluster_plan(rancher, config.version(), &facts.arch, &mut warnings)?;
         let mut files = rancher.server_files(&cluster::Options {
             tls_san: config.host.tls_san.clone(),
+            tuning,
+            own_network: rancher == Rancher::K3s && facts.k3s_own_network,
         });
         files.push(rancher.node_name_file(&node_name));
         files.extend(rancher.node_ip_file(&facts.node_ips));
-        let calico = (rancher == Rancher::K3s).then(|| CALICO.manifest().into());
-        (Release::Cluster(cluster), calico, files)
+        (Release::Cluster(cluster), files)
     } else {
         let arch = facts.arch.as_str();
         let no_release = || PlanError::Arch(arch.to_owned());
@@ -243,8 +252,9 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             node_name: node_name.clone(),
             node_ip: facts.node_ips.first().cloned(),
             tls_san: config.host.tls_san.clone(),
+            tuning,
         });
-        (Release::KubeSolo(solo), None, files)
+        (Release::KubeSolo(solo), files)
     };
     host_files.extend(facts.apparmor_profile());
     let changes = facts
@@ -256,7 +266,8 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         distribution: config.distribution,
         node_name,
         release,
-        calico,
+        memory_tier,
+        tuning,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         host_files,
         changes,
@@ -396,6 +407,7 @@ mod tests {
             node_ips: vec!["10.0.0.5".to_owned()],
             record: None,
             apparmor_restricts_unconfined: false,
+            k3s_own_network: false,
         }
     }
 
@@ -425,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn k3s_is_the_default_with_calico_and_the_pinned_release() {
+    fn k3s_is_the_default_with_flannel_and_the_pinned_release() {
         let plan = plan(&config("{}"), &facts()).unwrap();
         assert_eq!(plan.distribution, Distribution::K3s);
         let Release::Cluster(cluster) = &plan.release else {
@@ -435,7 +447,7 @@ mod tests {
         assert_eq!(cluster.distribution, Rancher::K3s);
         assert_eq!(cluster.version, K3S.version);
         assert!(cluster.install_script.is_some());
-        assert!(plan.calico.is_some());
+        assert_eq!(plan.memory_tier, MemoryTier::Standard);
         assert_eq!(
             plan.host_file_paths,
             [
@@ -444,10 +456,16 @@ mod tests {
                 "/etc/rancher/k3s/admission.yaml",
                 "/etc/rancher/k3s/config.yaml",
                 "/var/lib/rancher/k3s/server/manifests/zeabur-cis.yaml",
+                "/etc/systemd/system/k3s.service.d/zeatend-memory.conf",
                 "/var/lib/rancher/k3s/server/manifests/zeatend-servicelb-policy.yaml",
                 "/etc/rancher/k3s/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/k3s/config.yaml.d/20-node-ip.yaml",
             ]
+        );
+        assert!(
+            plan.host_files
+                .iter()
+                .all(|f| !f.content.contains("flannel-backend"))
         );
         assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
         assert_eq!(plan.changes, None);
@@ -460,7 +478,6 @@ mod tests {
             &facts(),
         )
         .unwrap();
-        assert_eq!(plan.calico, None);
         let Release::Cluster(cluster) = &plan.release else {
             panic!("not a cluster");
         };
@@ -482,7 +499,6 @@ mod tests {
         assert_eq!(solo.version, KUBESOLO.version);
         assert!(solo.download.file.ends_with("-linux-arm64-offline.tar.gz"));
         assert_eq!(solo.kubectl.file, "kubectl");
-        assert_eq!(plan.calico, None);
         assert_eq!(
             plan.host_file_paths,
             [kubesolo::CONFIG_FILE, kubesolo::UNIT_FILE]
@@ -498,7 +514,7 @@ mod tests {
     #[test]
     fn a_first_install_must_fit_and_an_upgrade_is_warned() {
         let small = Facts {
-            memory_mib: 1024,
+            memory_mib: 1800,
             ..facts()
         };
         let err = plan(&config("{}"), &small).unwrap_err();
@@ -532,5 +548,41 @@ mod tests {
                 "{distribution}"
             );
         }
+    }
+
+    #[test]
+    fn k3s_fits_on_2_gib_with_the_small_tier() {
+        let two_gib = Facts {
+            memory_mib: 1950,
+            ..facts()
+        };
+        let plan = plan(&config("{}"), &two_gib).unwrap();
+        assert_eq!(plan.memory_tier, MemoryTier::Small);
+        assert_eq!(plan.tuning.gomemlimit_mib, Some(600));
+        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        assert!(
+            plan.host_file_paths
+                .contains(&crate::k3s::MEMORY_DROP_IN.to_owned())
+        );
+    }
+
+    #[test]
+    fn an_existing_k3s_network_is_kept_and_rke2_ignores_it() {
+        let own = Facts {
+            k3s_own_network: true,
+            ..facts()
+        };
+        let config_file = |plan: &Plan, path: &str| {
+            plan.host_files
+                .iter()
+                .find(|f| f.path == path)
+                .unwrap()
+                .content
+                .clone()
+        };
+        let k3s = plan(&config("{}"), &own).unwrap();
+        assert!(config_file(&k3s, crate::k3s::CONFIG_FILE).contains("flannel-backend: none\n"));
+        let rke2 = plan(&config("distribution: rke2\n"), &own).unwrap();
+        assert!(!config_file(&rke2, "/etc/rancher/rke2/config.yaml").contains("flannel-backend"));
     }
 }

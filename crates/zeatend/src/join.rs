@@ -110,7 +110,6 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
     )?;
     let started = apply::install_cluster(&ClusterInstall {
         cluster: &plan.cluster,
-        calico: None,
         files: &plan.host_files,
         server: plan.role == Role::Server,
         changed,

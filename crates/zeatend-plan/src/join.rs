@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::cluster::{self, HostFile, Rancher};
 use crate::config::{JoinConfig, Role};
 use crate::plan::{ClusterPlan, Facts, Warning, cluster_plan, warning};
+use crate::tuning::{HostTuning, MemoryTier};
 use crate::{PlanError, node_name};
 
 /// Connections timed to the server's join port.
@@ -346,12 +347,16 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &mut warnings,
     )?;
 
+    let tuning = HostTuning::new(distribution.into(), MemoryTier::of(facts.facts.memory_mib));
     let (mut host_files, unit) = match join.role {
-        Role::Worker => (distribution.agent_files(), distribution.agent_unit()),
+        Role::Worker => (distribution.agent_files(&tuning), distribution.agent_unit()),
         Role::Server if !distribution.takes_servers() => return Err(PlanError::SecondServer),
         Role::Server => (
             distribution.server_files(&cluster::Options {
                 tls_san: config.host.tls_san.clone(),
+                tuning,
+                // Only RKE2 takes a second server, and it always runs Canal.
+                own_network: false,
             }),
             distribution.server_unit(),
         ),
@@ -437,6 +442,7 @@ mod tests {
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
                 record: None,
                 apparmor_restricts_unconfined: false,
+                k3s_own_network: false,
             },
             rtt_us: rtt_us.to_vec(),
             ports: vec![(9345, true), (6443, true), (10250, false)],

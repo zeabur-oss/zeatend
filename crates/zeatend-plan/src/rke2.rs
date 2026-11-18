@@ -13,6 +13,7 @@
 use crate::cluster::{
     AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, yaml_list,
 };
+use crate::tuning::HostTuning;
 
 /// Where the tarball installs.
 pub const PREFIX: &str = "/usr/local";
@@ -44,13 +45,16 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
 /// The files of a worker: the kernel parameters and an agent `config.yaml` with the server's
 /// kubelet settings. The agent takes no server keys, so this is not the server's file.
 #[must_use]
-pub fn agent_files() -> Vec<HostFile> {
+pub fn agent_files(tuning: &HostTuning) -> Vec<HostFile> {
     vec![
         RKE2.sysctl(),
         HostFile {
             path: format!("{}/config.yaml", RKE2.layout().config_dir),
             mode: 0o600,
-            content: format!("{HEADER}profile: cis\n{}", RKE2.kubelet_args(false)),
+            content: format!(
+                "{HEADER}profile: cis\n{}",
+                Rancher::kubelet_args(tuning, false)
+            ),
         },
     ]
 }
@@ -65,7 +69,7 @@ fn config(options: &Options) -> String {
          enable-servicelb: true\n\
          audit-policy-file: /etc/rancher/rke2/audit-policy.yaml\n",
     );
-    out.push_str(&RKE2.kubelet_args(true));
+    out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     out.push_str(&control_plane_requests());
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
@@ -87,12 +91,26 @@ pub const ETCD_USER: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::Distribution;
+    use crate::tuning::MemoryTier;
+
+    fn tuning() -> HostTuning {
+        HostTuning::new(Distribution::Rke2, MemoryTier::Standard)
+    }
+
+    fn options(tls_san: Vec<String>) -> Options {
+        Options {
+            tls_san,
+            tuning: tuning(),
+            own_network: false,
+        }
+    }
 
     #[test]
     fn kubelet_serves_only_the_allowed_ciphers_and_closes_idle_streams() {
-        let options = Options { tls_san: vec![] };
+        let options = options(Vec::new());
         let server = host_files(&options);
-        for content in [&server[2].content, &agent_files()[1].content] {
+        for content in [&server[2].content, &agent_files(&tuning())[1].content] {
             let parsed: serde_json::Value = serde_saphyr::from_str(content).unwrap();
             let args: Vec<&str> = parsed["kubelet-arg"]
                 .as_array()
@@ -118,9 +136,7 @@ mod tests {
 
     #[test]
     fn the_server_files_parse_as_yaml() {
-        let options = Options {
-            tls_san: vec!["k8s.example.com".to_owned()],
-        };
+        let options = options(vec!["k8s.example.com".to_owned()]);
         let files = host_files(&options);
         for file in files.iter().filter(|f| {
             !f.path.starts_with(MANIFESTS_DIR)
@@ -137,27 +153,20 @@ mod tests {
 
     #[test]
     fn storage_is_left_to_the_zeabur_catalog() {
-        let files = host_files(&Options {
-            tls_san: Vec::new(),
-        });
+        let files = host_files(&options(Vec::new()));
         assert!(files.iter().all(|f| !f.path.starts_with(MANIFESTS_DIR)));
         assert!(
-            agent_files()
+            agent_files(&tuning())
                 .iter()
                 .all(|f| !f.path.starts_with(MANIFESTS_DIR))
         );
-        assert!(
-            config(&Options {
-                tls_san: Vec::new()
-            })
-            .contains("ingress-controller: none\n")
-        );
+        assert!(config(&options(Vec::new())).contains("ingress-controller: none\n"));
     }
 
     #[test]
     fn agents_keep_the_kubelet_settings_without_server_keys() {
-        let server = host_files(&Options { tls_san: vec![] });
-        let agent = agent_files();
+        let server = host_files(&options(Vec::new()));
+        let agent = agent_files(&tuning());
         assert_eq!(agent[0], server[0]);
         assert!(agent[1].content.contains("profile: cis\n"));
         assert!(agent[1].content.contains("pod-max-pids=4096"));
@@ -166,13 +175,14 @@ mod tests {
 
     #[test]
     fn workers_reserve_the_os_and_servers_also_ask_less_for_etcd() {
-        let server = host_files(&Options { tls_san: vec![] });
+        let server = host_files(&options(Vec::new()));
         let server: serde_json::Value = serde_saphyr::from_str(&server[2].content).unwrap();
         assert_eq!(
             server["control-plane-resource-requests"],
             serde_json::json!(["etcd-memory=256Mi", "kube-controller-manager-memory=128Mi"])
         );
-        let agent: serde_json::Value = serde_saphyr::from_str(&agent_files()[1].content).unwrap();
+        let agent: serde_json::Value =
+            serde_saphyr::from_str(&agent_files(&tuning())[1].content).unwrap();
         let args = agent["kubelet-arg"].as_array().unwrap();
         assert!(args.contains(&serde_json::json!("system-reserved=memory=350Mi")));
         assert!(args.contains(&serde_json::json!(

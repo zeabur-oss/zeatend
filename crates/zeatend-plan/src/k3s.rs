@@ -1,4 +1,4 @@
-//! Host files written before K3s first starts, and the Calico manifest it runs.
+//! Host files written before K3s first starts.
 //!
 //! K3s hardened as its CIS guide says (<https://docs.k3s.io/security/hardening-guide>), to match
 //! what RKE2's `cis` profile does by itself: Secrets encrypted at rest, Pod Security `restricted`
@@ -6,15 +6,21 @@
 //! log, `NodeRestriction` and `EventRateLimit`, and the kubelet and service-account flags. The
 //! default level applies only to a namespace without its own Pod Security labels, as on RKE2.
 //!
-//! Calico replaces flannel and K3s's own policy controller, so `NetworkPolicies` behave as on
-//! RKE2's Canal: the same Calico release enforces them.
+//! The pod network is K3s's packaged flannel with VXLAN, and K3s's embedded network policy
+//! controller, from kube-router, enforces `NetworkPolicies`
+//! (<https://docs.k3s.io/networking/networking-services#network-policy-controller>). Each node
+//! runs its own controller in `k3s server` or `k3s agent`.
+//!
+//! A known gap, measured on K3s v1.36.6+k3s1: the controller covers a new Pod about one second
+//! after it is Ready. A Pod in another namespace can open a connection in that second, and the
+//! connection stays open after the rules arrive, because the controller accepts packets of
+//! established connections. New connections after that second are refused.
 
 use serde_json::{Value, json};
 
-use crate::PlanError;
 use crate::cluster::{AUDIT_POLICY, HEADER, HostFile, Options, Rancher, yaml_list};
-use crate::pins::CALICO;
 use crate::plan::MANAGER;
+use crate::tuning::HostTuning;
 
 /// The binary; `install.sh` expects it here.
 pub const BINARY: &str = "/usr/local/bin/k3s";
@@ -22,8 +28,11 @@ pub const BINARY: &str = "/usr/local/bin/k3s";
 pub const AUDIT_LOG_DIR: &str = "/var/lib/rancher/k3s/server/logs";
 /// Manifests K3s applies on every start and keeps applied.
 pub const MANIFESTS_DIR: &str = "/var/lib/rancher/k3s/server/manifests";
-/// The pod network: K3s's default cluster CIDR, which Calico's pool must match.
-pub const POD_CIDR: &str = "10.42.0.0/16";
+/// The main configuration file of a server or a worker.
+pub const CONFIG_FILE: &str = "/etc/rancher/k3s/config.yaml";
+/// The drop-in that sets `GOMEMLIMIT` for `k3s server`. `install.sh` writes the unit and its
+/// environment file again on every install, so the limit is in a drop-in of its own.
+pub const MEMORY_DROP_IN: &str = "/etc/systemd/system/k3s.service.d/zeatend-memory.conf";
 
 const K3S: Rancher = Rancher::K3s;
 
@@ -44,7 +53,7 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
             content: ADMISSION.to_owned(),
         },
         HostFile {
-            path: format!("{dir}/config.yaml"),
+            path: CONFIG_FILE.to_owned(),
             mode: 0o600,
             content: config(options),
         },
@@ -54,19 +63,43 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
             content: system_objects(),
         },
     ]
+    .into_iter()
+    .chain(memory_drop_in(&options.tuning))
+    .collect()
+}
+
+/// The unit drop-in with the `GOMEMLIMIT` of `tuning`, if it has one.
+fn memory_drop_in(tuning: &HostTuning) -> Option<HostFile> {
+    tuning.environment().map(|environment| HostFile {
+        path: MEMORY_DROP_IN.to_owned(),
+        mode: 0o644,
+        content: format!(
+            "# Written by zeatend; `zeatend apply` writes it again.\n[Service]\n{environment}"
+        ),
+    })
+}
+
+/// Whether the K3s configuration `config` turns flannel off (`flannel-backend: none`).
+///
+/// An earlier install gave such a cluster a network plugin of its own, such as Calico. A file that
+/// does not parse runs flannel, as K3s would not start with it.
+#[must_use]
+pub fn runs_own_network(config: &str) -> bool {
+    serde_saphyr::from_str::<Value>(config)
+        .is_ok_and(|value| value.get("flannel-backend").and_then(Value::as_str) == Some("none"))
 }
 
 /// The files of a worker: the kernel parameters and the kubelet settings of the server.
 #[must_use]
-pub fn agent_files() -> Vec<HostFile> {
+pub fn agent_files(tuning: &HostTuning) -> Vec<HostFile> {
     vec![
         K3S.sysctl(),
         HostFile {
-            path: format!("{}/config.yaml", K3S.layout().config_dir),
+            path: CONFIG_FILE.to_owned(),
             mode: 0o600,
             content: format!(
                 "{HEADER}protect-kernel-defaults: true\n{}",
-                K3S.kubelet_args(false)
+                Rancher::kubelet_args(tuning, false)
             ),
         },
     ]
@@ -74,13 +107,19 @@ pub fn agent_files() -> Vec<HostFile> {
 
 fn config(options: &Options) -> String {
     let dir = K3S.layout().config_dir;
+    // An existing cluster keeps its network: changing it would cut off every pod.
+    let network = if options.own_network {
+        "# Kept from the earlier install: the cluster runs a network plugin of its own.\n\
+         flannel-backend: none\n\
+         disable-network-policy: true\n"
+    } else {
+        ""
+    };
     let mut out = format!(
         "{HEADER}protect-kernel-defaults: true\n\
          secrets-encryption: true\n\
          write-kubeconfig-mode: \"0600\"\n\
-         # Calico, applied by zeatend, takes the place of flannel and of K3s's policy controller.\n\
-         flannel-backend: none\n\
-         disable-network-policy: true\n\
+         {network}\
          kube-apiserver-arg:\n  \
            - enable-admission-plugins=NodeRestriction,EventRateLimit\n  \
            - admission-control-config-file={dir}/admission.yaml\n  \
@@ -93,7 +132,7 @@ fn config(options: &Options) -> String {
          kube-controller-manager-arg:\n  \
            - terminated-pod-gc-threshold=1000\n"
     );
-    out.push_str(&K3S.kubelet_args(true));
+    out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     // Traefik comes from the Zeabur catalog, which needs a newer chart with the Gateway API
     // provider, so the packaged one is off. The packaged local-path stays as the default storage
     // class. ServiceLB stays and gives an ingress ports 80 and 443.
@@ -193,64 +232,32 @@ fn policy(name: &str, namespace: &str, pods: &Value, ingress: &Value) -> Value {
     })
 }
 
-const VXLAN_CROSS_SUBNET: &str =
-    "            - name: CALICO_IPV4POOL_VXLAN\n              value: \"CrossSubnet\"\n";
-
-/// Calico's VXLAN manifest with K3s's pod network and the images pinned by digest.
-///
-/// Traffic between nodes always goes through VXLAN. With the manifest's `CrossSubnet`, a node
-/// reaches a pod on another node in its subnet from its own address instead of its tunnel
-/// address, and a `NetworkPolicy` that lets nodes in by their tunnel addresses does not match, so
-/// webhook calls and probes from the API server and kubelet time out.
-///
-/// IP forwarding in pods stays off, as with RKE2's Canal; `ServiceLB`'s pods turn it on with their
-/// own sysctl.
-///
-/// # Errors
-///
-/// When the manifest does not have the expected text, which a checked download always has.
-pub fn calico_manifest(manifest: &str) -> Result<String, PlanError> {
-    let mut out = manifest.to_owned();
-    let edits = [
-        (
-            "            # - name: CALICO_IPV4POOL_CIDR\n            #   value: \"192.168.0.0/16\"\n"
-                .to_owned(),
-            format!("            - name: CALICO_IPV4POOL_CIDR\n              value: \"{POD_CIDR}\"\n"),
-        ),
-        (
-            VXLAN_CROSS_SUBNET.to_owned(),
-            VXLAN_CROSS_SUBNET.replace("CrossSubnet", "Always"),
-        ),
-    ];
-    for (from, to) in edits
-        .into_iter()
-        .chain(CALICO.images.iter().map(|(tag, digest)| {
-            (
-                format!("image: {tag}\n"),
-                format!("image: {tag}@{digest}\n"),
-            )
-        }))
-    {
-        if !out.contains(&from) {
-            return Err(PlanError::Config(format!(
-                "Calico {} manifest: `{}` not found",
-                CALICO.version,
-                from.trim()
-            )));
-        }
-        out = out.replace(&from, &to);
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cluster::Distribution;
+    use crate::tuning::MemoryTier;
+
+    fn tuning(tier: MemoryTier) -> HostTuning {
+        HostTuning::new(Distribution::K3s, tier)
+    }
 
     fn options() -> Options {
         Options {
             tls_san: vec!["k8s.example.com".to_owned()],
+            tuning: tuning(MemoryTier::Small),
+            own_network: false,
         }
+    }
+
+    fn config_of(files: &[HostFile]) -> Value {
+        yaml(
+            &files
+                .iter()
+                .find(|f| f.path == CONFIG_FILE)
+                .unwrap()
+                .content,
+        )
     }
 
     fn yaml(content: &str) -> Value {
@@ -259,16 +266,9 @@ mod tests {
 
     #[test]
     fn the_server_is_hardened_as_the_k3s_cis_guide_says() {
-        let files = host_files(&options());
-        let config = files
-            .iter()
-            .find(|f| f.path == "/etc/rancher/k3s/config.yaml")
-            .unwrap();
-        let config = yaml(&config.content);
+        let config = config_of(&host_files(&options()));
         assert_eq!(config["protect-kernel-defaults"], true);
         assert_eq!(config["secrets-encryption"], true);
-        assert_eq!(config["disable-network-policy"], true);
-        assert_eq!(config["flannel-backend"], "none");
         let apiserver = config["kube-apiserver-arg"].as_array().unwrap();
         for arg in [
             "enable-admission-plugins=NodeRestriction,EventRateLimit",
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn agents_get_the_kubelet_settings_and_no_server_keys() {
-        let files = agent_files();
+        let files = agent_files(&tuning(MemoryTier::Standard));
         assert_eq!(files[0], K3S.sysctl());
         let config = yaml(&files[1].content);
         assert_eq!(config["protect-kernel-defaults"], true);
@@ -363,24 +363,73 @@ mod tests {
     }
 
     #[test]
-    fn calico_gets_the_pod_network_and_pinned_images_and_leaves_forwarding_off() {
-        let images: Vec<String> = CALICO
-            .images
-            .iter()
-            .map(|(tag, _)| format!("          image: {tag}\n"))
-            .collect();
-        let manifest = format!(
-            "{}            # - name: CALICO_IPV4POOL_CIDR\n            #   value: \"192.168.0.0/16\"\n{VXLAN_CROSS_SUBNET}",
-            images.concat()
-        );
-        let out = calico_manifest(&manifest).unwrap();
-        assert!(out.contains("value: \"10.42.0.0/16\""));
-        assert!(out.contains("- name: CALICO_IPV4POOL_VXLAN\n              value: \"Always\"\n"));
-        assert!(!out.contains("CrossSubnet"));
-        assert!(!out.contains("allow_ip_forwarding"));
-        for (tag, digest) in CALICO.images {
-            assert!(out.contains(&format!("image: {tag}@{digest}\n")));
+    fn a_new_cluster_runs_flannel_and_the_policy_controller() {
+        let config = config_of(&host_files(&options()));
+        assert!(config.get("flannel-backend").is_none());
+        assert!(config.get("disable-network-policy").is_none());
+        assert!(!runs_own_network(&serde_json::to_string(&config).unwrap()));
+    }
+
+    #[test]
+    fn a_cluster_with_its_own_network_keeps_it() {
+        let earlier =
+            "protect-kernel-defaults: true\nflannel-backend: none\ndisable-network-policy: true\n";
+        assert!(runs_own_network(earlier));
+        assert!(!runs_own_network("flannel-backend: vxlan\n"));
+        assert!(!runs_own_network("not: [yaml"));
+        let config = config_of(&host_files(&Options {
+            own_network: true,
+            ..options()
+        }));
+        assert_eq!(config["flannel-backend"], "none");
+        assert_eq!(config["disable-network-policy"], true);
+    }
+
+    #[test]
+    fn the_server_gets_its_reserves_and_gomemlimit_by_tier() {
+        for (tier, kube, soft, limit) in [
+            (
+                MemoryTier::Small,
+                "kube-reserved=memory=100Mi",
+                false,
+                "600MiB",
+            ),
+            (
+                MemoryTier::Standard,
+                "kube-reserved=memory=1530Mi",
+                true,
+                "1530MiB",
+            ),
+        ] {
+            let files = host_files(&Options {
+                tuning: tuning(tier),
+                ..options()
+            });
+            let config = config_of(&files);
+            let args = config["kubelet-arg"].as_array().unwrap();
+            assert!(
+                args.contains(&json!("system-reserved=memory=350Mi")),
+                "{tier:?}"
+            );
+            assert!(args.contains(&json!(kube)), "{tier:?}");
+            assert_eq!(
+                args.iter()
+                    .any(|a| a.as_str().unwrap().starts_with("eviction-soft=")),
+                soft,
+                "{tier:?}"
+            );
+            let drop_in = files.iter().find(|f| f.path == MEMORY_DROP_IN).unwrap();
+            assert!(
+                drop_in
+                    .content
+                    .contains(&format!("[Service]\nEnvironment=GOMEMLIMIT={limit}\n")),
+                "{tier:?}"
+            );
+            assert!(
+                agent_files(&tuning(tier))
+                    .iter()
+                    .all(|f| f.path != MEMORY_DROP_IN)
+            );
         }
-        assert!(calico_manifest("kind: DaemonSet\n").is_err());
     }
 }

@@ -129,52 +129,6 @@ pub fn k3s_install_script_url(version: &str) -> String {
     )
 }
 
-/// Calico, the network of a K3s cluster: the release RKE2's Canal carries, with VXLAN.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Calico {
-    /// `v3.32.2`.
-    pub version: &'static str,
-    /// SHA-256 of `manifests/calico-vxlan.yaml` at the release tag.
-    pub manifest_sha256: &'static str,
-    /// The images the manifest names by tag, and the digest each one is pinned to.
-    pub images: &'static [(&'static str, &'static str)],
-}
-
-/// The Calico release of a K3s cluster.
-pub const CALICO: Calico = Calico {
-    version: "v3.32.2",
-    manifest_sha256: "5aa751a909fdf761b58e97953ec92173018115b3ae405f4c9dfc475f54bf737f",
-    images: &[
-        (
-            "quay.io/calico/cni:v3.32.2",
-            "sha256:0ef740bc587f25565905adf1d1f61a7faff0d571c449c6bdd789feed743d3ef7",
-        ),
-        (
-            "quay.io/calico/node:v3.32.2",
-            "sha256:99b03fe91e8bfbcb153ae65ef4b701b24ce541ffdd74ff314eb041096008f7fd",
-        ),
-        (
-            "quay.io/calico/kube-controllers:v3.32.2",
-            "sha256:7870b67ebb13fabc3005252b44fe6e78b21635649bd3072b80afa1684b6565d0",
-        ),
-    ],
-};
-
-impl Calico {
-    /// The manifest.
-    #[must_use]
-    pub fn manifest(&self) -> Asset {
-        Asset {
-            url: format!(
-                "https://raw.githubusercontent.com/projectcalico/calico/{}/manifests/calico-vxlan.yaml",
-                self.version
-            ),
-            file: "calico-vxlan.yaml".to_owned(),
-            sha256: self.manifest_sha256,
-        }
-    }
-}
-
 /// A file of a GitHub release and its SHA-256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asset {
