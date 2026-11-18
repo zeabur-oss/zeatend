@@ -227,7 +227,7 @@ pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: b
         output::note(&format!(
             "{mark} {:<18} {}",
             check.name.label(),
-            check.detail
+            render::finding(&check.finding)
         ));
     }
     checks.iter().any(|c| c.status == Status::Fail)
