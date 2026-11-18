@@ -435,6 +435,15 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         }
         return Ok(());
     }
+    let mounts = fs::read_to_string("/proc/mounts").map_err(io("/proc/mounts"))?;
+    if let Some((mount, path)) = volume_mounts(&mounts, &plan.volumes, delete_volumes).first() {
+        return Err(InstallError::Message(format!(
+            "nothing was removed: the volumes in {path} are on the file system mounted at \
+             {mount}. The uninstall unmounts it when it stops the node, and then cannot keep or \
+             remove the volumes on it. Unmount it, and run uninstall again: the volumes stay on \
+             that file system"
+        )));
+    }
     output::line(describe(&plan, &remove, &volumes, delete_volumes, kept_config).trim_end());
     if !yes {
         confirm()?;
@@ -545,7 +554,7 @@ async fn stop_kubesolo() -> Result<(), InstallError> {
         kill_cgroup(Path::new(cgroup)).await?;
     }
     let mounts = fs::read_to_string("/proc/mounts").map_err(io("/proc/mounts"))?;
-    for mount in mounts_under(&mounts, kubesolo::DATA_DIR) {
+    for mount in runtime_mounts(&mounts) {
         cmd::run("umount", &["--lazy", &mount], None).await?;
     }
     Ok(())
@@ -603,13 +612,66 @@ fn cgroup_pids(cgroup: &Path) -> Vec<String> {
     pids
 }
 
-/// The mount points in `mounts` (as in `/proc/mounts`) at or under `dir`, deepest first.
-fn mounts_under(mounts: &str, dir: &str) -> Vec<String> {
-    let prefix = format!("{dir}/");
-    let mut found: Vec<String> = mounts
+/// The mounts of `KubeSolo`'s containers and pods under its data directory, deepest first: not
+/// the data directory itself and not its local-path volumes, whose data the uninstall keeps or
+/// removes first.
+fn runtime_mounts(mounts: &str) -> Vec<String> {
+    let storage = mounts_under(mounts, KUBESOLO_LOCAL_PATH);
+    mounts_under(mounts, kubesolo::DATA_DIR)
+        .into_iter()
+        .filter(|m| m != kubesolo::DATA_DIR && !storage.contains(m))
+        .collect()
+}
+
+/// The mount points that hold volumes this uninstall moves or removes, each with its volume.
+///
+/// The killall scripts of K3s and RKE2 unmount all under their data directory, and a rename does
+/// not move a mount point or go to another file system. So a stashed volume must not be a mount
+/// point, have one in it, or be on one between it and its stash. With `delete_volumes`, no volume
+/// may be a mount point or have one in it, else its data stays on that file system.
+fn volume_mounts(
+    mounts: &str,
+    volumes: &[Volume],
+    delete_volumes: bool,
+) -> Vec<(String, &'static str)> {
+    let mut found = Vec::new();
+    for volume in volumes {
+        if volume.stash.is_none() && !delete_volumes {
+            continue;
+        }
+        let mut points = mounts_under(mounts, volume.path);
+        if let Some(stash) = volume.stash {
+            let top = Path::new(stash).parent();
+            let all = mount_points(mounts);
+            points.extend(
+                Path::new(volume.path)
+                    .ancestors()
+                    .skip(1)
+                    .take_while(|dir| Some(*dir) != top)
+                    .filter_map(|dir| dir.to_str())
+                    .filter(|dir| all.iter().any(|m| m == dir))
+                    .map(str::to_owned),
+            );
+        }
+        found.extend(points.into_iter().map(|m| (m, volume.path)));
+    }
+    found
+}
+
+/// The mount points in `mounts`, as in `/proc/mounts`.
+fn mount_points(mounts: &str) -> Vec<String> {
+    mounts
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1))
         .map(unescape_mount)
+        .collect()
+}
+
+/// The mount points in `mounts` (as in `/proc/mounts`) at or under `dir`, deepest first.
+fn mounts_under(mounts: &str, dir: &str) -> Vec<String> {
+    let prefix = format!("{dir}/");
+    let mut found: Vec<String> = mount_points(mounts)
+        .into_iter()
         .filter(|m| m == dir || m.starts_with(&prefix))
         .collect();
     found.sort_by(|a, b| b.cmp(a));
@@ -990,6 +1052,55 @@ mod tests {
                 "/var/lib/kubesolo",
             ]
         );
+    }
+
+    #[test]
+    fn kubesolo_unmounts_only_its_runtime_mounts() {
+        let mounts = "overlay /var/lib/kubesolo/containerd/a/rootfs overlay rw 0 0\n\
+                      /dev/sdb1 /var/lib/kubesolo/local-path-storage ext4 rw 0 0\n\
+                      /dev/sdb2 /var/lib/kubesolo/local-path-storage/pvc-1 ext4 rw 0 0\n\
+                      /dev/sda2 /var/lib/kubesolo ext4 rw 0 0\n";
+        assert_eq!(
+            runtime_mounts(mounts),
+            ["/var/lib/kubesolo/containerd/a/rootfs"]
+        );
+    }
+
+    #[test]
+    fn volumes_on_their_own_file_system_stop_the_uninstall() {
+        let k3s = Node::new(Distribution::K3s, Role::Server, false).volumes();
+        let solo = Node::new(Distribution::KubeSolo, Role::Server, false).volumes();
+        let runtime = "overlay /run/k3s/containerd/a/rootfs overlay rw 0 0\n\
+                       /dev/sda1 /var/lib/rancher ext4 rw 0 0\n\
+                       /dev/sdc1 /var/lib/longhorn ext4 rw 0 0\n";
+        // A disk for all of /var/lib/rancher holds the stash too; Longhorn's disk stays mounted.
+        assert_eq!(volume_mounts(runtime, &k3s, false), Vec::new());
+        assert_eq!(
+            volume_mounts(runtime, &k3s, true),
+            [("/var/lib/longhorn".to_owned(), LONGHORN)]
+        );
+        for mount in [
+            "/var/lib/rancher/k3s",
+            "/var/lib/rancher/k3s/storage",
+            "/var/lib/rancher/k3s/storage/pvc-1",
+        ] {
+            let mounts = format!("/dev/sdb1 {mount} ext4 rw 0 0\n");
+            for delete in [false, true] {
+                assert_eq!(
+                    volume_mounts(&mounts, &k3s, delete),
+                    [(mount.to_owned(), K3S_LOCAL_PATH)],
+                    "{mount}"
+                );
+            }
+        }
+        for mount in ["/var/lib/kubesolo", "/var/lib/kubesolo/local-path-storage"] {
+            let mounts = format!("/dev/sdb1 {mount} ext4 rw 0 0\n");
+            assert_eq!(
+                volume_mounts(&mounts, &solo, false),
+                [(mount.to_owned(), KUBESOLO_LOCAL_PATH)],
+                "{mount}"
+            );
+        }
     }
 
     #[test]
