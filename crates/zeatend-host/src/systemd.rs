@@ -120,31 +120,45 @@ fn unit_names(listed: &str) -> Vec<String> {
 /// It runs `systemd-run --no-block --collect`: the unit's stdout and stderr go to the journal,
 /// and systemd removes the unit when it ends, also when it fails.
 ///
-/// `env` holds `NAME=value` entries for the unit's environment, which starts empty.
-///
 /// # Errors
 ///
 /// When `systemd-run` fails, for example because a unit of that name exists.
-pub async fn run_transient(
-    unit: &str,
-    description: &str,
-    env: &[String],
-    command: &[&str],
-) -> Result<(), HostError> {
-    let unit_arg = format!("--unit={unit}");
-    let description_arg = format!("--description={description}");
-    let env_args: Vec<String> = env.iter().map(|e| format!("--setenv={e}")).collect();
+pub async fn run_transient(transient: &Transient<'_>) -> Result<(), HostError> {
+    let unit_arg = format!("--unit={}", transient.unit);
+    let description_arg = format!("--description={}", transient.description);
+    let dir_arg = format!("--working-directory={}", transient.dir);
+    let env_args: Vec<String> = transient
+        .env
+        .iter()
+        .map(|e| format!("--setenv={e}"))
+        .collect();
     let mut args = vec![
         unit_arg.as_str(),
         description_arg.as_str(),
+        dir_arg.as_str(),
         "--no-block",
         "--collect",
         "--quiet",
     ];
     args.extend(env_args.iter().map(String::as_str));
     args.push("--");
-    args.extend_from_slice(command);
+    args.extend_from_slice(transient.command);
     cmd::run("systemd-run", &args, None).await.map(drop)
+}
+
+/// A transient service for [`run_transient`].
+#[derive(Debug, Clone, Copy)]
+pub struct Transient<'a> {
+    /// The unit name, ending in `.service`.
+    pub unit: &'a str,
+    /// The unit's description.
+    pub description: &'a str,
+    /// The absolute working directory of the command.
+    pub dir: &'a str,
+    /// `NAME=value` entries for the unit's environment, which starts empty.
+    pub env: &'a [String],
+    /// The program and its arguments.
+    pub command: &'a [&'a str],
 }
 
 #[cfg(test)]

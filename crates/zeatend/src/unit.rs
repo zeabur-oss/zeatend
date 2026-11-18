@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use zeatend_host::journal::{self, Followed};
 use zeatend_host::progress::Event;
-use zeatend_host::systemd;
+use zeatend_host::{random, systemd};
 
 use crate::{InstallError, output};
 
@@ -57,21 +57,23 @@ pub(crate) const fn command<'a>(zeatend: &'a str, config: &'a str) -> [&'a str; 
 
 /// Starts `zeatend apply` in a new unit and returns the unit's name.
 async fn start(config: &Path) -> Result<String, InstallError> {
-    let id = SystemTime::now()
+    let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let unit = format!("{PREFIX}{id}.service");
+    // `journalctl --unit` shows every run of a unit name, so no two installs share one.
+    let unit = format!("{PREFIX}{secs}-{}.service", random::hex(6)?);
     let zeatend = std::env::current_exe()
         .map_err(|e| InstallError::Message(format!("finding the zeatend binary: {e}")))?;
-    // The unit starts in `/`.
-    let config = std::path::absolute(config)
-        .map_err(|e| InstallError::Message(format!("{}: {e}", config.display())))?;
+    // Relative paths in the configuration, such as `tokenFile`, stay relative to this directory.
+    let dir = std::env::current_dir()
+        .map_err(|e| InstallError::Message(format!("the working directory: {e}")))?;
+    let config = dir.join(config);
     let utf8 = |path: &Path| {
         path.to_str()
             .map(str::to_owned)
             .ok_or_else(|| InstallError::Message(format!("{}: not UTF-8", path.display())))
     };
-    let (zeatend, config) = (utf8(&zeatend)?, utf8(&config)?);
+    let (zeatend, config, dir) = (utf8(&zeatend)?, utf8(&config)?, utf8(&dir)?);
     let env: Vec<String> = PASSED_ENV
         .iter()
         .filter_map(|name| {
@@ -80,7 +82,14 @@ async fn start(config: &Path) -> Result<String, InstallError> {
                 .map(|value| format!("{name}={value}"))
         })
         .collect();
-    systemd::run_transient(&unit, "zeatend apply", &env, &command(&zeatend, &config)).await?;
+    systemd::run_transient(&systemd::Transient {
+        unit: &unit,
+        description: "zeatend apply",
+        dir: &dir,
+        env: &env,
+        command: &command(&zeatend, &config),
+    })
+    .await?;
     output::note(&format!(
         "The install runs in {unit}. If this session ends, run `sudo zeatend apply` to follow it again."
     ));
