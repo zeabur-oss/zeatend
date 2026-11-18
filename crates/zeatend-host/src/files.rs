@@ -144,27 +144,6 @@ pub fn read_secret(path: &Path) -> Result<Vec<u8>, HostError> {
     Ok(bytes)
 }
 
-/// 64 random bytes as 128 hexadecimal digits.
-///
-/// # Errors
-///
-/// When the operating system's random number generator fails.
-pub fn random_hex() -> Result<String, HostError> {
-    random_bytes(64).map(hex::encode)
-}
-
-/// `n` random bytes.
-///
-/// # Errors
-///
-/// When the operating system's random number generator fails.
-pub fn random_bytes(n: usize) -> Result<Vec<u8>, HostError> {
-    let mut bytes = vec![0_u8; n];
-    // AWS-LC reads getrandom(2), which waits until the kernel pool is seeded.
-    aws_lc_rs::rand::fill(&mut bytes).map_err(|_unspecified| HostError::Random)?;
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,8 +162,6 @@ mod tests {
         assert!(read_secret(&path).is_err());
         assert!(write(&path, 0o600, b"y").unwrap());
         assert_eq!(read_secret(&path).unwrap(), b"y");
-        assert_eq!(random_hex().unwrap().len(), 128);
-        assert_eq!(random_bytes(24).unwrap().len(), 24);
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub mod files;
 pub mod kubectl;
 pub mod network;
 pub mod preflight;
+pub mod random;
 pub mod systemd;
 pub mod token;
 

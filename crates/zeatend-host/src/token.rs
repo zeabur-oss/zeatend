@@ -6,9 +6,7 @@
 //! expires. The K3s and RKE2 supervisors accept it on the agent routes only, so it cannot join a
 //! server.
 
-use std::fs;
-use std::io::Read as _;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -44,11 +42,11 @@ impl BootstrapToken {
     ///
     /// # Errors
     ///
-    /// When `/dev/urandom` cannot be read.
+    /// When the operating system's random number generator fails.
     pub fn generate() -> Result<Self, HostError> {
         Ok(Self {
-            id: random_chars(6)?,
-            secret: random_chars(16)?,
+            id: crate::random::lower_alnum(6)?,
+            secret: crate::random::lower_alnum(16)?,
         })
     }
 
@@ -100,27 +98,6 @@ pub fn parse_ttl(text: &str) -> Option<Duration> {
         .then_some(ttl)
 }
 
-/// `n` characters of `[a-z0-9]`, without modulo bias.
-fn random_chars(n: usize) -> Result<String, HostError> {
-    const ALPHABET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut file = fs::File::open("/dev/urandom").map_err(HostError::io("/dev/urandom"))?;
-    let mut out = String::with_capacity(n);
-    let mut byte = [0_u8; 1];
-    while out.len() < n {
-        file.read_exact(&mut byte)
-            .map_err(HostError::io("/dev/urandom"))?;
-        // 252 = 7 × 36: bytes above it would favour the first letters.
-        if let Some(&c) = byte
-            .first()
-            .filter(|&&b| b < 252)
-            .and_then(|&b| ALPHABET.get(usize::from(b % 36)))
-        {
-            out.push(char::from(c));
-        }
-    }
-    Ok(out)
-}
-
 /// The CA hash of a join token, as k3s computes it for a CA file of one certificate: the SHA-256
 /// of the PEM bytes exactly as stored. `None` for a bundle, whose hash is that of its root's DER.
 #[must_use]
@@ -142,38 +119,21 @@ pub fn hash_of_token(token: &str) -> Option<&str> {
 /// `now + ttl` in RFC 3339, UTC, to the second.
 #[must_use]
 pub fn expires(ttl: Duration) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    rfc3339((now + ttl).as_secs())
+    let ttl = i64::try_from(ttl.as_secs()).unwrap_or(i64::MAX);
+    rfc3339(jiff::Timestamp::now().as_second().saturating_add(ttl))
 }
 
-/// Seconds since the epoch in RFC 3339, UTC.
+/// Seconds since the epoch in RFC 3339, UTC. Seconds outside the years -9999 to 9999 are
+/// clamped to them.
 #[must_use]
-pub fn rfc3339(secs: u64) -> String {
-    let days = secs / 86_400;
-    let rem = secs % 86_400;
-    let (y, m, d) = civil(days);
-    format!(
-        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
-        rem / 3600,
-        rem % 3600 / 60,
-        rem % 60
-    )
-}
-
-/// Days since 1970-01-01 to (year, month, day); Howard Hinnant's `civil_from_days`.
-const fn civil(days: u64) -> (u64, u64, u64) {
-    let z = days + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
+pub fn rfc3339(secs: i64) -> String {
+    let secs = secs.clamp(
+        jiff::Timestamp::MIN.as_second(),
+        jiff::Timestamp::MAX.as_second(),
+    );
+    jiff::Timestamp::from_second(secs)
+        .unwrap_or_default()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -240,5 +200,6 @@ mod tests {
         assert_eq!(rfc3339(0), "1970-01-01T00:00:00Z");
         assert_eq!(rfc3339(951_782_400), "2000-02-29T00:00:00Z");
         assert_eq!(rfc3339(1_792_713_600 + 3_661), "2026-10-23T01:01:01Z");
+        assert_eq!(rfc3339(i64::MAX), "9999-12-31T23:59:59Z");
     }
 }

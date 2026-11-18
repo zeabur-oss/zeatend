@@ -44,11 +44,13 @@ pub async fn read() -> Result<Facts, HostError> {
 /// random without one.
 fn host_hex() -> Result<String, HostError> {
     use sha2::{Digest as _, Sha256};
-    let hex = match fs::read_to_string("/etc/machine-id") {
-        Ok(id) if !id.trim().is_empty() => hex::encode(Sha256::digest(id.trim())),
-        _ => crate::files::random_hex()?,
-    };
-    Ok(hex.chars().take(6).collect())
+    match fs::read_to_string("/etc/machine-id") {
+        Ok(id) if !id.trim().is_empty() => Ok(hex::encode(Sha256::digest(id.trim()))
+            .chars()
+            .take(6)
+            .collect()),
+        _ => crate::random::hex(6),
+    }
 }
 
 /// The name K3s, RKE2 or `KubeSolo` already gives this node: the `node-name` of its
