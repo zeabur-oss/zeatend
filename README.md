@@ -17,6 +17,9 @@ host:
   tlsSan: [k8s.example.com]
 ```
 
+K3s (`v1.37.2+k3s1`) and RKE2 (`v1.37.2+rke2r1`) install Kubernetes 1.37. KubeSolo `v1.3.0` installs
+Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
+
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to
