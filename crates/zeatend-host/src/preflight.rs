@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use zeatend_plan::cluster::Rancher;
-use zeatend_plan::kubesolo;
+use zeatend_plan::{kubesolo, rke2};
 
 use crate::{cmd, systemd};
 
@@ -182,6 +182,29 @@ impl Node {
             Self::KubeSolo => kubesolo::DATA_DIR,
         }
     }
+
+    /// Where the node keeps secrets or data: the root file system, the data directory, the
+    /// configuration with its tokens and kubeconfigs, and the volumes of RKE2's local-path
+    /// storage.
+    fn secret_paths(self) -> Vec<&'static str> {
+        let mut paths = vec!["/", self.data_dir()];
+        match self {
+            Self::Server(d) | Self::Agent(d) => {
+                paths.push(d.layout().config_dir);
+                if d == Rancher::Rke2 {
+                    paths.push(rke2::STORAGE_DIR);
+                }
+            }
+            Self::KubeSolo => {
+                paths.extend(
+                    [kubesolo::CONFIG_FILE, kubesolo::KUBECONFIG]
+                        .iter()
+                        .filter_map(|f| Path::new(f).parent()?.to_str()),
+                );
+            }
+        }
+        paths
+    }
 }
 
 /// Files left by Kubernetes distributions, and the id of the distribution that owns each, which
@@ -218,7 +241,7 @@ pub async fn run(options: Options) -> Vec<Check> {
         checks.push(ports(options.node));
     }
     checks.push(disk_space(options.node.data_dir()).await);
-    checks.push(encryption(options.node.data_dir(), options.require_encrypted_disk).await);
+    checks.push(encryption(options.node, options.require_encrypted_disk).await);
     checks
 }
 
@@ -565,13 +588,54 @@ fn available_kib(df: &str) -> Option<u64> {
     df.lines().nth(1)?.split_whitespace().nth(3)?.parse().ok()
 }
 
-async fn encryption(data_dir: &str, required: bool) -> Check {
-    let target = existing_or_var_lib(data_dir);
-    let found = disk_encryption(target).await;
+/// The nearest of `path` and its parents that exists, so a directory the install has yet to make
+/// is checked on the file system it will be on.
+fn existing_ancestor(path: &str) -> &str {
+    Path::new(path)
+        .ancestors()
+        .find(|p| p.exists())
+        .and_then(Path::to_str)
+        .unwrap_or("/")
+}
+
+/// The first path that is not encrypted, or else the first that could not be told, or else
+/// `Encrypted`, naming the paths.
+fn least_encrypted(found: &[(&'static str, Encryption)]) -> (Encryption, Vec<&'static str>) {
+    for worst in [Encryption::Plain, Encryption::Unknown] {
+        if let Some((path, _)) = found.iter().find(|(_, e)| *e == worst) {
+            return (worst, vec![*path]);
+        }
+    }
+    (
+        Encryption::Encrypted,
+        found.iter().map(|(path, _)| *path).collect(),
+    )
+}
+
+/// Whether every file system `node` keeps secrets or data on is encrypted; each one is read once.
+async fn encryption(node: Node, required: bool) -> Check {
+    let mut sources: Vec<String> = Vec::new();
+    let mut found = Vec::new();
+    for path in node.secret_paths() {
+        let Some(source) = mount_source(existing_ancestor(path)).await else {
+            found.push((path, Encryption::Unknown));
+            continue;
+        };
+        if !sources.contains(&source) {
+            found.push((path, device_encryption(&source).await));
+            sources.push(source);
+        }
+    }
+    let (found, paths) = least_encrypted(&found);
+    let target = paths.first().copied().unwrap_or("/");
     let (status, detail, code) = match (found, required) {
         (Encryption::Encrypted, _) => (
             Status::Pass,
-            format!("{target} is on a dm-crypt device"),
+            format!(
+                "{} {} on dm-crypt devices",
+                and_list(&paths.iter().map(|p| (*p).to_owned()).collect::<Vec<_>>()),
+                if paths.len() == 1 { "is" } else { "are" }
+            ),
             Code::CryptYes,
         ),
         (Encryption::Plain, true) => (
@@ -601,24 +665,30 @@ async fn encryption(data_dir: &str, required: bool) -> Check {
             Code::CryptUnknown,
         ),
     };
-    check(Topic::DiskEncryption, status, detail, code).values(&[target])
+    let values = if found == Encryption::Encrypted {
+        paths
+    } else {
+        vec![target]
+    };
+    check(Topic::DiskEncryption, status, detail, code).values(&values)
 }
 
-/// Whether the device holding `path` has a dm-crypt device beneath it.
-#[must_use]
-async fn disk_encryption(path: &str) -> Encryption {
-    let Ok(source) = cmd::run(
+/// The device of the file system that holds `path`; `None` when it cannot be read.
+async fn mount_source(path: &str) -> Option<String> {
+    let source = cmd::run(
         "findmnt",
         &["--noheadings", "--output", "SOURCE", "--target", path],
         None,
     )
     .await
-    else {
-        return Encryption::Unknown;
-    };
+    .ok()?;
     let source = source.trim();
     // Btrfs subvolumes read as `/dev/sda2[/@]`.
-    let device = source.split('[').next().unwrap_or(source);
+    Some(source.split('[').next().unwrap_or(source).to_owned())
+}
+
+/// Whether `device` has a dm-crypt device beneath it.
+async fn device_encryption(device: &str) -> Encryption {
     match cmd::run(
         "lsblk",
         &["--noheadings", "--inverse", "--output", "TYPE", device],
@@ -690,6 +760,55 @@ mod tests {
         assert_eq!(
             and_list(&ports(Node::KubeSolo)),
             "80, 443, 6443, 10250 and 10443"
+        );
+    }
+
+    #[test]
+    fn encryption_covers_where_each_node_keeps_secrets_and_data() {
+        assert_eq!(
+            Node::Server(Rancher::K3s).secret_paths(),
+            ["/", "/var/lib/rancher", "/etc/rancher/k3s"]
+        );
+        assert_eq!(
+            Node::Agent(Rancher::K3s).secret_paths(),
+            ["/", "/var/lib/rancher", "/etc/rancher/k3s"]
+        );
+        for node in [Node::Server(Rancher::Rke2), Node::Agent(Rancher::Rke2)] {
+            assert_eq!(
+                node.secret_paths(),
+                [
+                    "/",
+                    "/var/lib/rancher",
+                    "/etc/rancher/rke2",
+                    "/var/lib/zeatend/storage"
+                ]
+            );
+        }
+        assert_eq!(
+            Node::KubeSolo.secret_paths(),
+            ["/", "/var/lib/kubesolo", "/etc/kubesolo", "/etc/zeatend"]
+        );
+        assert_eq!(existing_ancestor("/no/such/dir/here"), "/");
+    }
+
+    #[test]
+    fn one_plain_file_system_is_enough_to_fail() {
+        use Encryption::{Encrypted, Plain, Unknown};
+        assert_eq!(
+            least_encrypted(&[("/", Encrypted), ("/var/lib/rancher", Encrypted)]),
+            (Encrypted, vec!["/", "/var/lib/rancher"])
+        );
+        assert_eq!(
+            least_encrypted(&[
+                ("/", Encrypted),
+                ("/etc/rancher/rke2", Unknown),
+                ("/var/lib/zeatend/storage", Plain),
+            ]),
+            (Plain, vec!["/var/lib/zeatend/storage"])
+        );
+        assert_eq!(
+            least_encrypted(&[("/", Encrypted), ("/etc/rancher/rke2", Unknown)]),
+            (Unknown, vec!["/etc/rancher/rke2"])
         );
     }
 }

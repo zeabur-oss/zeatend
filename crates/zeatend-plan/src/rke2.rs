@@ -20,8 +20,11 @@ pub const PREFIX: &str = "/usr/local";
 /// Where RKE2's deploy controller reads the manifests it applies on a server.
 pub const MANIFESTS_DIR: &str = "/var/lib/rancher/rke2/server/manifests";
 
+/// Where the local-path-provisioner of [`LOCAL_PATH`] keeps volumes.
+pub const STORAGE_DIR: &str = "/var/lib/zeatend/storage";
+
 /// rancher's local-path-provisioner as the default storage class: RKE2 ships none. Its volumes
-/// are under `/var/lib/zeatend/storage`.
+/// are under [`STORAGE_DIR`].
 pub const LOCAL_PATH: &str = include_str!("local-path-storage.yaml");
 
 const RKE2: Rancher = Rancher::Rke2;
@@ -179,7 +182,7 @@ mod tests {
             serde_json::from_str(paths_config["data"]["config.json"].as_str().unwrap()).unwrap();
         assert_eq!(
             paths["nodePathMap"][0]["paths"],
-            serde_json::json!(["/var/lib/zeatend/storage"])
+            serde_json::json!([STORAGE_DIR])
         );
         assert!(!manifest.content.contains("zeabur"));
         assert!(

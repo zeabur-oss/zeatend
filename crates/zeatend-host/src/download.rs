@@ -115,8 +115,7 @@ pub async fn fetch(
     sha256: Option<&str>,
 ) -> Result<String, HostError> {
     if let Some(expected) = sha256
-        && dest.exists()
-        && sha256_file(dest)? == expected
+        && is_cached(dest, expected)
     {
         return Ok(expected.to_owned());
     }
@@ -234,12 +233,18 @@ fn retry_after(headers: &HeaderMap, now: SystemTime) -> Option<Duration> {
     Some(date.duration_since(now).unwrap_or_default())
 }
 
+/// Whether `path` holds a file with the SHA-256 digest `expected`.
+#[must_use]
+pub fn is_cached(path: &Path, expected: &str) -> bool {
+    sha256_file(path).is_ok_and(|actual| actual == expected)
+}
+
 /// The SHA-256 of a file.
 ///
 /// # Errors
 ///
 /// When it cannot be read.
-fn sha256_file(path: &Path) -> Result<String, HostError> {
+pub fn sha256_file(path: &Path) -> Result<String, HostError> {
     let mut file = io::BufReader::new(File::open(path).map_err(HostError::io(path))?);
     let mut hasher = Sha256::new();
     loop {

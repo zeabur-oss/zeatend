@@ -333,7 +333,7 @@ async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallErr
     let mut paths = changed_files(install.files.iter());
     if let Some(calico) = install.calico {
         let path = calico_path();
-        if calico_differs(&pinned_path(calico), &path)? {
+        if calico_differs(&pinned_path(calico), calico.sha256.as_deref(), &path)? {
             paths.push(path.display().to_string());
         }
     }
@@ -457,28 +457,33 @@ fn calico_path() -> PathBuf {
     Path::new(k3s::MANIFESTS_DIR).join("zeatend-calico.yaml")
 }
 
+/// Whether `source` is the download with the digest `sha256`. A source from another pin is stale;
+/// one with no digest to check against is never taken as current.
+fn is_current(source: &Path, sha256: Option<&str>) -> bool {
+    sha256.is_some_and(|expected| download::is_cached(source, expected))
+}
+
 /// Whether the manifest at `path` is not the one `calico_manifest` writes from the pinned
-/// `source`. Without the pinned copy it cannot tell, so it says it is.
-fn calico_differs(source: &Path, path: &Path) -> Result<bool, InstallError> {
-    let Ok(manifest) = fs::read_to_string(source) else {
+/// `source`, which has the digest `sha256`. Without a current copy of the source it cannot tell,
+/// so it says it is.
+fn calico_differs(source: &Path, sha256: Option<&str>, path: &Path) -> Result<bool, InstallError> {
+    if !is_current(source, sha256) {
         return Ok(true);
-    };
+    }
+    let manifest = fs::read_to_string(source)
+        .map_err(|e| InstallError::Message(format!("{}: {e}", source.display())))?;
     Ok(fs::read_to_string(path).ok() != Some(k3s::calico_manifest(&manifest)?))
 }
 
-/// Writes Calico's manifest, set for K3s.
+/// Writes Calico's manifest, set for K3s, from the pinned source, which it downloads again when
+/// the copy is missing or from another pin.
 async fn calico_manifest(calico: &Download) -> Result<(), InstallError> {
     let path = calico_path();
     let source = pinned_path(calico);
-    if !source.exists() || !path.exists() {
+    let sha256 = calico.sha256.as_deref();
+    if !is_current(&source, sha256) {
         output::err(&format!("    {}", calico.url));
-        download::fetch(
-            &download::agent(),
-            &calico.url,
-            &source,
-            calico.sha256.as_deref(),
-        )
-        .await?;
+        download::fetch(&download::agent(), &calico.url, &source, sha256).await?;
     }
     let manifest = fs::read_to_string(&source)
         .map_err(|e| InstallError::Message(format!("{}: {e}", source.display())))?;
@@ -495,7 +500,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("calico.yaml");
         let path = dir.path().join("zeatend-calico.yaml");
-        assert!(calico_differs(&source, &path).unwrap());
+        assert!(calico_differs(&source, None, &path).unwrap());
 
         let images: Vec<String> = zeatend_plan::pins::CALICO
             .images
@@ -507,13 +512,30 @@ mod tests {
             images.concat()
         );
         fs::write(&source, &manifest).unwrap();
-        assert!(calico_differs(&source, &path).unwrap());
+        let sha256 = download::sha256_file(&source).unwrap();
+        let sha256 = Some(sha256.as_str());
+        assert!(calico_differs(&source, sha256, &path).unwrap());
 
         fs::write(&path, k3s::calico_manifest(&manifest).unwrap()).unwrap();
-        assert!(!calico_differs(&source, &path).unwrap());
+        assert!(!calico_differs(&source, sha256, &path).unwrap());
 
         fs::write(&path, "edited").unwrap();
-        assert!(calico_differs(&source, &path).unwrap());
+        assert!(calico_differs(&source, sha256, &path).unwrap());
+    }
+
+    #[test]
+    fn a_source_cached_for_another_pin_is_a_change_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("calico.yaml");
+        let path = dir.path().join("zeatend-calico.yaml");
+        // An older pin's manifest names other images, so the new pin's edits do not apply.
+        let stale = "          image: docker.io/calico/node:v0.0.1\n";
+        assert!(k3s::calico_manifest(stale).is_err());
+        fs::write(&source, stale).unwrap();
+        fs::write(&path, "the older pin's manifest").unwrap();
+        let pinned = "0".repeat(64);
+        assert!(calico_differs(&source, Some(&pinned), &path).unwrap());
+        assert!(!is_current(&source, Some(&pinned)));
     }
 
     #[test]
