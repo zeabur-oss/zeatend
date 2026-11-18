@@ -6,7 +6,8 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
 use reqwest::header::{
-    CONTENT_RANGE, ETAG, HeaderMap, HeaderValue, IF_RANGE, LAST_MODIFIED, RANGE,
+    CACHE_CONTROL, CONTENT_RANGE, ETAG, HeaderMap, HeaderValue, IF_RANGE, LAST_MODIFIED, PRAGMA,
+    RANGE,
 };
 use reqwest::redirect::{self, Attempt};
 use reqwest::{Client, StatusCode};
@@ -130,7 +131,8 @@ impl Progress for () {
 /// digest. With no expected digest the file is always downloaded; check the returned digest
 /// against a list.
 ///
-/// A failed attempt is tried again up to three times. A retry asks for the rest of the file
+/// A failed attempt is tried again up to three times; an attempt that adds to the file does not
+/// count. A retry asks for the rest of the file
 /// (`Range`, RFC 9110 section 14.2); a server that sends the whole file again starts it over.
 /// The body may pause for at most a minute between chunks.
 ///
@@ -187,6 +189,9 @@ struct Part<'a> {
     /// The `ETag` or `Last-Modified` of the answer that began the file, sent as `If-Range` so
     /// that a server whose file changed sends all of it (RFC 9110 section 13.1.5).
     validator: Option<HeaderValue>,
+    /// The complete length the answer that began the file gave. A later part must belong to a
+    /// file of that length.
+    length: Option<u64>,
 }
 
 impl<'a> Part<'a> {
@@ -197,6 +202,7 @@ impl<'a> Part<'a> {
             hasher: Sha256::new(),
             size: 0,
             validator: None,
+            length: None,
         })
     }
 
@@ -207,6 +213,7 @@ impl<'a> Part<'a> {
         self.hasher = Sha256::new();
         self.size = 0;
         self.validator = None;
+        self.length = None;
         Ok(())
     }
 
@@ -288,8 +295,8 @@ fn retry(reason: impl Into<String>) -> Failure {
     Failure::Retry(reason.into(), None)
 }
 
-/// Tries [`attempt`] up to four times, with a doubling wait or the wait a `Retry-After` header
-/// asks for. A `Retry-After` longer than [`MAX_WAIT`] ends the retrying.
+/// Tries [`attempt`] up to four times in a row without progress, with a doubling wait or the wait
+/// a `Retry-After` header asks for. A `Retry-After` longer than [`MAX_WAIT`] ends the retrying.
 async fn download(
     https: &Client,
     url: &str,
@@ -302,13 +309,21 @@ async fn download(
     };
     let mut wait = BACKOFF;
     let mut tries = 0;
+    // The most bytes the file has held. An attempt that passes it made progress and does not
+    // count as a try; the file's size bounds how often that can happen.
+    let mut most = 0;
     loop {
-        let (reason, asked) = match attempt(https, url, part, meter).await {
+        let (reason, asked) = match attempt(https, url, part, meter, tries > 0).await {
             Ok(()) => return Ok(()),
             Err(Failure::Host(e)) => return Err(e),
             Err(Failure::Fatal(reason)) => return Err(fail(reason)),
             Err(Failure::Retry(reason, asked)) => (reason, asked),
         };
+        if part.size > most {
+            most = part.size;
+            tries = 0;
+            wait = BACKOFF;
+        }
         if tries == RETRIES || asked.is_some_and(|a| a > MAX_WAIT) {
             return Err(fail(reason));
         }
@@ -319,14 +334,21 @@ async fn download(
 }
 
 /// One GET, with its redirects, that adds its body to `part`. With bytes in `part` it asks for
-/// the rest.
+/// the rest. A retry asks caches on the way, such as a proxy, not to answer from a stored copy,
+/// which may be the incomplete answer of the attempt before (RFC 9111 section 5.2.1.4).
 async fn attempt(
     https: &Client,
     url: &str,
     part: &mut Part<'_>,
     meter: &mut Meter<'_>,
+    retrying: bool,
 ) -> Result<(), Failure> {
     let mut request = https.get(url);
+    if retrying {
+        request = request
+            .header(CACHE_CONTROL, "no-cache")
+            .header(PRAGMA, "no-cache");
+    }
     if part.size > 0 {
         request = request.header(RANGE, format!("bytes={}-", part.size));
         if let Some(validator) = &part.validator {
@@ -340,7 +362,17 @@ async fn attempt(
     let status = response.status();
     let total = if status == StatusCode::PARTIAL_CONTENT && part.size > 0 {
         match content_range(response.headers()) {
-            Some((start, total)) if start == part.size => total,
+            Some((start, total)) if start == part.size => {
+                if let (Some(before), Some(now)) = (part.length, total)
+                    && before != now
+                {
+                    part.restart()?;
+                    return Err(retry(format!(
+                        "the file was {before} bytes and is now {now} bytes"
+                    )));
+                }
+                total.or(part.length)
+            }
             _ => {
                 part.restart()?;
                 return Err(retry("the server sent another part of the file"));
@@ -349,7 +381,8 @@ async fn attempt(
     } else if status.is_success() && status != StatusCode::PARTIAL_CONTENT {
         part.restart()?;
         part.validator = validator(response.headers());
-        response.content_length()
+        part.length = response.content_length();
+        part.length
     } else if status == StatusCode::RANGE_NOT_SATISFIABLE && part.size > 0 {
         part.restart()?;
         return Err(retry(format!("HTTP {status}")));
@@ -740,10 +773,15 @@ mod tests {
 
     /// `body` as the bytes from `first` of a file of 11 bytes.
     fn range(first: usize, body: &str) -> Reply {
+        range_of(first, body, 11)
+    }
+
+    /// `body` as the bytes from `first` of a file of `length` bytes.
+    fn range_of(first: usize, body: &str, length: usize) -> Reply {
         let last = first + body.len() - 1;
         Reply {
             bytes: format!(
-                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {first}-{last}/11\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {first}-{last}/{length}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ),
             stall: false,
@@ -786,7 +824,13 @@ mod tests {
         let heads = seen.lock().unwrap().clone();
         assert_eq!(heads.len(), 2, "{heads:?}");
         assert!(!heads[0].contains("range:"), "{heads:?}");
+        assert!(!heads[0].contains("no-cache"), "{heads:?}");
         assert!(heads[1].contains("range: bytes=5-\r\n"), "{heads:?}");
+        assert!(
+            heads[1].contains("cache-control: no-cache\r\n"),
+            "{heads:?}"
+        );
+        assert!(heads[1].contains("pragma: no-cache\r\n"), "{heads:?}");
         assert!(heads[1].contains("if-range: \"v1\"\r\n"), "{heads:?}");
         assert_eq!(recorder.updates.last(), Some(&(11, Some(11))));
         assert_eq!(recorder.finished, 1);
@@ -807,6 +851,56 @@ mod tests {
         let heads = seen.lock().unwrap().clone();
         assert_eq!(heads.len(), 3, "{heads:?}");
         assert!(heads[2].contains("range: bytes=8-\r\n"), "{heads:?}");
+    }
+
+    #[tokio::test]
+    async fn a_part_of_a_file_of_another_length_starts_over() {
+        let (url, seen) = serve_script(|n| match n {
+            0 => cut_short(false),
+            1 => range_of(5, " world!", 12),
+            _ => Reply {
+                bytes: format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{HELLO}"
+                ),
+                stall: false,
+            },
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f");
+        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+            .await
+            .unwrap();
+        assert_eq!(digest, HELLO_SHA);
+        let heads = seen.lock().unwrap().clone();
+        assert_eq!(heads.len(), 3, "{heads:?}");
+        assert!(!heads[2].contains("range:"), "{heads:?}");
+    }
+
+    #[tokio::test]
+    async fn attempts_that_add_to_the_file_do_not_use_up_the_retries() {
+        // Each answer sends one byte of the rest and closes: eleven attempts in all.
+        let (url, seen) = serve_script(|n| {
+            let byte = char::from(HELLO.as_bytes()[n]);
+            let head = if n == 0 {
+                "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n".to_owned()
+            } else {
+                format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {n}-10/11\r\nContent-Length: {}\r\n\r\n",
+                    11 - n
+                )
+            };
+            Reply {
+                bytes: format!("{head}{byte}"),
+                stall: false,
+            }
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("f");
+        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+            .await
+            .unwrap();
+        assert_eq!(digest, HELLO_SHA);
+        assert_eq!(seen.lock().unwrap().len(), 11);
     }
 
     #[tokio::test]
