@@ -17,6 +17,13 @@ use crate::cluster::{
 /// Where the tarball installs.
 pub const PREFIX: &str = "/usr/local";
 
+/// Where RKE2's deploy controller reads the manifests it applies on a server.
+pub const MANIFESTS_DIR: &str = "/var/lib/rancher/rke2/server/manifests";
+
+/// rancher's local-path-provisioner as the default storage class: RKE2 ships none. Its volumes
+/// are under `/var/lib/zeatend/storage`.
+pub const LOCAL_PATH: &str = include_str!("local-path-storage.yaml");
+
 const RKE2: Rancher = Rancher::Rke2;
 
 /// The files to write, in the order to write them.
@@ -34,6 +41,11 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
             path: format!("{dir}/config.yaml"),
             mode: 0o600,
             content: config(options),
+        },
+        HostFile {
+            path: format!("{MANIFESTS_DIR}/zeatend-local-path.yaml"),
+            mode: 0o600,
+            content: LOCAL_PATH.to_owned(),
         },
     ]
 }
@@ -120,15 +132,67 @@ mod tests {
         };
         let files = host_files(&options);
         for file in files.iter().filter(|f| {
-            std::path::Path::new(&f.path)
-                .extension()
-                .is_some_and(|e| e.eq_ignore_ascii_case("yaml"))
+            !f.path.starts_with(MANIFESTS_DIR)
+                && std::path::Path::new(&f.path)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("yaml"))
         }) {
             let value: serde_json::Value = serde_saphyr::from_str(&file.content).unwrap();
             assert!(value.is_object(), "{}", file.path);
         }
         assert!(files[2].content.contains("tls-san:\n  - k8s.example.com\n"));
         assert!(files[2].content.contains("enable-servicelb: true\n"));
+    }
+
+    #[test]
+    fn a_server_gets_local_path_as_the_default_class() {
+        let files = host_files(&Options {
+            tls_san: Vec::new(),
+        });
+        let manifest = files
+            .iter()
+            .find(|f| f.path == "/var/lib/rancher/rke2/server/manifests/zeatend-local-path.yaml")
+            .unwrap();
+        let objects: Vec<serde_json::Value> = manifest
+            .content
+            .split("\n---\n")
+            .map(|doc| serde_saphyr::from_str(doc).unwrap())
+            .collect();
+        let class = objects
+            .iter()
+            .find(|o| o["kind"] == "StorageClass")
+            .unwrap();
+        assert_eq!(class["metadata"]["name"], "local-path");
+        assert_eq!(
+            class["metadata"]["annotations"]["storageclass.kubernetes.io/is-default-class"],
+            "true"
+        );
+        assert_eq!(class["volumeBindingMode"], "WaitForFirstConsumer");
+        assert_eq!(class["reclaimPolicy"], "Delete");
+        let namespace = objects.iter().find(|o| o["kind"] == "Namespace").unwrap();
+        assert_eq!(
+            namespace["metadata"]["labels"]["app.kubernetes.io/managed-by"],
+            "zeatend"
+        );
+        let paths_config = objects.iter().find(|o| o["kind"] == "ConfigMap").unwrap();
+        let paths: serde_json::Value =
+            serde_json::from_str(paths_config["data"]["config.json"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            paths["nodePathMap"][0]["paths"],
+            serde_json::json!(["/var/lib/zeatend/storage"])
+        );
+        assert!(!manifest.content.contains("zeabur"));
+        assert!(
+            agent_files()
+                .iter()
+                .all(|f| !f.path.starts_with(MANIFESTS_DIR))
+        );
+        assert!(
+            config(&Options {
+                tls_san: Vec::new()
+            })
+            .contains("ingress-controller: none\n")
+        );
     }
 
     #[test]

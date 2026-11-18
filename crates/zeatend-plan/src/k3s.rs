@@ -94,9 +94,10 @@ fn config(options: &Options) -> String {
            - terminated-pod-gc-threshold=1000\n"
     );
     out.push_str(&K3S.kubelet_args(true));
-    // No packaged ingress or storage class, as on RKE2 with `ingress-controller: none`: the
-    // cluster's owner chooses them. ServiceLB stays and gives an ingress ports 80 and 443.
-    let disable = ["traefik".to_owned(), "local-storage".to_owned()];
+    // Traefik comes from the Zeabur catalog, which needs a newer chart with the Gateway API
+    // provider, so the packaged one is off. The packaged local-path stays as the default storage
+    // class. ServiceLB stays and gives an ingress ports 80 and 443.
+    let disable = ["traefik".to_owned()];
     yaml_list(&mut out, "disable", &disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
@@ -278,9 +279,8 @@ mod tests {
             assert!(apiserver.contains(&json!(arg)), "{arg}");
         }
         let disable = config["disable"].as_array().unwrap();
-        for packaged in ["traefik", "local-storage"] {
-            assert!(disable.contains(&json!(packaged)), "{packaged}");
-        }
+        assert!(disable.contains(&json!("traefik")));
+        assert!(!disable.contains(&json!("local-storage")));
         assert!(!disable.contains(&json!("servicelb")));
         assert_eq!(config["tls-san"], json!(["k8s.example.com"]));
     }
