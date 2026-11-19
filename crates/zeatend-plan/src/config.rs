@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::PlanError;
 use crate::cluster::Distribution;
+use crate::token::JoinToken;
 
 /// The configuration of the first node of a cluster.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -390,58 +391,17 @@ fn is_release_tag(version: &str, build: &str) -> bool {
         && metadata.strip_prefix(build).is_some_and(number)
 }
 
-/// A join token: `K10<64 hex>::<credentials>`, or bare credentials (no CA pinning).
+/// A join token, which a server must not take as a bootstrap token.
 ///
 /// # Errors
 ///
 /// When it is malformed, or a bootstrap token is given to a server.
 pub fn check_token(token: &str, role: Role) -> Result<(), PlanError> {
-    let token = token.trim();
-    let credentials = match token.strip_prefix("K10") {
-        Some(rest) => {
-            let (hash, credentials) = rest.split_once("::").ok_or_else(|| {
-                PlanError::Config("join token: expected K10<ca-hash>::<credentials>".to_owned())
-            })?;
-            let hex = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit());
-            if !hash.is_empty() && !hex {
-                return Err(PlanError::Config(
-                    "join token: the CA hash is not 64 hexadecimal digits".to_owned(),
-                ));
-            }
-            credentials
-        }
-        None => token,
-    };
-    if credentials.is_empty() || credentials.chars().any(char::is_whitespace) {
-        return Err(PlanError::Config("join token: no credentials".to_owned()));
-    }
-    if role == Role::Server && is_bootstrap_token(credentials) {
+    let token = JoinToken::parse(token)?;
+    if role == Role::Server && token.bootstrap_id().is_some() {
         return Err(PlanError::BootstrapTokenForServer);
     }
     Ok(())
-}
-
-/// Whether a join token pins the cluster CA.
-#[must_use]
-pub fn token_pins_ca(token: &str) -> bool {
-    token
-        .trim()
-        .strip_prefix("K10")
-        .and_then(|rest| rest.split_once("::"))
-        .is_some_and(|(hash, _)| !hash.is_empty())
-}
-
-/// `[a-z0-9]{6}.[a-z0-9]{16}`.
-#[must_use]
-pub fn is_bootstrap_token(credentials: &str) -> bool {
-    let ok = |s: &str, n: usize| {
-        s.len() == n
-            && s.bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-    };
-    credentials
-        .split_once('.')
-        .is_some_and(|(id, secret)| ok(id, 6) && ok(secret, 16))
 }
 
 impl Config {
@@ -611,12 +571,6 @@ mod tests {
             check_token("abcdef.0123456789abcdef", Role::Server),
             Err(PlanError::BootstrapTokenForServer)
         ));
-        assert!(!token_pins_ca("abcdef.0123456789abcdef"));
-        assert!(token_pins_ca(&format!(
-            "K10{HASH}::abcdef.0123456789abcdef"
-        )));
-        assert!(check_token("K10abc::abcdef.0123456789abcdef", Role::Worker).is_err());
-        assert!(check_token("K10", Role::Worker).is_err());
         check_token(&format!("K10{HASH}::server:x"), Role::Server).unwrap();
     }
 

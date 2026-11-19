@@ -14,6 +14,7 @@ use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
 use zeatend_plan::cluster::{self, Rancher};
 use zeatend_plan::config::{Component, Role};
+use zeatend_plan::token::JoinToken;
 use zeatend_plan::{PlanError, join, ports};
 
 use crate::{InstallError, apply, output};
@@ -145,11 +146,7 @@ impl Token {
     /// The id of a bootstrap token, which `token delete` takes.
     fn bootstrap_id(&self) -> Option<&str> {
         match self {
-            Self::Bootstrap(t) => t
-                .rsplit_once("::")
-                .map_or(t.as_str(), |(_, credentials)| credentials)
-                .split_once('.')
-                .map(|(id, _)| id),
+            Self::Bootstrap(t) => JoinToken::parse(t).ok()?.bootstrap_id(),
             Self::Server(_) => None,
         }
     }
