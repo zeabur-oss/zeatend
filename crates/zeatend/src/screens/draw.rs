@@ -608,16 +608,22 @@ fn draw_install(frame: &mut Frame<'_>, pen: &Pen<'_>, progress: &Progress, area:
     let box_inner = block.inner(box_area);
     frame.render_widget(block, box_area);
     let box_cells = usize::from(box_inner.width);
+    let rows = usize::from(box_inner.height);
     let shown: Vec<Line<'_>> = if progress.end == Some(End::Done) {
-        text.iter()
+        let mut shown: Vec<Line<'_>> = text
+            .iter()
             .flat_map(|line| {
                 let rest = line.trim_start();
                 let indent = line.len() - rest.len();
                 hanging(Span::raw(" ".repeat(indent)), rest, Style::new(), box_cells)
             })
-            .collect()
+            .collect();
+        if shown.len() > rows {
+            shown.truncate(rows.saturating_sub(1));
+            shown.push(Line::styled(truncate(w.result_more, box_cells), dim()));
+        }
+        shown
     } else {
-        let rows = usize::from(box_inner.height);
         text.iter()
             .skip(text.len().saturating_sub(rows))
             .map(|line| Line::styled(truncate(line, box_cells), dim()))

@@ -94,10 +94,12 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         changed: false,
     })
     .await?;
+    let name = plan.node_name.clone();
+    let messages = i18n::messages();
+    output::step(&(messages.waiting_for_node)(&name));
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     wait_removed(&kubectl, rancher, &config.disable).await?;
     files::set_modes(Path::new(rancher.layout().tls_dir), ".crt", 0o600)?;
-    let name = plan.node_name.clone();
     if started.is_some() {
         kubectl::poll(
             Duration::from_mins(10),
@@ -116,16 +118,46 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         &Record::new(plan.distribution, plan.release.version()),
     )?;
 
-    output::step("Done");
+    output::step(messages.done);
     let layout = rancher.layout();
-    output::line(&format!(
-        "{} {} runs on {name}. See the nodes with:\n  sudo {} --kubeconfig {} get nodes -o wide",
-        rancher.title(),
-        plan.release.version(),
-        layout.kubectl,
-        layout.admin_kubeconfig
-    ));
+    let host = reachable_host(&config.host.tls_san).await;
+    let url = host
+        .as_deref()
+        .map(|host| format!("https://{}:6443", url_host(host)));
+    output::line(&(messages.ready)(&i18n::Ready {
+        cluster: &format!("{} {}", rancher.title(), plan.release.version()),
+        node: &name,
+        kubectl: &format!(
+            "sudo {} --kubeconfig {}",
+            layout.kubectl, layout.admin_kubeconfig
+        ),
+        kubeconfig: layout.admin_kubeconfig,
+        host: host.as_deref(),
+        rewrite: url.as_deref().map(|url| (LOOPBACK_SERVER, url)),
+        add_nodes: true,
+    }));
     Ok(())
+}
+
+/// The `server:` URL in the admin kubeconfig that K3s and RKE2 write.
+const LOOPBACK_SERVER: &str = "https://127.0.0.1:6443";
+
+/// The address a person's computer reaches this server at: the first of `host.tlsSan`, else the
+/// host's first address.
+pub(crate) async fn reachable_host(tls_san: &[String]) -> Option<String> {
+    match tls_san.first() {
+        Some(name) => Some(name.clone()),
+        None => facts::addresses().await.into_iter().next(),
+    }
+}
+
+/// `host` as the host of a URL: an IPv6 address in brackets.
+fn url_host(host: &str) -> String {
+    if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    }
 }
 
 /// Waits until the server removes the components in `disable`, so that a later `apply` that
@@ -425,15 +457,13 @@ pub(crate) async fn install_cluster(
             .map_or(0, |d| d.as_secs())
     };
     if !systemd::is_active(unit).await {
-        output::note(&format!(
-            "starting {unit}; the first start takes a few minutes"
-        ));
+        output::note(&(i18n::messages().starting_unit)(unit));
         let started = now();
         systemd::enable_now(unit).await?;
         restarted(STATE_DIR)?;
         Ok(Some(started))
     } else if changed {
-        output::note(&format!("restarting {unit} for the new configuration"));
+        output::note(&(i18n::messages().restarting_unit)(unit));
         let started = now();
         systemd::restart(unit).await?;
         restarted(STATE_DIR)?;

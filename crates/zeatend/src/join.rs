@@ -120,7 +120,8 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
     .await?;
 
     let name = plan.node_name.clone();
-    output::step(&format!("Waiting for node {name} to be Ready"));
+    let messages = crate::i18n::messages();
+    output::step(&(messages.waiting_for_node)(&name));
     let own = own_kubectl(distribution);
     kubectl::poll(
         Duration::from_mins(10),
@@ -133,14 +134,15 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
         &Record::new(distribution.into(), &plan.cluster.version),
     )?;
 
-    output::step("Done");
-    output::line(&format!(
-        "{name} joined the cluster as a {}. On a server, see it with:\n  \
-         sudo {} --kubeconfig {} get nodes -o wide",
-        plan.role.as_str(),
-        layout.kubectl,
-        layout.admin_kubeconfig
-    ));
+    output::step(messages.done);
+    output::line(&(messages.joined)(&crate::i18n::Joined {
+        node: &name,
+        server: plan.role == Role::Server,
+        kubectl: &format!(
+            "sudo {} --kubeconfig {}",
+            layout.kubectl, layout.admin_kubeconfig
+        ),
+    }));
     Ok(())
 }
 
