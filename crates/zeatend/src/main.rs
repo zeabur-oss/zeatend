@@ -7,6 +7,7 @@ mod i18n;
 mod join;
 mod kubesolo;
 mod load;
+mod node;
 mod output;
 mod render;
 mod uninstall;
@@ -14,12 +15,13 @@ mod unit;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use zeatend_host::HostError;
 use zeatend_host::progress::Event;
 use zeatend_plan::PlanError;
-use zeatend_plan::config::Document;
+use zeatend_plan::config::{Document, Role};
 
 /// Install K3s, RKE2 or `KubeSolo` on this Linux host, hardened to the CIS benchmark, from one
 /// configuration file. A file with a `join` section joins this host to an existing K3s or RKE2
@@ -70,6 +72,50 @@ enum Command {
     /// Check this host and the cluster on it. Exits 0 when all is well, 1 for a warning, 2 for
     /// something critical and 3 when the checks cannot run, as monitoring plugins do.
     Doctor,
+    /// Add nodes to this K3s or RKE2 cluster. Run it on a server.
+    Node {
+        #[command(subcommand)]
+        command: NodeCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum NodeCommand {
+    /// Print the configuration and commands that join a new VM to this cluster, with a join
+    /// token. The new VM's `zeatend plan` checks the ports and the distance to this server first.
+    Add {
+        /// What the new VM runs: a worker, or on RKE2 another server.
+        #[arg(long, value_enum, default_value_t = NodeRole::Worker)]
+        role: NodeRole,
+        /// The address the new VM reaches this server at; by default this node's `InternalIP`.
+        #[arg(long)]
+        address: Option<String>,
+        /// How long a worker's token can join nodes, such as `30m` or `2h`; at most `24h`.
+        #[arg(long, default_value = "1h", value_parser = parse_ttl)]
+        ttl: Duration,
+    },
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum NodeRole {
+    Worker,
+    Server,
+}
+
+/// A lifetime such as `30m` or `2h`, from one minute to a day.
+fn parse_ttl(text: &str) -> Result<Duration, String> {
+    let bad = || format!("`{text}` is not a time from 1m to 24h, such as 30m or 2h");
+    let (number, unit) = text.split_at(text.len().checked_sub(1).ok_or_else(bad)?);
+    let n: u64 = number.parse().map_err(|_e| bad())?;
+    let ttl = match unit {
+        "m" => Duration::from_mins(n),
+        "h" => Duration::from_hours(n),
+        _ => return Err(bad()),
+    };
+    (Duration::from_mins(1)..=Duration::from_hours(24))
+        .contains(&ttl)
+        .then_some(ttl)
+        .ok_or_else(bad)
 }
 
 /// Why zeatend stopped.
@@ -124,6 +170,21 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
     {
         return uninstall::run(yes, delete_volumes).await;
     }
+    if let Command::Node {
+        command: NodeCommand::Add { role, address, ttl },
+    } = &cli.command
+    {
+        let role = match role {
+            NodeRole::Worker => Role::Worker,
+            NodeRole::Server => Role::Server,
+        };
+        return node::add(&node::AddOptions {
+            role,
+            address: address.clone(),
+            ttl: *ttl,
+        })
+        .await;
+    }
     if let Command::Apply {
         foreground: false, ..
     } = cli.command
@@ -155,7 +216,7 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
                 kubesolo::apply(&config).await
             }
         }
-        (Command::Uninstall { .. } | Command::Doctor, _) => Ok(()),
+        (Command::Uninstall { .. } | Command::Doctor | Command::Node { .. }, _) => Ok(()),
     }
 }
 
@@ -215,11 +276,33 @@ mod tests {
         ));
         let cli = Cli::try_parse_from(["zeatend", "doctor"]).unwrap();
         assert!(matches!(cli.command, Command::Doctor));
-        for removed in ["node", "gui", "manifests"] {
+        let cli =
+            Cli::try_parse_from(["zeatend", "node", "add", "--role", "server", "--ttl", "30m"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Node {
+                command: NodeCommand::Add {
+                    role: NodeRole::Server,
+                    address: None,
+                    ttl
+                }
+            } if ttl == Duration::from_mins(30)
+        ));
+        for removed in ["gui", "manifests", "setup-link"] {
             assert!(
                 Cli::try_parse_from(["zeatend", removed]).is_err(),
                 "{removed}"
             );
+        }
+    }
+
+    #[test]
+    fn a_token_lives_from_a_minute_to_a_day() {
+        assert_eq!(parse_ttl("1m"), Ok(Duration::from_mins(1)));
+        assert_eq!(parse_ttl("24h"), Ok(Duration::from_hours(24)));
+        for bad in ["", "0m", "25h", "1d", "h", "-1h", "1.5h"] {
+            assert!(parse_ttl(bad).is_err(), "{bad}");
         }
     }
 

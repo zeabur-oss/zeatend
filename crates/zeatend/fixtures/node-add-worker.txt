@@ -1,0 +1,27 @@
+Add a worker to this cluster through https://10.0.1.10:6443.
+
+Before you start
+  - Put every node at the same hosting provider and in the same region. Different availability zones in one region are fine. Between providers or regions, latency slows etcd, the Kubernetes API and storage, and can make the cluster unstable.
+  - Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 8472 (flannel VXLAN) between all nodes. Keep UDP 8472 closed to the internet. A cluster that an earlier zeatend installed with Calico uses UDP 4789 (Calico VXLAN) instead.
+  - Volumes on the default local-path storage class stay on the node that created them: a pod using one runs only on that node, and the data goes with the node.
+
+On the new VM, as root, with this zeatend copied to /usr/local/bin:
+
+install -d -m 0700 /etc/zeatend
+(umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
+distribution: k3s
+k3sVersion: v1.37.1+k3s1
+join:
+  server: https://10.0.1.10:6443
+  role: worker
+  token: K108a3f0e0c4b2d9a1e7f6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706::abcdef.0123456789abcdef
+  nodeNames: [vps-1]
+EOF
+zeatend plan    # what it installs, the distance to this server, the ports and warnings
+zeatend apply   # installs K3s and waits until the node is Ready
+
+The token joins workers for 1h. Revoke it once the node is Ready; the node keeps working without it.
+
+When the node is Ready, here:
+  /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+  /usr/local/bin/k3s token delete abcdef   # revokes the token
