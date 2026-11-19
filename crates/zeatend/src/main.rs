@@ -11,10 +11,11 @@ mod load;
 mod node;
 mod output;
 mod render;
+mod screens;
 mod uninstall;
 mod unit;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -26,16 +27,16 @@ use zeatend_plan::config::{Document, Role};
 
 /// Install K3s, RKE2 or `KubeSolo` on this Linux host, hardened to the CIS benchmark, from one
 /// configuration file. A file with a `join` section joins this host to an existing K3s or RKE2
-/// cluster instead.
+/// cluster instead. Without a command, zeatend opens its install screens.
 #[derive(Debug, Parser)]
 #[command(name = "zeatend", version, about)]
 struct Cli {
     /// The configuration file. When it does not exist, the defaults apply: K3s on this host.
     #[arg(long, short, global = true, default_value = load::DEFAULT_CONFIG)]
     config: PathBuf,
-    /// The command to run.
+    /// The command to run; without one, the install screens open.
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -138,13 +139,16 @@ enum InstallError {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
-    if matches!(cli.command, Command::Doctor) {
+    let Some(command) = &cli.command else {
+        return screens::run(&cli.config).await;
+    };
+    if matches!(command, Command::Doctor) {
         return doctor::run(&cli.config).await;
     }
-    if let Command::Apply { json: true, .. } = cli.command {
+    if let Command::Apply { json: true, .. } = command {
         output::print_json_events();
     }
-    match run(&cli).await {
+    match run(&cli.config, command).await {
         Ok(()) => {
             output::emit(&Event::Done);
             ExitCode::SUCCESS
@@ -163,17 +167,17 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(cli: &Cli) -> Result<(), InstallError> {
+async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     if let Command::Uninstall {
         yes,
         delete_volumes,
-    } = cli.command
+    } = *command
     {
         return uninstall::run(yes, delete_volumes).await;
     }
     if let Command::Node {
         command: NodeCommand::Add { role, address, ttl },
-    } = &cli.command
+    } = command
     {
         let role = match role {
             NodeRole::Worker => Role::Worker,
@@ -188,28 +192,28 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
     }
     if let Command::Apply {
         foreground: false, ..
-    } = cli.command
+    } = *command
         && zeatend_host::systemd::booted()
     {
-        return unit::apply(&cli.config).await;
+        return unit::apply(config).await;
     }
-    let (document, source) = load::document_or_defaults(&cli.config)?;
-    if !matches!(cli.command, Command::Plan { json: true }) {
+    let (document, source) = load::document_or_defaults(config)?;
+    if !matches!(*command, Command::Plan { json: true }) {
         match source {
             load::Source::File => {}
             load::Source::Installer => output::note(&format!(
                 "No configuration at {}; using the distribution and host settings of {}, which \
                  zeabur-installer wrote.",
-                cli.config.display(),
+                config.display(),
                 zeatend_plan::installer::CONFIG_FILE
             )),
             load::Source::Defaults => output::note(&format!(
                 "No configuration at {}; using the defaults: K3s on this host.",
-                cli.config.display()
+                config.display()
             )),
         }
     }
-    match (&cli.command, document) {
+    match (command, document) {
         (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json).await,
         (Command::Apply { .. }, Document::Join(config)) => join::apply(&config).await,
         (Command::Plan { json }, Document::Install(config)) => {
@@ -245,11 +249,11 @@ mod tests {
     #[test]
     fn plan_apply_uninstall_and_doctor_are_the_commands() {
         let cli = Cli::try_parse_from(["zeatend", "plan", "--json"]).unwrap();
-        assert!(matches!(cli.command, Command::Plan { json: true }));
+        assert!(matches!(cli.command.unwrap(), Command::Plan { json: true }));
         assert_eq!(cli.config, PathBuf::from(load::DEFAULT_CONFIG));
         let cli = Cli::try_parse_from(["zeatend", "apply", "--config", "/tmp/c.yaml"]).unwrap();
         assert!(matches!(
-            cli.command,
+            cli.command.unwrap(),
             Command::Apply {
                 foreground: false,
                 json: false
@@ -259,7 +263,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(unit::command("/usr/local/bin/zeatend", "/etc/z.yaml")).unwrap();
         assert!(matches!(
-            cli.command,
+            cli.command.unwrap(),
             Command::Apply {
                 foreground: true,
                 json: true
@@ -270,7 +274,7 @@ mod tests {
         let cli =
             Cli::try_parse_from(["zeatend", "uninstall", "--yes", "--delete-volumes"]).unwrap();
         assert!(matches!(
-            cli.command,
+            cli.command.unwrap(),
             Command::Uninstall {
                 yes: true,
                 delete_volumes: true
@@ -278,19 +282,19 @@ mod tests {
         ));
         let cli = Cli::try_parse_from(["zeatend", "uninstall"]).unwrap();
         assert!(matches!(
-            cli.command,
+            cli.command.unwrap(),
             Command::Uninstall {
                 yes: false,
                 delete_volumes: false
             }
         ));
         let cli = Cli::try_parse_from(["zeatend", "doctor"]).unwrap();
-        assert!(matches!(cli.command, Command::Doctor));
+        assert!(matches!(cli.command.unwrap(), Command::Doctor));
         let cli =
             Cli::try_parse_from(["zeatend", "node", "add", "--role", "server", "--ttl", "30m"])
                 .unwrap();
         assert!(matches!(
-            cli.command,
+            cli.command.unwrap(),
             Command::Node {
                 command: NodeCommand::Add {
                     role: NodeRole::Server,

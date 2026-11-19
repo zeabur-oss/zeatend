@@ -45,7 +45,12 @@ pub(crate) async fn apply(config: &Path) -> Result<(), InstallError> {
         output::note(&format!("An install runs in {unit}; following it."));
         unit
     } else {
-        start(config).await?
+        let unit = start(config, None).await?;
+        output::note(&format!(
+            "The install runs in {unit}. If this session ends, run `sudo zeatend apply` to follow \
+             it again."
+        ));
+        unit
     };
     follow(&unit).await
 }
@@ -62,8 +67,9 @@ pub(crate) const fn command<'a>(zeatend: &'a str, config: &'a str) -> [&'a str; 
     ]
 }
 
-/// Starts `zeatend apply` in a new unit and returns the unit's name.
-async fn start(config: &Path) -> Result<String, InstallError> {
+/// Starts `zeatend apply` in a new unit and returns the unit's name. `language`, a `LANGUAGE`
+/// value, replaces the session's, so the unit reports in the language the screens show.
+pub(crate) async fn start(config: &Path, language: Option<&str>) -> Result<String, InstallError> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -81,14 +87,16 @@ async fn start(config: &Path) -> Result<String, InstallError> {
             .ok_or_else(|| InstallError::Message(format!("{}: not UTF-8", path.display())))
     };
     let (zeatend, config, dir) = (utf8(&zeatend)?, utf8(&config)?, utf8(&dir)?);
-    let env: Vec<String> = PASSED_ENV
+    let mut env: Vec<String> = PASSED_ENV
         .iter()
+        .filter(|name| language.is_none() || **name != "LANGUAGE")
         .filter_map(|name| {
             std::env::var(name)
                 .ok()
                 .map(|value| format!("{name}={value}"))
         })
         .collect();
+    env.extend(language.map(|language| format!("LANGUAGE={language}")));
     systemd::run_transient(&systemd::Transient {
         unit: &unit,
         description: "zeatend apply",
@@ -97,9 +105,6 @@ async fn start(config: &Path) -> Result<String, InstallError> {
         command: &command(&zeatend, &config),
     })
     .await?;
-    output::note(&format!(
-        "The install runs in {unit}. If this session ends, run `sudo zeatend apply` to follow it again."
-    ));
     Ok(unit)
 }
 

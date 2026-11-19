@@ -4,7 +4,7 @@ use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::record::ZEATEND_VERSION;
 
-use super::{Messages, gib};
+use super::{Key, Messages, Screen, Screens, gib};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "Checking the host",
@@ -15,6 +15,118 @@ pub(super) const MESSAGES: Messages = Messages {
     status,
     topic,
     finding,
+    screens: &SCREENS,
+};
+
+const SCREENS: Screens = Screens {
+    screen: |screen| match screen {
+        Screen::Server => "Server",
+        Screen::Access => "Access",
+        Screen::Review => "Review",
+        Screen::Install => "Install",
+    },
+    key: |key| match key {
+        Key::Choose => "choose",
+        Key::Next => "continue",
+        Key::Back => "back",
+        Key::Field => "next field",
+        Key::Language => "language",
+        Key::Quit => "quit",
+        Key::Install => "install",
+        Key::Leave => "close, the install goes on",
+        Key::Close => "close",
+    },
+
+    server_title: "This server",
+    host_name: "Host name",
+    system: "System",
+    cpu: "CPU",
+    memory: "Memory",
+    addresses: "Addresses",
+    cpus: |n| {
+        if n == 1 {
+            "1 CPU".to_owned()
+        } else {
+            format!("{n} CPUs")
+        }
+    },
+    private_address: |address| format!("{address} (private)"),
+    no_address: "none",
+    distribution_title: "Which Kubernetes to install",
+    distribution_about: |distribution| match distribution {
+        Distribution::KubeSolo => "One node, and the lightest. It takes no workers.",
+        Distribution::K3s => "Light, hardened like RKE2's CIS profile. You can add workers later.",
+        Distribution::Rke2 => "RKE2's CIS profile, for a control plane of three servers.",
+    },
+    checks_title: "Host checks",
+    checks_summary: |failed, warned| match (failed, warned) {
+        (0, 0) => "all passed".to_owned(),
+        (0, 1) => "1 warning".to_owned(),
+        (0, w) => format!("{w} warnings"),
+        (f, 0) => format!("{f} failed"),
+        (f, w) => format!(
+            "{f} failed, {w} {}",
+            if w == 1 { "warning" } else { "warnings" }
+        ),
+    },
+    checks_stop: "Fix what failed, then run sudo zeatend again.",
+
+    access_title: "How your computer reaches the cluster",
+    access_private: "This server has only private addresses. Which address does your computer \
+                     reach it at?",
+    access_public: "Your computer reaches the API server at this address. Change it if it uses \
+                    another one.",
+    field_address: "Address",
+    field_address_hint: "The API server's certificate covers it, so kubectl can connect.",
+    field_name: "DNS name (optional)",
+    field_name_hint: "A name that points at this server. The certificate covers it too.",
+    field_node: "Node name (optional)",
+    field_node_hint: |name| format!("Left empty, the node is {name}."),
+    bad_address: "Enter an IP address, such as 203.0.113.7.",
+    bad_name: "Enter a DNS name, such as k8s.example.com.",
+    bad_node: "Use lower-case letters, digits, - and ., starting and ending with a letter or digit.",
+
+    review_title: "Check before installing",
+    review_release: "Kubernetes",
+    review_address: "Address",
+    review_name: "DNS name",
+    review_no_name: "none, kubectl uses the address",
+    review_node: "Node name",
+    review_config: "Configuration",
+    review_next: "What happens next",
+    next_write: |path| format!("zeatend writes these choices to {path}."),
+    next_update: |path| format!("zeatend saves these choices in {path}. Its other settings stay."),
+    next_unit: "The install runs in a systemd unit, and goes on if this SSH session ends.",
+    next_follow: "Run sudo zeatend again to follow it.",
+
+    install_title: "Installing",
+    install_unit: |unit| format!("Runs in {unit}"),
+    install_elapsed: |time| format!("Elapsed {time}"),
+    install_starting: "Starting the install",
+    install_done: "The cluster is ready.",
+    install_failed: "The install stopped.",
+    duration: |minutes, seconds| {
+        if minutes == 0 {
+            format!("{seconds} s")
+        } else {
+            format!("{minutes} min {seconds} s")
+        }
+    },
+    log_title: "Log",
+    result_title: "Next",
+
+    language_title: "Language",
+    language_hint: "Changes right away.",
+    language_needs_utf8: "needs a UTF-8 terminal",
+
+    reading_host: "Reading this host",
+    left: |unit| format!("The install goes on in {unit}. Run `sudo zeatend` to follow it again."),
+    no_terminal: "zeatend opens its screens in a terminal. Without one, write \
+                  /etc/zeatend/config.yaml and run:\n  sudo zeatend plan\n  sudo zeatend apply",
+    needs_root: "run zeatend as root: sudo zeatend",
+    needs_systemd: "this host does not run systemd, which the screens need. Write \
+                    /etc/zeatend/config.yaml and run sudo zeatend apply --foreground",
+    joins: |path| format!("{path} joins this host to a cluster. Run sudo zeatend apply"),
 };
 
 const fn status(status: Status) -> &'static str {

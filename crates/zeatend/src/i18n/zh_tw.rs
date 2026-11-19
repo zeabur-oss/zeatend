@@ -4,7 +4,7 @@ use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::record::ZEATEND_VERSION;
 
-use super::{Messages, gib, zh_list};
+use super::{Key, Messages, Screen, Screens, gib, zh_list};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在檢查主機",
@@ -14,6 +14,106 @@ pub(super) const MESSAGES: Messages = Messages {
     status,
     topic,
     finding,
+    screens: &SCREENS,
+};
+
+const SCREENS: Screens = Screens {
+    screen: |screen| match screen {
+        Screen::Server => "伺服器",
+        Screen::Access => "連線方式",
+        Screen::Review => "確認",
+        Screen::Install => "安裝",
+    },
+    key: |key| match key {
+        Key::Choose => "選擇",
+        Key::Next => "繼續",
+        Key::Back => "上一步",
+        Key::Field => "下一欄",
+        Key::Language => "語言",
+        Key::Quit => "離開",
+        Key::Install => "開始安裝",
+        Key::Leave => "關閉畫面，安裝會繼續",
+        Key::Close => "關閉",
+    },
+
+    server_title: "這台伺服器",
+    host_name: "主機名稱",
+    system: "系統",
+    cpu: "CPU",
+    memory: "記憶體",
+    addresses: "位址",
+    cpus: |n| format!("{n} 顆 CPU"),
+    private_address: |address| format!("{address}（內網）"),
+    no_address: "沒有",
+    distribution_title: "要安裝哪一種 Kubernetes",
+    distribution_about: |distribution| match distribution {
+        Distribution::KubeSolo => "只有一個節點，最省資源，不能加入工作節點。",
+        Distribution::K3s => "輕巧，比照 RKE2 的 CIS 設定強化，之後可以加入工作節點。",
+        Distribution::Rke2 => "使用 RKE2 的 CIS 設定，適合三台伺服器組成的控制平面。",
+    },
+    checks_title: "主機檢查",
+    checks_summary: |failed, warned| match (failed, warned) {
+        (0, 0) => "全部通過".to_owned(),
+        (0, w) => format!("{w} 項要注意"),
+        (f, 0) => format!("{f} 項失敗"),
+        (f, w) => format!("{f} 項失敗，{w} 項要注意"),
+    },
+    checks_stop: "修好失敗的項目，再執行一次 sudo zeatend。",
+
+    access_title: "你的電腦怎麼連到叢集",
+    access_private: "這台伺服器只有內網位址。你的電腦用哪個位址連到它？",
+    access_public: "你的電腦用這個位址連到 API 伺服器。如果用的是別的位址，請修改。",
+    field_address: "位址",
+    field_address_hint: "API 伺服器的憑證會包含這個位址，kubectl 才能連線。",
+    field_name: "DNS 名稱（可不填）",
+    field_name_hint: "指向這台伺服器的名稱，憑證也會包含它。",
+    field_node: "節點名稱（可不填）",
+    field_node_hint: |name| format!("不填的話，節點名稱是 {name}。"),
+    bad_address: "請輸入 IP 位址，例如 203.0.113.7。",
+    bad_name: "請輸入 DNS 名稱，例如 k8s.example.com。",
+    bad_node: "請用小寫英文字母、數字、- 和 .，開頭和結尾要是字母或數字。",
+
+    review_title: "安裝前確認",
+    review_release: "Kubernetes",
+    review_address: "位址",
+    review_name: "DNS 名稱",
+    review_no_name: "沒有填，kubectl 用位址連線",
+    review_node: "節點名稱",
+    review_config: "設定檔",
+    review_next: "接下來會做什麼",
+    next_write: |path| format!("zeatend 把這些選擇寫進 {path}。"),
+    next_update: |path| format!("zeatend 把這些選擇存進 {path}，其他設定不變。"),
+    next_unit: "安裝在 systemd 單元裡執行，SSH 連線中斷也會繼續。",
+    next_follow: "再執行一次 sudo zeatend 就能繼續查看進度。",
+
+    install_title: "正在安裝",
+    install_unit: |unit| format!("在 {unit} 裡執行"),
+    install_elapsed: |time| format!("已經過 {time}"),
+    install_starting: "正在開始安裝",
+    install_done: "叢集已經可以使用。",
+    install_failed: "安裝停止了。",
+    duration: |minutes, seconds| {
+        if minutes == 0 {
+            format!("{seconds} 秒")
+        } else {
+            format!("{minutes} 分 {seconds} 秒")
+        }
+    },
+    log_title: "紀錄",
+    result_title: "接下來",
+
+    language_title: "語言",
+    language_hint: "選了馬上切換。",
+    language_needs_utf8: "終端機要支援 UTF-8",
+
+    reading_host: "正在讀取這台主機的資訊",
+    left: |unit| format!("安裝會在 {unit} 裡繼續。執行 `sudo zeatend` 可以再次查看進度。"),
+    no_terminal: "zeatend 要在終端機裡開啟畫面。沒有終端機的話，請寫好 \
+                  /etc/zeatend/config.yaml，再執行：\n  sudo zeatend plan\n  sudo zeatend apply",
+    needs_root: "用 root 身分執行 zeatend：sudo zeatend",
+    needs_systemd: "這台主機沒有使用 systemd，無法開啟畫面。請寫好 /etc/zeatend/config.yaml，\
+                    再執行 sudo zeatend apply --foreground",
+    joins: |path| format!("{path} 會讓這台主機加入叢集，請執行 sudo zeatend apply"),
 };
 
 const fn status(status: Status) -> &'static str {
