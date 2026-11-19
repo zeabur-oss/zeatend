@@ -103,7 +103,7 @@ impl download::Progress for Meter {
 }
 
 /// A byte count in KiB, MiB or GiB, with one decimal.
-fn size(bytes: u64) -> String {
+pub(crate) fn size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KiB", "MiB", "GiB"];
     let mut unit = 0;
     let mut tenths = u128::from(bytes) * 10;

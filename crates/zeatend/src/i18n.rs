@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use unicode_width::UnicodeWidthStr as _;
 use zeatend_host::preflight::{Finding, Status, Topic};
+use zeatend_plan::cluster::Distribution;
 
 /// A language zeatend has messages for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,8 +27,7 @@ pub(crate) enum Lang {
 }
 
 impl Lang {
-    /// Every language.
-    #[cfg(test)]
+    /// Every language, in the order the language picker lists them.
     pub(crate) const ALL: [Self; 3] = [Self::En, Self::ZhTw, Self::ZhCn];
 
     /// The messages of this language.
@@ -59,22 +59,15 @@ impl Lang {
         (name == "en" || name.starts_with("en_")).then_some(Self::En)
     }
 
-    /// The language that `get`, a lookup of environment variables, asks for.
+    /// The language that `get`, a lookup of environment variables, asks for, whether or not
+    /// the terminal can draw it.
     ///
     /// The locale comes from `LC_ALL`, then `LC_MESSAGES`, then `LANG`, as the C library reads
     /// them: an empty variable counts as unset. As in GNU gettext, `LANGUAGE`, a list such as
     /// `zh_TW:en`, wins over the locale unless the locale is `C` or `POSIX`: the first entry
-    /// zeatend has messages for is the language, and English if there is none. Chinese needs a
-    /// terminal that draws it: the
-    /// character set from `LC_ALL`, `LC_CTYPE` or `LANG` must be UTF-8, and `TERM` must not be
-    /// `linux` (the Linux console font has no CJK glyphs). Otherwise the language is English.
-    fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
-        let first = |names: [&str; 3]| {
-            names
-                .into_iter()
-                .find_map(|name| get(name).filter(|v| !v.is_empty()))
-        };
-        let lang = match first(["LC_ALL", "LC_MESSAGES", "LANG"]).as_deref() {
+    /// zeatend has messages for is the language, and English if there is none.
+    fn requested(get: &impl Fn(&str) -> Option<String>) -> Self {
+        match first(get, ["LC_ALL", "LC_MESSAGES", "LANG"]).as_deref() {
             None | Some("C" | "POSIX") => Self::En,
             Some(locale) => get("LANGUAGE")
                 .filter(|list| !list.is_empty())
@@ -83,21 +76,73 @@ impl Lang {
                     |list| list.split(':').find_map(Self::from_locale),
                 )
                 .unwrap_or(Self::En),
-        };
-        if lang == Self::En {
-            return lang;
         }
-        let charset = first(["LC_ALL", "LC_CTYPE", "LANG"])
+    }
+
+    /// The language that `get` asks for, and English where the terminal cannot draw Chinese
+    /// (see [`NoCjk::from_env`]).
+    fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
+        if NoCjk::from_env(&get).is_some() {
+            Self::En
+        } else {
+            Self::requested(&get)
+        }
+    }
+
+    /// The name of the language in that language, which the language picker shows.
+    pub(crate) const fn native_name(self) -> &'static str {
+        match self {
+            Self::En => "English",
+            Self::ZhTw => "繁體中文",
+            Self::ZhCn => "简体中文",
+        }
+    }
+
+    /// The `LANGUAGE` value that makes another zeatend process use this language.
+    pub(crate) const fn language_env(self) -> &'static str {
+        match self {
+            Self::En => "en",
+            Self::ZhTw => "zh_TW",
+            Self::ZhCn => "zh_CN",
+        }
+    }
+}
+
+/// The first of `names` that `get` finds and that is not empty.
+fn first(get: &impl Fn(&str) -> Option<String>, names: [&str; 3]) -> Option<String> {
+    names
+        .into_iter()
+        .find_map(|name| get(name).filter(|v| !v.is_empty()))
+}
+
+/// Why the terminal cannot draw Chinese.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoCjk {
+    /// `TERM` is `linux`: the Linux console font has no CJK glyphs.
+    LinuxConsole,
+    /// The character set from `LC_ALL`, `LC_CTYPE` or `LANG` is not UTF-8, or none is set.
+    NotUtf8,
+}
+
+impl NoCjk {
+    /// Why the terminal that `get`, a lookup of environment variables, describes cannot draw
+    /// Chinese; `None` when it can.
+    pub(crate) fn from_env(get: &impl Fn(&str) -> Option<String>) -> Option<Self> {
+        if get("TERM").as_deref() == Some("linux") {
+            return Some(Self::LinuxConsole);
+        }
+        let charset = first(get, ["LC_ALL", "LC_CTYPE", "LANG"])
             .unwrap_or_default()
             .to_ascii_lowercase()
             .replace('-', "");
-        let console = get("TERM").as_deref() == Some("linux");
-        if charset.contains("utf8") && !console {
-            lang
-        } else {
-            Self::En
-        }
+        (!charset.contains("utf8")).then_some(Self::NotUtf8)
     }
+}
+
+/// The language this process's environment asks for, and why the terminal cannot draw Chinese.
+pub(crate) fn from_process_env() -> (Lang, Option<NoCjk>) {
+    let get = |name: &str| std::env::var(name).ok();
+    (Lang::requested(&get), NoCjk::from_env(&get))
 }
 
 /// The language of this process, read from its environment once.
@@ -125,6 +170,171 @@ pub(crate) struct Messages {
     pub(crate) topic: fn(Topic) -> &'static str,
     /// What a check found and what to do about it.
     pub(crate) finding: fn(&Finding) -> String,
+    /// The install screens.
+    pub(crate) screens: &'static Screens,
+}
+
+/// The words of the install screens.
+#[derive(Debug)]
+pub(crate) struct Screens {
+    /// The name of each screen, in the bar at the top.
+    pub(crate) screen: fn(Screen) -> &'static str,
+    /// What a key does, in the bar at the bottom.
+    pub(crate) key: fn(Key) -> &'static str,
+
+    /// The title of the Server screen.
+    pub(crate) server_title: &'static str,
+    /// The labels of the host's facts.
+    pub(crate) host_name: &'static str,
+    /// The operating system.
+    pub(crate) system: &'static str,
+    /// CPUs.
+    pub(crate) cpu: &'static str,
+    /// Memory.
+    pub(crate) memory: &'static str,
+    /// The host's addresses.
+    pub(crate) addresses: &'static str,
+    /// A number of CPUs.
+    pub(crate) cpus: fn(usize) -> String,
+    /// An address that only a private network reaches.
+    pub(crate) private_address: fn(&str) -> String,
+    /// The host has no global address.
+    pub(crate) no_address: &'static str,
+    /// Above the choice of distribution.
+    pub(crate) distribution_title: &'static str,
+    /// What each distribution is for.
+    pub(crate) distribution_about: fn(Distribution) -> &'static str,
+    /// Above the host checks.
+    pub(crate) checks_title: &'static str,
+    /// How many checks failed and warned.
+    pub(crate) checks_summary: fn(usize, usize) -> String,
+    /// A check failed, so the screens do not go on.
+    pub(crate) checks_stop: &'static str,
+
+    /// The title of the Access screen.
+    pub(crate) access_title: &'static str,
+    /// The host has only private addresses.
+    pub(crate) access_private: &'static str,
+    /// The host has a public address.
+    pub(crate) access_public: &'static str,
+    /// The address the person's computer reaches the API server at.
+    pub(crate) field_address: &'static str,
+    /// Under the address.
+    pub(crate) field_address_hint: &'static str,
+    /// A DNS name for the API server.
+    pub(crate) field_name: &'static str,
+    /// Under the DNS name.
+    pub(crate) field_name_hint: &'static str,
+    /// The node's name in Kubernetes.
+    pub(crate) field_node: &'static str,
+    /// Under the node name, with the name it gets when the field is empty.
+    pub(crate) field_node_hint: fn(&str) -> String,
+    /// The address is not an IP address.
+    pub(crate) bad_address: &'static str,
+    /// The DNS name is not one.
+    pub(crate) bad_name: &'static str,
+    /// The node name is not one.
+    pub(crate) bad_node: &'static str,
+
+    /// The title of the Review screen.
+    pub(crate) review_title: &'static str,
+    /// The release.
+    pub(crate) review_release: &'static str,
+    /// The address.
+    pub(crate) review_address: &'static str,
+    /// The DNS name.
+    pub(crate) review_name: &'static str,
+    /// No DNS name.
+    pub(crate) review_no_name: &'static str,
+    /// The node name.
+    pub(crate) review_node: &'static str,
+    /// The configuration file.
+    pub(crate) review_config: &'static str,
+    /// Above what happens next.
+    pub(crate) review_next: &'static str,
+    /// The choices go into a new configuration file.
+    pub(crate) next_write: fn(&str) -> String,
+    /// The choices replace those in the configuration file; its other settings stay.
+    pub(crate) next_update: fn(&str) -> String,
+    /// The install runs in a systemd unit.
+    pub(crate) next_unit: &'static str,
+    /// How to follow the install again.
+    pub(crate) next_follow: &'static str,
+
+    /// The title of the Install screen.
+    pub(crate) install_title: &'static str,
+    /// The unit the install runs in.
+    pub(crate) install_unit: fn(&str) -> String,
+    /// How long the install has run.
+    pub(crate) install_elapsed: fn(&str) -> String,
+    /// Before the first step of the install.
+    pub(crate) install_starting: &'static str,
+    /// The install finished.
+    pub(crate) install_done: &'static str,
+    /// The install stopped with an error.
+    pub(crate) install_failed: &'static str,
+    /// Minutes and seconds; the seconds come with two digits after a minute.
+    pub(crate) duration: fn(u64, &str) -> String,
+    /// The title of the log box.
+    pub(crate) log_title: &'static str,
+    /// The title of the box with what to run next.
+    pub(crate) result_title: &'static str,
+
+    /// The title of the language picker.
+    pub(crate) language_title: &'static str,
+    /// Under the languages.
+    pub(crate) language_hint: &'static str,
+    /// Next to a language the terminal cannot draw.
+    pub(crate) language_needs_utf8: &'static str,
+
+    /// Before the screens open, while zeatend reads the host.
+    pub(crate) reading_host: &'static str,
+    /// After the screens close while the install goes on.
+    pub(crate) left: fn(&str) -> String,
+    /// `zeatend` without a terminal: what to run instead.
+    pub(crate) no_terminal: &'static str,
+    /// `zeatend` without root.
+    pub(crate) needs_root: &'static str,
+    /// `zeatend` on a host without systemd.
+    pub(crate) needs_systemd: &'static str,
+    /// The configuration file joins a cluster, which the screens do not do.
+    pub(crate) joins: fn(&str) -> String,
+}
+
+/// A screen of the install screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Screen {
+    /// The host and the distribution.
+    Server,
+    /// How the person's computer reaches the cluster.
+    Access,
+    /// The choices and what happens next.
+    Review,
+    /// The install's progress.
+    Install,
+}
+
+/// What a key does on the install screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Key {
+    /// Up and Down move the choice.
+    Choose,
+    /// Enter goes to the next screen.
+    Next,
+    /// Esc goes back.
+    Back,
+    /// Tab goes to the next field.
+    Field,
+    /// F2 opens the language picker.
+    Language,
+    /// Ctrl+C leaves the screens.
+    Quit,
+    /// Enter on the Review screen starts the install.
+    Install,
+    /// Ctrl+C while the install runs: the screens close and the install goes on.
+    Leave,
+    /// Enter after the install: the screens close.
+    Close,
 }
 
 impl Messages {
@@ -145,8 +355,19 @@ fn pad(text: &str, cells: usize) -> String {
     format!("{text}{}", " ".repeat(fill))
 }
 
+/// Minutes and seconds in the words of `screens`.
+pub(crate) fn duration(screens: &Screens, seconds: u64) -> String {
+    let minutes = seconds / 60;
+    let rest = if minutes > 0 {
+        format!("{:02}", seconds % 60)
+    } else {
+        (seconds % 60).to_string()
+    };
+    (screens.duration)(minutes, &rest)
+}
+
 /// Tenths of a GiB as GiB with one decimal.
-fn gib(tenths: u64) -> String {
+pub(crate) fn gib(tenths: u64) -> String {
     format!("{}.{}", tenths / 10, tenths % 10)
 }
 

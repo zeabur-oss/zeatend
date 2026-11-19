@@ -12,7 +12,19 @@ Zeatend is made by the Zeabur project and is in early development.
 
 ## Usage
 
-Today `zeatend` runs on the Linux host it installs, as root. It reads one configuration file,
+Today `zeatend` runs on the Linux host it installs, as root. `sudo zeatend` with no command opens
+the install screens in English, 繁體中文 or 简体中文:
+
+<img alt="The Server screen in 繁體中文: the host's facts, the choice of K3s, RKE2 or KubeSolo, and the host checks." src="docs/screens/80x24/zh_TW-server.svg" width="744">
+
+They show the host and its checks, ask for the distribution, the address and DNS name of the API
+server and the node name, and show the plan. The choices go into `/etc/zeatend/config.yaml`, and
+the install runs as with `zeatend apply`. Every screen, at 80x24 and 120x36, is in
+[docs/screens](docs/screens). The language comes from the locale, as for the host checks, and F2
+changes it. A terminal that cannot show Chinese, such as the Linux console, gets English with
+ASCII borders.
+
+Without the screens, `zeatend` reads one configuration file,
 `/etc/zeatend/config.yaml` by default, and installs K3s, RKE2 or KubeSolo hardened to the CIS
 benchmark:
 

@@ -12,11 +12,13 @@ zeatend-host.workspace = true
 zeatend-plan.workspace = true
 
 clap.workspace = true
+ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr = { workspace = true, features = ["serialize"] }
 thiserror.workspace = true
 tokio.workspace = true
+unicode-linebreak.workspace = true
 unicode-width.workspace = true
 
 [dev-dependencies]
