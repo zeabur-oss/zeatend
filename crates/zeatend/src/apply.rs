@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use k8s_openapi::apimachinery::pkg::version::Info;
 use zeatend_host::kubectl::{self, Kubectl};
@@ -17,7 +17,7 @@ use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
-use zeatend_plan::upgrade::Kubernetes;
+use zeatend_plan::upgrade::{Kubernetes, release_tag};
 
 use crate::{InstallError, i18n, output, render};
 
@@ -90,30 +90,21 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     .await?;
 
     let kubectl = Kubectl::admin(rancher);
-    let started = install_cluster(&ClusterInstall {
+    let install = ClusterInstall {
         cluster: cluster(&plan)?,
         files: &plan.host_files,
         server: true,
         changed: false,
-    })
-    .await?;
+    };
+    let restarted = install_cluster(&install).await?;
     let name = plan.node_name.clone();
     let messages = i18n::messages();
     output::step(&(messages.waiting_for_node)(&name));
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     wait_removed(&kubectl, rancher, &config.disable).await?;
     files::set_modes(Path::new(rancher.layout().tls_dir), ".crt", 0o600)?;
-    if started.is_some() {
-        kubectl::poll(
-            Duration::from_mins(10),
-            &format!("node {name} to be Ready"),
-            async || {
-                crate::join::node_ready(&kubectl, &name, started)
-                    .await
-                    .unwrap_or(false)
-            },
-        )
-        .await?;
+    if restarted {
+        crate::join::wait_node_ready(&kubectl, &name, Some(install.unit())).await?;
     }
 
     write_record(
@@ -181,28 +172,21 @@ async fn wait_removed(
             rancher.title()
         ),
         async || {
-            let addons: Result<ObjectList<Addon>, _> = kubectl
+            let addons: ObjectList<Addon> = kubectl
                 .raw("/apis/k3s.cattle.io/v1/namespaces/kube-system/addons")
-                .await;
-            let charts: Result<ObjectList<HelmChart>, _> = kubectl
+                .await?;
+            let charts: ObjectList<HelmChart> = kubectl
                 .raw("/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts")
-                .await;
-            addons.is_ok_and(|addons| {
-                charts.is_ok_and(|charts| {
-                    cluster::left_to_remove(
-                        rancher,
-                        disable,
-                        &addons.items,
-                        &charts.items,
-                        |file| Path::new(file).exists(),
-                    )
-                    .is_empty()
+                .await?;
+            Ok::<_, InstallError>(
+                cluster::left_to_remove(rancher, disable, &addons.items, &charts.items, |file| {
+                    Path::new(file).exists()
                 })
-            })
+                .is_empty(),
+            )
         },
     )
-    .await?;
-    Ok(())
+    .await
 }
 
 /// The Kubernetes version the API server behind `kubectl` reports; `None` when it does not answer.
@@ -321,16 +305,19 @@ pub(crate) fn release_binary(distribution: Rancher) -> PathBuf {
     }
 }
 
+/// The release tag that the binary at `path` reports, such as `v1.36.5+k3s1`; `None` when it is
+/// missing or reports none.
+pub(crate) async fn installed_release(path: &Path) -> Option<String> {
+    release_tag(&cmd::version_output(path).await)
+}
+
 /// What `install_release` would install: the binary when it is not the planned release, or the
 /// K3s unit when it is missing.
 async fn release_pending(cluster: &ClusterPlan, unit: &str) -> Option<String> {
     let binary = release_binary(cluster.distribution);
-    let installed = cmd::run(&binary, &["--version"], None)
-        .await
-        .unwrap_or_default();
     // `install.sh` writes the K3s unit; RKE2's comes in its tarball.
     let unit_file = format!("/etc/systemd/system/{unit}.service");
-    if !installed.contains(&cluster.version) {
+    if installed_release(&binary).await.as_deref() != Some(cluster.version.as_str()) {
         Some(binary.display().to_string())
     } else if cluster.distribution == Rancher::K3s && !Path::new(&unit_file).exists() {
         Some(unit_file)
@@ -395,7 +382,7 @@ pub(crate) struct ClusterInstall<'a> {
 }
 
 impl ClusterInstall<'_> {
-    const fn unit(&self) -> &'static str {
+    pub(crate) const fn unit(&self) -> &'static str {
         if self.server {
             self.cluster.distribution.server_unit()
         } else {
@@ -411,12 +398,9 @@ async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallErr
     Ok(paths)
 }
 
-/// Installs K3s or RKE2 and starts it, or restarts it when `pending` finds a change. Returns when
-/// it did, in seconds since the Unix epoch, taken just before; a Ready condition older than that is
-/// the old kubelet's.
-pub(crate) async fn install_cluster(
-    install: &ClusterInstall<'_>,
-) -> Result<Option<u64>, InstallError> {
+/// Installs K3s or RKE2 and starts it, or restarts it when `pending` finds a change. Returns
+/// whether it started or restarted the unit.
+pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool, InstallError> {
     let cluster = install.cluster;
     let distribution = cluster.distribution;
     let layout = distribution.layout();
@@ -458,26 +442,17 @@ pub(crate) async fn install_cluster(
     }
     install_release(cluster, install.server, unit).await?;
 
-    let now = || {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs())
-    };
     if !systemd::is_active(unit).await {
         output::note(&(i18n::messages().starting_unit)(unit));
-        let started = now();
         systemd::enable_now(unit).await?;
-        restarted(STATE_DIR)?;
-        Ok(Some(started))
     } else if changed {
         output::note(&(i18n::messages().restarting_unit)(unit));
-        let started = now();
         systemd::restart(unit).await?;
-        restarted(STATE_DIR)?;
-        Ok(Some(started))
     } else {
-        Ok(None)
+        return Ok(false);
     }
+    restarted(STATE_DIR)?;
+    Ok(true)
 }
 
 /// Loads the `AppArmor` profile among `files`, so containerd finds it loaded and keeps it.
