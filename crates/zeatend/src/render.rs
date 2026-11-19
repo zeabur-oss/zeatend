@@ -7,7 +7,7 @@ use zeatend_plan::kubesolo;
 use zeatend_plan::plan::{Plan, Release};
 use zeatend_plan::record::Changes;
 
-use crate::i18n::en;
+use crate::i18n;
 
 /// The plan of the first node as text.
 pub(crate) fn plan(plan: &Plan) -> String {
@@ -149,7 +149,10 @@ fn files(s: &mut String, paths: &[String], extra: Option<&str>) {
 fn findings(s: &mut String, findings: &[Check]) {
     for (status, label) in [(Status::Fail, "error"), (Status::Warn, "warning")] {
         for check in findings.iter().filter(|c| c.status == status) {
-            push(s, &format!("{label}: {}", en::finding(&check.finding)));
+            push(
+                s,
+                &format!("{label}: {}", (i18n::ENGLISH.finding)(&check.finding)),
+            );
         }
     }
 }
@@ -169,7 +172,7 @@ fn ports(s: &mut String, plan: &JoinPlan) {
                 "  {state} {} {:<5} {}",
                 port.protocol.to_ascii_uppercase(),
                 port.number,
-                en::port_use(port.purpose)
+                i18n::port_use(port.purpose)
             ),
         );
     }
@@ -201,7 +204,7 @@ fn ports(s: &mut String, plan: &JoinPlan) {
                 "  {} {:<5} {}",
                 port.protocol.to_ascii_uppercase(),
                 port.number,
-                en::port_use(port.purpose)
+                i18n::port_use(port.purpose)
             ),
         );
     }

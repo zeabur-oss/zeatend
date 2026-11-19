@@ -4,17 +4,30 @@
 //! typed data into a sentence with a `match`, so a language that lacks a message, or a new
 //! outcome that a language does not word, does not compile. Log lines of the tools zeatend runs
 //! stay as they are.
+//!
+//! The terminal UI, the steps and notes of `apply`, `join` and `doctor`, and the errors that word
+//! themselves through [`messages`] are translated. The plan, `uninstall`, `node add` and the other
+//! errors are English in every language: they hold their text, or take it from [`ENGLISH`] and
+//! [`port_use`].
 
-pub(crate) mod en;
+mod en;
 mod zh_cn;
 mod zh_tw;
 
 use std::sync::LazyLock;
 
 use unicode_width::UnicodeWidthStr as _;
-use zeatend_plan::cluster::Distribution;
+use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::precondition::Stale;
+
+/// The messages of the output that is English in every language.
+pub(crate) const ENGLISH: &Messages = Lang::En.messages();
+
+/// What a port is for, in English: only English output names it.
+pub(crate) const fn port_use(port_use: PortUse) -> &'static str {
+    en::port_use(port_use)
+}
 
 /// A language zeatend has messages for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
