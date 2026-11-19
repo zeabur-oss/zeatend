@@ -41,6 +41,15 @@ pictures that changed onto it. Look at them in the release pull request's diff.
 A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds a change file in
 `.changeset/` (`knope document-change`) or carries the label `changelog: none`.
 
+## Releases
+
+A maintainer runs the Release pull request workflow (`.github/workflows/release-pr.yml`). knope
+turns the change files in `.changeset/` into the next `CHANGELOG.md` section and version, and
+zeabur-oss-bot opens `chore(release): vX.Y.Z` from `release/next`. Once it is merged, the bot tags
+it, and `.github/workflows/release.yml` builds static `zeatend` binaries for x86_64 and aarch64
+Linux and leaves a draft release with them and their signed checksums. A maintainer publishes the
+draft. Running `release.yml` by hand with a version builds the binaries and publishes nothing.
+
 ## Toolchain, lints and dependencies
 
 Shared with [Zeabur Builder](https://github.com/zeabur-oss/builder) and

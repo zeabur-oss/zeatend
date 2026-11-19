@@ -10,7 +10,7 @@
     };
     # The base shell of every zeabur-oss repository: Bun, the release tools and the shared linters.
     oss = {
-      url = "github:zeabur-oss/.github/3e2e5ba4210b60c1e97fa53e2029e1ea9f5e468e";
+      url = "github:zeabur-oss/.github/f3ae87d7ef3c37447432e398200d200b546dfa46";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -57,12 +57,28 @@
               # Quality and supply chain
               cargo-deny
               cargo-nextest
+              # Release binaries record their dependency tree (scripts/release-build.sh).
+              cargo-auditable
             ];
 
             env = {
               # Required by rust-analyzer
               RUST_SRC_PATH = "${pkgs.rustToolchain}/lib/rustlib/src/rust/library";
-            };
+            }
+            // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
+              # Static musl builds of the host architecture: aws-lc-sys must be compiled against musl
+              # headers, not glibc ones.
+              let
+                muslCc = pkgs.pkgsStatic.stdenv.cc;
+                bin = "${muslCc}/bin/${muslCc.targetPrefix}";
+                triple = "${pkgs.stdenv.hostPlatform.parsed.cpu.name}_unknown_linux_musl";
+              in
+              {
+                "CC_${triple}" = "${bin}cc";
+                "AR_${triple}" = "${bin}ar";
+                "CARGO_TARGET_${pkgs.lib.toUpper triple}_LINKER" = "${bin}cc";
+              }
+            );
           };
         }
       );
