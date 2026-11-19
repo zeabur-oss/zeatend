@@ -166,7 +166,7 @@ fn ready(r: &Ready<'_>) -> String {
     let mut text = format!(
         "{} 已经在 {node} 上运行。\n\n在这台服务器上列出节点：\n  {} get nodes -o wide\n\n\
          在你自己的电脑上使用这个集群：\n  \
-         ssh <用户名>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         mkdir -p ~/.kube\n  (umask 077; ssh <用户名>@{host} sudo cat {} > ~/.kube/{node}.yaml)\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
          拿到这个文件的人就是集群管理员，要像 SSH 密钥一样保管好。",
         r.cluster, r.kubectl, r.kubeconfig
     );

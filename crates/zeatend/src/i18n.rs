@@ -662,10 +662,11 @@ mod tests {
             let text = ready(&k3s);
             for command in [
                 "\n  sudo kubectl --kubeconfig /k3s.yaml get nodes -o wide\n",
-                "@203.0.113.7 sudo cat /k3s.yaml > ~/.kube/edge-1.yaml\n  sed -i.bak \
+                "@203.0.113.7 sudo cat /k3s.yaml > ~/.kube/edge-1.yaml)\n  sed -i.bak \
                  's#https://127.0.0.1:6443#https://203.0.113.7:6443#' ~/.kube/edge-1.yaml\n  \
                  KUBECONFIG=~/.kube/edge-1.yaml kubectl get nodes\n",
                 "`sudo zeatend node add`",
+                "\n  mkdir -p ~/.kube\n  (umask 077; ssh ",
             ] {
                 assert!(text.contains(command), "{text}");
             }

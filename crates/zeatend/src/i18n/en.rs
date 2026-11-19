@@ -185,7 +185,7 @@ fn ready(r: &Ready<'_>) -> String {
     let mut text = format!(
         "{} runs on {node}.\n\nList the nodes on this server:\n  {} get nodes -o wide\n\n\
          Use the cluster from your own computer:\n  \
-         ssh <you>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         mkdir -p ~/.kube\n  (umask 077; ssh <you>@{host} sudo cat {} > ~/.kube/{node}.yaml)\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
          Whoever has this file is cluster admin; keep it like an SSH key.",
         r.cluster, r.kubectl, r.kubeconfig
     );

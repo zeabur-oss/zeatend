@@ -166,7 +166,7 @@ fn ready(r: &Ready<'_>) -> String {
     let mut text = format!(
         "{} 已經在 {node} 上執行。\n\n在這台伺服器上列出節點：\n  {} get nodes -o wide\n\n\
          在你自己的電腦上使用這個叢集：\n  \
-         ssh <使用者>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         mkdir -p ~/.kube\n  (umask 077; ssh <使用者>@{host} sudo cat {} > ~/.kube/{node}.yaml)\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
          拿到這個檔案的人就是叢集管理員，要像 SSH 金鑰一樣保管好。",
         r.cluster, r.kubectl, r.kubeconfig
     );
