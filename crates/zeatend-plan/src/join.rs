@@ -307,7 +307,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     let (mut host_files, unit) = match join.role {
         Role::Worker => (
             distribution.agent_files(&tuning)?,
-            distribution.agent_unit(),
+            distribution.distribution().layout().unit(Role::Worker),
         ),
         Role::Server if !distribution.takes_servers() => return Err(PlanError::SecondServer),
         Role::Server => (
@@ -318,7 +318,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
                 own_network: false,
                 disable: config.disable.clone(),
             })?,
-            distribution.server_unit(),
+            distribution.distribution().layout().server_unit,
         ),
     };
     host_files.push(distribution.join_file(&join.server)?);

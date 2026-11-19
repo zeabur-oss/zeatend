@@ -22,12 +22,11 @@ use zeatend_host::{facts, preflight, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::{Check, Finding, Kept, Status};
-use zeatend_plan::kubesolo;
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::tuning::OS_IDLE_MIB;
 
 use crate::uninstall::{self, Node};
-use crate::{InstallError, apply, i18n, join, load, output};
+use crate::{InstallError, i18n, join, load, output};
 
 /// The exit code when the checks cannot run.
 const UNKNOWN: u8 = 3;
@@ -58,7 +57,8 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
             let mut checks = preflight::run(preflight::Options {
                 cluster_running: true,
                 require_encrypted_disk,
-                node: host_node(node),
+                distribution: node.distribution,
+                role: node.role,
             })
             .await;
             checks.extend(cluster(node).await.into_iter().map(Check::from));
@@ -85,34 +85,15 @@ fn exit_code(checks: &[Check]) -> u8 {
         .unwrap_or(0)
 }
 
-/// The node, as the host checks know it.
-const fn host_node(node: Node) -> preflight::Node {
-    match (node.distribution.rancher(), node.role) {
-        (Some(rancher), Role::Server) => preflight::Node::Server(rancher),
-        (Some(rancher), Role::Worker) => preflight::Node::Agent(rancher),
-        (None, _) => preflight::Node::KubeSolo,
-    }
-}
-
 /// The checks of the cluster from this node. They stop at the first that leaves nothing more to
 /// read: the service or the API server down.
 async fn cluster(node: Node) -> Vec<Finding> {
-    let (unit, kubectl, state_dir) = match (node.distribution.rancher(), node.role) {
-        (Some(rancher), Role::Server) => (
-            rancher.server_unit(),
-            Kubectl::admin(rancher),
-            apply::STATE_DIR,
-        ),
-        (Some(rancher), Role::Worker) => (
-            rancher.agent_unit(),
-            join::own_kubectl(rancher),
-            apply::STATE_DIR,
-        ),
-        (None, _) => (
-            kubesolo::UNIT,
-            crate::kubesolo::kubectl(),
-            kubesolo::STATE_DIR,
-        ),
+    let layout = node.distribution.layout();
+    let unit = layout.unit(node.role);
+    let kubectl = match (node.distribution.rancher(), node.role) {
+        (Some(_), Role::Server) => Kubectl::admin(node.distribution),
+        (Some(rancher), Role::Worker) => join::own_kubectl(rancher),
+        (None, _) => crate::kubesolo::kubectl(),
     };
     if !systemd::is_active(unit).await {
         return vec![Finding::ServiceStopped { unit }];
@@ -126,7 +107,7 @@ async fn cluster(node: Node) -> Vec<Finding> {
         }
         found.push(Finding::ApiReady);
     }
-    found.push(record(node.distribution, state_dir).await);
+    found.push(record(node.distribution, layout.state_dir).await);
     match read_nodes(&kubectl, admin).await {
         Ok(nodes) if nodes.is_empty() => found.push(Finding::NodesNone { unit }),
         Ok(nodes) => {
@@ -145,10 +126,7 @@ async fn cluster(node: Node) -> Vec<Finding> {
         }),
     }
     if let (Some(rancher), Role::Server) = (node.distribution.rancher(), node.role) {
-        let path = format!(
-            "/var/lib/rancher/{}/server/cred/encryption-config.json",
-            rancher.id()
-        );
+        let path = format!("{}/server/cred/encryption-config.json", layout.data_dir);
         let config = std::fs::read_to_string(path).ok();
         found.push(secrets_encryption(rancher, config.as_deref()));
     }
@@ -186,21 +164,10 @@ async fn read_nodes(kubectl: &Kubectl, admin: bool) -> Result<Vec<v1::Node>, Ins
 
 /// The command line of the admin `kubectl` of `distribution`.
 fn kubectl_command(distribution: Distribution) -> String {
-    distribution.rancher().map_or_else(
-        || {
-            format!(
-                "{} --kubeconfig {}",
-                kubesolo::KUBECTL,
-                kubesolo::ADMIN_KUBECONFIG
-            )
-        },
-        |rancher| {
-            let layout = rancher.layout();
-            format!(
-                "{} --kubeconfig {}",
-                layout.kubectl, layout.admin_kubeconfig
-            )
-        },
+    let layout = distribution.layout();
+    format!(
+        "{} --kubeconfig {}",
+        layout.kubectl, layout.admin_kubeconfig
     )
 }
 
@@ -475,22 +442,5 @@ mod tests {
         assert_eq!(secrets_encryption(Rancher::K3s, Some(&identity)), plain);
         assert_eq!(secrets_encryption(Rancher::K3s, Some("{}")), plain);
         assert_eq!(secrets_encryption(Rancher::K3s, None), plain);
-    }
-
-    #[test]
-    fn host_checks_run_for_the_installed_node() {
-        let node = |distribution, role| Node::new(distribution, role, false);
-        assert_eq!(
-            host_node(node(Distribution::K3s, Role::Server)),
-            preflight::Node::Server(Rancher::K3s)
-        );
-        assert_eq!(
-            host_node(node(Distribution::Rke2, Role::Worker)),
-            preflight::Node::Agent(Rancher::Rke2)
-        );
-        assert_eq!(
-            host_node(node(Distribution::KubeSolo, Role::Server)),
-            preflight::Node::KubeSolo
-        );
     }
 }

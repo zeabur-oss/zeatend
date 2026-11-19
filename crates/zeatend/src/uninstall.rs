@@ -19,25 +19,10 @@ use zeatend_plan::config::Role;
 use zeatend_plan::tuning::{HostTuning, MemoryTier};
 use zeatend_plan::{PlanError, installer, k3s, kubesolo};
 
-use crate::{InstallError, apply, load, output};
+use crate::{InstallError, load, output};
 
-/// The uninstall script `install.sh` writes for a K3s server.
-const K3S_UNINSTALL: &str = "/usr/local/bin/k3s-uninstall.sh";
-/// The uninstall script `install.sh` writes for a K3s agent.
-const K3S_AGENT_UNINSTALL: &str = "/usr/local/bin/k3s-agent-uninstall.sh";
-/// Stops K3s, its containers and their mounts.
-const K3S_KILLALL: &str = "/usr/local/bin/k3s-killall.sh";
-/// RKE2's uninstall script, from its tarball, unpacked into [`zeatend_plan::rke2::PREFIX`].
-const RKE2_UNINSTALL: &str = "/usr/local/bin/rke2-uninstall.sh";
-/// Stops RKE2, its containers and their mounts.
-const RKE2_KILLALL: &str = "/usr/local/bin/rke2-killall.sh";
 /// The CNI configuration `KubeSolo` writes on every start.
 const KUBESOLO_CNI_CONFIG: &str = "/etc/cni/net.d/10-bridge.conflist";
-
-/// The volumes of K3s's local-path provisioner: `<data-dir>/storage`.
-const K3S_LOCAL_PATH: &str = "/var/lib/rancher/k3s/storage";
-/// The volumes of `KubeSolo`'s local-path provisioner: `<path>/local-path-storage`.
-const KUBESOLO_LOCAL_PATH: &str = "/var/lib/kubesolo/local-path-storage";
 /// The volumes of Zeabur's local storage.
 const ZEABUR_STORAGE: &str = "/var/lib/zeabur/storage";
 /// Longhorn's replicas.
@@ -72,46 +57,44 @@ impl Node {
 
     /// The distribution's own uninstall, if it has one.
     const fn script(self) -> Option<&'static str> {
-        match (self.distribution, self.role) {
-            (Distribution::K3s, Role::Server) => Some(K3S_UNINSTALL),
-            (Distribution::K3s, Role::Worker) => Some(K3S_AGENT_UNINSTALL),
-            (Distribution::Rke2, _) => Some(RKE2_UNINSTALL),
-            (Distribution::KubeSolo, _) => None,
-        }
+        self.distribution.layout().uninstall(self.role)
     }
 
     /// What the distribution's uninstall removes, in words.
     fn uninstall_text(self) -> String {
-        match (self.distribution.rancher(), self.script()) {
-            (Some(rancher), Some(script)) => format!(
-                "{script} stops {} and its pods and removes its service, its binary, {} and \
-                 /var/lib/rancher/{}: the cluster's data, certificates and images on this host.",
-                rancher.title(),
-                rancher.layout().config_dir,
-                rancher.id(),
-            ),
-            _ => format!(
-                "zeatend stops KubeSolo and its pods and removes its service, its binary, {}, {} \
-                 and {}: the cluster's data, certificates and images.",
-                kubesolo::CONFIG_FILE,
-                KUBESOLO_CNI_CONFIG,
-                kubesolo::DATA_DIR,
-            ),
-        }
+        let (layout, title) = (self.distribution.layout(), self.distribution.title());
+        self.script().map_or_else(
+            || {
+                format!(
+                    "zeatend stops {title} and its pods and removes its service, its binary, {}, \
+                     {KUBESOLO_CNI_CONFIG} and {}: the cluster's data, certificates and images.",
+                    kubesolo::CONFIG_FILE,
+                    layout.data_dir,
+                )
+            },
+            |script| {
+                format!(
+                    "{script} stops {title} and its pods and removes its service, its binary, {} \
+                     and {}: the cluster's data, certificates and images on this host.",
+                    layout.config_dir, layout.data_dir,
+                )
+            },
+        )
     }
 
     /// The paths zeatend left on the host for this node, removed after the distribution's
     /// uninstall. Many are in directories that uninstall removes; zeatend removes them all the
     /// same, so a failed or partial uninstall leaves none.
     fn paths(self) -> Result<Vec<Remove>, PlanError> {
+        let layout = self.distribution.layout();
         let Some(rancher) = self.distribution.rancher() else {
             return Ok(vec![
                 Remove::Tree(kubesolo::UNIT_FILE.to_owned()),
-                Remove::Tree(kubesolo::BINARY.to_owned()),
+                Remove::Tree(layout.binary.to_owned()),
                 Remove::Tree(kubesolo::CONFIG_FILE.to_owned()),
                 Remove::Tree(KUBESOLO_CNI_CONFIG.to_owned()),
-                Remove::Tree(kubesolo::DATA_DIR.to_owned()),
-                Remove::Tree(kubesolo::STATE_DIR.to_owned()),
+                Remove::Tree(layout.data_dir.to_owned()),
+                Remove::Tree(layout.state_dir.to_owned()),
                 Remove::Tree(kubesolo::KUBECONFIG.to_owned()),
                 Remove::Tree(APPARMOR_PROFILE.to_owned()),
                 Remove::Tree(installer::KUBESOLO_STATE_DIR.to_owned()),
@@ -123,7 +106,7 @@ impl Node {
             ]);
         };
         let mut paths = vec![
-            Remove::Tree(apply::STATE_DIR.to_owned()),
+            Remove::Tree(layout.state_dir.to_owned()),
             Remove::Tree(installer::RANCHER_STATE_DIR.to_owned()),
         ];
         for tier in [MemoryTier::Small, MemoryTier::Standard] {
@@ -146,7 +129,7 @@ impl Node {
         if self.joined {
             more.extend([
                 rancher.join_path(),
-                rancher.layout().join_token_file.to_owned(),
+                rancher.paths().join_token_file.to_owned(),
                 installer::join_token_file(rancher),
             ]);
         }
@@ -158,23 +141,27 @@ impl Node {
         if (rancher, self.role) == (Rancher::K3s, Role::Server) {
             paths.push(Remove::EmptyDir(parent(k3s::MEMORY_DROP_IN)));
         }
-        paths.push(Remove::EmptyDir(parent(apply::STATE_DIR)));
+        paths.push(Remove::EmptyDir(parent(layout.state_dir)));
         Ok(paths)
     }
 
     /// Where volumes may be on this node.
     fn volumes(self) -> Vec<Volume> {
-        let local = match self.distribution {
-            Distribution::K3s => Some(Volume {
-                path: K3S_LOCAL_PATH,
-                stash: Some("/var/lib/rancher/.zeatend-kept-k3s-storage"),
-            }),
-            Distribution::KubeSolo => Some(Volume {
-                path: KUBESOLO_LOCAL_PATH,
-                stash: Some("/var/lib/.zeatend-kept-kubesolo-local-path-storage"),
-            }),
+        // The uninstall removes the data directory around the local-path volumes.
+        let stash = match self.distribution {
+            Distribution::K3s => Some("/var/lib/rancher/.zeatend-kept-k3s-storage"),
+            Distribution::KubeSolo => Some("/var/lib/.zeatend-kept-kubesolo-local-path-storage"),
             Distribution::Rke2 => None,
         };
+        let local = self
+            .distribution
+            .layout()
+            .local_path
+            .zip(stash)
+            .map(|(path, stash)| Volume {
+                path,
+                stash: Some(stash),
+            });
         local
             .into_iter()
             .chain([ZEABUR_STORAGE, LONGHORN].map(|path| Volume { path, stash: None }))
@@ -253,20 +240,22 @@ pub(crate) fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
     let mut nodes = Vec::new();
     // zeatend's join token, or zeabur-installer's on a node it joined.
     let joined = |rancher: Rancher| {
-        exists(rancher.layout().join_token_file) || exists(&installer::join_token_file(rancher))
+        exists(rancher.paths().join_token_file) || exists(&installer::join_token_file(rancher))
     };
-    if exists(K3S_UNINSTALL) {
+    let k3s = Distribution::K3s.layout();
+    let rke2 = Distribution::Rke2.layout();
+    let kubesolo = Distribution::KubeSolo.layout();
+    if k3s.server_uninstall.is_some_and(&exists) {
         // `join` takes no K3s server today; a server with a join token joined all the same.
         let joined = joined(Rancher::K3s);
         nodes.push(Node::new(Distribution::K3s, Role::Server, joined));
     }
-    if exists(K3S_AGENT_UNINSTALL) {
+    if k3s.agent_uninstall.is_some_and(&exists) {
         nodes.push(Node::new(Distribution::K3s, Role::Worker, true));
     }
-    if exists(RKE2_UNINSTALL) {
-        let layout = Rancher::Rke2.layout();
+    if rke2.server_uninstall.is_some_and(&exists) {
         // Only a server has its own token.
-        let role = if exists(layout.server_token_file) {
+        let role = if exists(Rancher::Rke2.paths().server_token_file) {
             Role::Server
         } else {
             Role::Worker
@@ -274,7 +263,7 @@ pub(crate) fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
         let joined = role == Role::Worker || joined(Rancher::Rke2);
         nodes.push(Node::new(Distribution::Rke2, role, joined));
     }
-    if exists(kubesolo::BINARY) || exists(kubesolo::UNIT_FILE) {
+    if exists(kubesolo.binary) || exists(kubesolo::UNIT_FILE) {
         nodes.push(Node::new(Distribution::KubeSolo, Role::Server, false));
     }
     nodes
@@ -526,10 +515,8 @@ fn confirm() -> Result<(), InstallError> {
 /// Stops the node and its pods, so no process writes to a volume or holds a mount while the
 /// uninstall runs.
 async fn stop(node: Node) -> Result<(), InstallError> {
-    let killall = match node.distribution {
-        Distribution::K3s => K3S_KILLALL,
-        Distribution::Rke2 => RKE2_KILLALL,
-        Distribution::KubeSolo => return stop_kubesolo().await,
+    let Some(killall) = node.distribution.layout().killall else {
+        return stop_kubesolo().await;
     };
     // The script's exit status is that of its last cleanup command, and the uninstall script
     // runs it again, so a failure is reported and the uninstall goes on.
@@ -556,7 +543,8 @@ const KUBESOLO_CGROUPS: [&str; 6] = [
 
 async fn stop_kubesolo() -> Result<(), InstallError> {
     if Path::new(kubesolo::UNIT_FILE).exists() {
-        cmd::run("systemctl", &["disable", "--now", kubesolo::UNIT], None).await?;
+        let unit = Distribution::KubeSolo.layout().server_unit;
+        cmd::run("systemctl", &["disable", "--now", unit], None).await?;
     }
     for cgroup in KUBESOLO_CGROUPS {
         kill_cgroup(Path::new(cgroup)).await?;
@@ -621,10 +609,13 @@ fn cgroup_pids(cgroup: &Path) -> Vec<String> {
 /// the data directory itself and not its local-path volumes, whose data the uninstall keeps or
 /// removes first.
 fn runtime_mounts(mounts: &str) -> Vec<String> {
-    let storage = mounts_under(mounts, KUBESOLO_LOCAL_PATH);
-    mounts_under(mounts, kubesolo::DATA_DIR)
+    let layout = Distribution::KubeSolo.layout();
+    let storage = layout
+        .local_path
+        .map_or_default(|path| mounts_under(mounts, path));
+    mounts_under(mounts, layout.data_dir)
         .into_iter()
-        .filter(|m| m != kubesolo::DATA_DIR && !storage.contains(m))
+        .filter(|m| m != layout.data_dir && !storage.contains(m))
         .collect()
 }
 
@@ -799,6 +790,18 @@ mod tests {
 
     use super::*;
 
+    const K3S_UNINSTALL: &str = "/usr/local/bin/k3s-uninstall.sh";
+    const K3S_AGENT_UNINSTALL: &str = "/usr/local/bin/k3s-agent-uninstall.sh";
+    const RKE2_UNINSTALL: &str = "/usr/local/bin/rke2-uninstall.sh";
+    const RKE2_KILLALL: &str = "/usr/local/bin/rke2-killall.sh";
+    const K3S_LOCAL_PATH: &str = "/var/lib/rancher/k3s/storage";
+    const RANCHER_STATE_DIR: &str = "/var/lib/rancher/zeatend";
+    const KUBESOLO_BINARY: &str = "/usr/local/bin/kubesolo";
+    const KUBESOLO_DATA_DIR: &str = "/var/lib/kubesolo";
+    const KUBESOLO_STATE_DIR: &str = "/var/lib/zeatend";
+    const KUBESOLO_KUBECTL: &str = "/var/lib/zeatend/bin/kubectl";
+    const KUBESOLO_LOCAL_PATH: &str = "/var/lib/kubesolo/local-path-storage";
+
     fn tree_paths(node: Node) -> Vec<String> {
         node.paths()
             .unwrap()
@@ -827,14 +830,14 @@ mod tests {
             vec![Node::new(Distribution::K3s, Role::Server, true)]
         );
         assert_eq!(host(&[K3S_AGENT_UNINSTALL]), vec![K3S_WORKER]);
-        let layout = Rancher::Rke2.layout();
+        let paths = Rancher::Rke2.paths();
         assert_eq!(host(&[RKE2_UNINSTALL]), vec![RKE2_WORKER]);
         assert_eq!(
             host(&[RKE2_UNINSTALL, "/var/lib/rancher/rke2/server/token"]),
             vec![RKE2_FIRST]
         );
         assert_eq!(
-            layout.server_token_file,
+            paths.server_token_file,
             "/var/lib/rancher/rke2/server/token"
         );
         assert_eq!(
@@ -858,29 +861,36 @@ mod tests {
             ]),
             vec![RKE2_JOINED]
         );
-        assert_eq!(host(&[kubesolo::BINARY]), vec![KUBESOLO]);
+        assert_eq!(host(&[KUBESOLO_BINARY]), vec![KUBESOLO]);
         assert_eq!(host(&[kubesolo::UNIT_FILE]), vec![KUBESOLO]);
         // Volumes that an earlier uninstall kept are not an install.
-        assert_eq!(host(&[kubesolo::DATA_DIR, K3S_LOCAL_PATH]), Vec::new());
+        assert_eq!(host(&[KUBESOLO_DATA_DIR, K3S_LOCAL_PATH]), Vec::new());
     }
 
     #[test]
     fn the_scripts_are_where_the_releases_put_them() {
-        assert!(RKE2_UNINSTALL.starts_with(zeatend_plan::rke2::PREFIX));
-        assert!(RKE2_KILLALL.starts_with(zeatend_plan::rke2::PREFIX));
+        let rke2 = Distribution::Rke2.layout();
+        for script in [rke2.server_uninstall, rke2.agent_uninstall, rke2.killall] {
+            assert!(script.is_some_and(|s| s.starts_with(zeatend_plan::rke2::PREFIX)));
+        }
+        assert_eq!(rke2.killall, Some(RKE2_KILLALL));
         assert_eq!(parent(K3S_UNINSTALL), parent(k3s::BINARY));
         assert_eq!(K3S_SERVER.script(), Some(K3S_UNINSTALL));
         assert_eq!(K3S_WORKER.script(), Some(K3S_AGENT_UNINSTALL));
         assert_eq!(RKE2_WORKER.script(), Some(RKE2_UNINSTALL));
         assert_eq!(KUBESOLO.script(), None);
-        assert!(KUBESOLO_LOCAL_PATH.starts_with(kubesolo::DATA_DIR));
+        assert!(KUBESOLO_LOCAL_PATH.starts_with(KUBESOLO_DATA_DIR));
+        assert_eq!(
+            Distribution::KubeSolo.layout().local_path,
+            Some(KUBESOLO_LOCAL_PATH)
+        );
     }
 
     #[test]
     fn a_k3s_server_loses_zeatends_manifests_config_and_state() {
         let paths = tree_paths(K3S_SERVER);
         for path in [
-            apply::STATE_DIR,
+            RANCHER_STATE_DIR,
             "/etc/sysctl.d/60-k3s-cis.conf",
             "/etc/rancher/k3s/config.yaml",
             "/etc/rancher/k3s/audit-policy.yaml",
@@ -905,7 +915,7 @@ mod tests {
     fn a_k3s_worker_loses_its_join_token() {
         let paths = tree_paths(K3S_WORKER);
         for path in [
-            apply::STATE_DIR,
+            RANCHER_STATE_DIR,
             "/etc/sysctl.d/60-k3s-cis.conf",
             "/etc/rancher/k3s/config.yaml",
             "/etc/rancher/k3s/zeatend-join-token",
@@ -949,7 +959,7 @@ mod tests {
     fn rke2_servers_and_workers_lose_their_own_files() {
         let first = tree_paths(RKE2_FIRST);
         for path in [
-            apply::STATE_DIR,
+            RANCHER_STATE_DIR,
             "/etc/sysctl.d/60-rke2-cis.conf",
             "/etc/rancher/rke2/config.yaml",
             "/etc/rancher/rke2/audit-policy.yaml",
@@ -975,16 +985,16 @@ mod tests {
         let paths = tree_paths(KUBESOLO);
         for path in [
             kubesolo::UNIT_FILE,
-            kubesolo::BINARY,
+            KUBESOLO_BINARY,
             kubesolo::CONFIG_FILE,
-            kubesolo::DATA_DIR,
-            kubesolo::STATE_DIR,
+            KUBESOLO_DATA_DIR,
+            KUBESOLO_STATE_DIR,
             kubesolo::KUBECONFIG,
             KUBESOLO_CNI_CONFIG,
         ] {
             assert!(paths.contains(&path.to_owned()), "{path}");
         }
-        assert!(!paths.contains(&apply::STATE_DIR.to_owned()));
+        assert!(!paths.contains(&RANCHER_STATE_DIR.to_owned()));
         // The person's configuration in /etc/zeatend stays; the directory goes only when empty.
         assert!(!paths.contains(&load::DEFAULT_CONFIG.to_owned()));
         assert!(
@@ -1022,7 +1032,7 @@ mod tests {
     fn a_host_without_a_node_is_checked_for_what_any_node_left() {
         let leftovers = plan(Vec::new()).unwrap();
         assert_eq!(leftovers.nodes, Vec::new());
-        for path in [apply::STATE_DIR, kubesolo::STATE_DIR] {
+        for path in [RANCHER_STATE_DIR, KUBESOLO_STATE_DIR] {
             assert!(leftovers.remove.contains(&Remove::Tree(path.to_owned())));
         }
         let paths: Vec<&str> = leftovers.volumes.iter().map(|v| v.path).collect();
@@ -1051,7 +1061,7 @@ mod tests {
         let k3s = plan(vec![K3S_SERVER]).unwrap();
         let text = describe(
             &k3s,
-            &[apply::STATE_DIR],
+            &[RANCHER_STATE_DIR],
             &[K3S_LOCAL_PATH],
             false,
             &[load::DEFAULT_CONFIG],
@@ -1061,10 +1071,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains(K3S_UNINSTALL), "{text}");
-        assert!(
-            text.contains(&format!("  {}\n", apply::STATE_DIR)),
-            "{text}"
-        );
+        assert!(text.contains(&format!("  {RANCHER_STATE_DIR}\n")), "{text}");
         assert!(
             text.contains(&format!(
                 "These stay:\n  {K3S_LOCAL_PATH}  (volumes; --delete-volumes removes them)\n  {}",
@@ -1099,7 +1106,7 @@ mod tests {
                       /dev/sda1 /var/lib/kubesolo-other ext4 rw 0 0\n\
                       /dev/sda2 /var/lib/kubesolo ext4 rw 0 0\n";
         assert_eq!(
-            mounts_under(mounts, kubesolo::DATA_DIR),
+            mounts_under(mounts, KUBESOLO_DATA_DIR),
             [
                 "/var/lib/kubesolo/kubelet/pods/x/volumes/my vol",
                 "/var/lib/kubesolo/containerd/a/rootfs",
@@ -1220,8 +1227,8 @@ mod tests {
         let volume = format!("{K3S_LOCAL_PATH}/pvc-1/data");
         touch(root, &volume);
         touch(root, &format!("{LONGHORN}/replicas/r"));
-        touch(root, &format!("{}/{RECORD_FILE}", apply::STATE_DIR));
-        touch(root, &format!("{}/downloads/v1/k3s", apply::STATE_DIR));
+        touch(root, &format!("{RANCHER_STATE_DIR}/{RECORD_FILE}"));
+        touch(root, &format!("{RANCHER_STATE_DIR}/downloads/v1/k3s"));
         touch(root, "/etc/sysctl.d/60-k3s-cis.conf");
         touch(root, k3s::MEMORY_DROP_IN);
         touch(root, "/var/lib/rancher/k3s/server/db/state.db");
@@ -1233,7 +1240,7 @@ mod tests {
         assert!(exists(root, &format!("{LONGHORN}/replicas/r")));
         assert!(exists(root, load::DEFAULT_CONFIG));
         for gone in [
-            apply::STATE_DIR,
+            RANCHER_STATE_DIR,
             "/etc/sysctl.d/60-k3s-cis.conf",
             "/etc/systemd/system/k3s.service.d",
             "/var/lib/rancher/k3s/server",
@@ -1254,17 +1261,17 @@ mod tests {
         touch(root, &format!("{KUBESOLO_LOCAL_PATH}/pvc-1/data"));
         touch(root, &format!("{ZEABUR_STORAGE}/a"));
         touch(root, "/var/lib/kubesolo/kine/state.db");
-        touch(root, kubesolo::KUBECTL);
+        touch(root, KUBESOLO_KUBECTL);
         touch(root, kubesolo::KUBECONFIG);
-        touch(root, kubesolo::BINARY);
+        touch(root, KUBESOLO_BINARY);
         let solo = plan(vec![KUBESOLO]).unwrap();
-        clean(root, &solo, true, kubesolo::DATA_DIR);
+        clean(root, &solo, true, KUBESOLO_DATA_DIR);
         for gone in [
-            kubesolo::DATA_DIR,
+            KUBESOLO_DATA_DIR,
             ZEABUR_STORAGE,
-            kubesolo::STATE_DIR,
+            KUBESOLO_STATE_DIR,
             "/etc/zeatend",
-            kubesolo::BINARY,
+            KUBESOLO_BINARY,
         ] {
             assert!(!exists(root, gone), "{gone}");
         }

@@ -1,9 +1,9 @@
 //! The plan, written for people.
 
+use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::Role;
 use zeatend_plan::finding::{Check, Status};
 use zeatend_plan::join::{self, JoinPlan};
-use zeatend_plan::kubesolo;
 use zeatend_plan::plan::{Plan, Release};
 use zeatend_plan::record::Changes;
 
@@ -23,12 +23,12 @@ pub(crate) fn plan(plan: &Plan) -> String {
                 &mut s,
                 &format!(
                     "{} {} ({}), CIS hardened, {host}",
-                    cluster.distribution.title(),
+                    cluster.distribution.distribution().title(),
                     cluster.version,
                     support(cluster.pinned),
                 ),
             );
-            cluster.distribution.server_unit()
+            cluster.distribution.distribution().layout().server_unit
         }
         Release::KubeSolo(solo) => {
             push(
@@ -40,7 +40,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
                     support(true)
                 ),
             );
-            kubesolo::UNIT
+            Distribution::KubeSolo.layout().server_unit
         }
     };
     node_name(&mut s, &plan.node_name);
@@ -90,7 +90,7 @@ pub(crate) fn changes(changes: Option<&Changes>, unit: &str) -> String {
 pub(crate) fn join_plan(plan: &JoinPlan) -> String {
     let mut s = String::new();
     let cluster = &plan.cluster;
-    let title = cluster.distribution.title();
+    let title = cluster.distribution.distribution().title();
     let (what, runs) = match plan.role {
         Role::Worker => ("agent", "a worker"),
         Role::Server => ("server", "a server (control plane and etcd)"),
@@ -112,7 +112,7 @@ pub(crate) fn join_plan(plan: &JoinPlan) -> String {
     push(&mut s, "");
     let token = format!(
         "{} (the token, mode 0600)",
-        cluster.distribution.layout().join_token_file
+        cluster.distribution.paths().join_token_file
     );
     files(&mut s, &plan.host_file_paths, Some(&token));
     match &plan.rtt {

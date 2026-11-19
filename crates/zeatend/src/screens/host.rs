@@ -4,9 +4,9 @@ use std::fs;
 use std::net::IpAddr;
 use std::num::NonZero;
 
-use zeatend_host::preflight::{self, Node};
-use zeatend_host::{HostError, facts, systemd};
-use zeatend_plan::cluster::{Distribution, Rancher};
+use zeatend_host::{HostError, facts, preflight, systemd};
+use zeatend_plan::cluster::Distribution;
+use zeatend_plan::config::Role;
 use zeatend_plan::finding::Check;
 use zeatend_plan::plan::Facts;
 
@@ -56,9 +56,9 @@ pub(crate) async fn read(require_encrypted_disk: bool) -> Result<Host, HostError
     let addresses = facts::addresses().await;
     let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
     let (kubesolo, k3s, rke2) = tokio::join!(
-        checks(Node::KubeSolo, require_encrypted_disk),
-        checks(Node::Server(Rancher::K3s), require_encrypted_disk),
-        checks(Node::Server(Rancher::Rke2), require_encrypted_disk),
+        checks(Distribution::KubeSolo, require_encrypted_disk),
+        checks(Distribution::K3s, require_encrypted_disk),
+        checks(Distribution::Rke2, require_encrypted_disk),
     );
     Ok(Host {
         hostname: facts.hostname.clone(),
@@ -75,16 +75,12 @@ pub(crate) async fn read(require_encrypted_disk: bool) -> Result<Host, HostError
     })
 }
 
-async fn checks(node: Node, require_encrypted_disk: bool) -> Vec<Check> {
-    let unit = match node {
-        Node::Server(rancher) => rancher.server_unit(),
-        Node::Agent(rancher) => rancher.agent_unit(),
-        Node::KubeSolo => zeatend_plan::kubesolo::UNIT,
-    };
+async fn checks(distribution: Distribution, require_encrypted_disk: bool) -> Vec<Check> {
     preflight::run(preflight::Options {
-        cluster_running: systemd::is_active(unit).await,
+        cluster_running: systemd::is_active(distribution.layout().server_unit).await,
         require_encrypted_disk,
-        node,
+        distribution,
+        role: Role::Server,
     })
     .await
 }

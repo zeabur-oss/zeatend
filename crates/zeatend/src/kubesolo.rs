@@ -7,12 +7,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use zeatend_host::kubectl::Kubectl;
-use zeatend_host::preflight::Node;
 use zeatend_host::{HostError, archive, download, facts, files, systemd};
-use zeatend_plan::config::Config;
-use zeatend_plan::kubesolo::{
-    ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
-};
+use zeatend_plan::cluster::{Distribution, Layout};
+use zeatend_plan::config::{Config, Role};
+use zeatend_plan::kubesolo::{KUBECONFIG, Kubeconfig};
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
 use zeatend_plan::precondition::{Change, Preconditions};
 use zeatend_plan::record::Record;
@@ -22,6 +20,13 @@ use crate::apply::{
     restart_owed, restarted, show_checks, write_record,
 };
 use crate::{InstallError, output, render};
+
+const LAYOUT: &Layout = Distribution::KubeSolo.layout();
+const UNIT: &str = LAYOUT.server_unit;
+const BINARY: &str = LAYOUT.binary;
+const STATE_DIR: &str = LAYOUT.state_dir;
+const KUBECTL: &str = LAYOUT.kubectl;
+const ADMIN_KUBECONFIG: &str = LAYOUT.admin_kubeconfig;
 
 /// The `KubeSolo` release of a plan.
 const fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
@@ -69,7 +74,13 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
         return crate::print_json(&plan);
     }
     output::line(render::plan(&plan).trim_end());
-    if show_checks(Node::KubeSolo, config.host.require_encrypted_disk).await {
+    if show_checks(
+        Distribution::KubeSolo,
+        Role::Server,
+        config.host.require_encrypted_disk,
+    )
+    .await
+    {
         output::line(crate::i18n::messages().apply_stops);
     }
     Ok(())
@@ -95,7 +106,12 @@ pub(crate) async fn apply(
     let plan = make_plan(config).await?;
     output::line(render::plan(&plan).trim_end());
     check_reviewed(reviewed, &plan.preconditions)?;
-    check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
+    check_host(
+        Distribution::KubeSolo,
+        Role::Server,
+        config.host.require_encrypted_disk,
+    )
+    .await?;
 
     let restarted = install_kubesolo(&plan).await?;
     let messages = crate::i18n::messages();

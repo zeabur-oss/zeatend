@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::Document;
@@ -23,9 +23,9 @@ pub(crate) fn document() -> Result<Option<Document>, InstallError> {
                 Document::Install(config) => config.distribution,
                 Document::Join(config) => config.distribution,
             };
-            if let Some(rancher) = distribution.rancher()
+            if distribution.rancher().is_some()
                 && let Ok(config) =
-                    fs::read_to_string(format!("{}/config.yaml", rancher.layout().config_dir))
+                    fs::read_to_string(format!("{}/config.yaml", distribution.layout().config_dir))
             {
                 document = installer::keep_disabled(document, &config)?;
             }
@@ -44,11 +44,7 @@ pub(crate) fn document() -> Result<Option<Document>, InstallError> {
 pub(crate) async fn read_record(
     distribution: Distribution,
 ) -> Result<Option<Record>, InstallError> {
-    let state_dir = match distribution {
-        Distribution::KubeSolo => zeatend_plan::kubesolo::STATE_DIR,
-        Distribution::K3s | Distribution::Rke2 => apply::STATE_DIR,
-    };
-    match apply::read_record(Path::new(state_dir))? {
+    match apply::read_record(Path::new(distribution.layout().state_dir))? {
         Some(record) => Ok(Some(record)),
         None => Ok(record(distribution).await),
     }
@@ -69,13 +65,9 @@ async fn record(distribution: Distribution) -> Option<Record> {
     if installer_version.is_none() && !joined {
         return None;
     }
-    let binary = distribution.rancher().map_or_else(
-        || PathBuf::from(zeatend_plan::kubesolo::BINARY),
-        apply::release_binary,
-    );
     Some(Record {
         writer: Writer::Installer(installer_version),
         distribution: Some(distribution.id().to_owned()),
-        version: apply::installed_release(&binary).await,
+        version: apply::installed_release(Path::new(distribution.layout().binary)).await,
     })
 }
