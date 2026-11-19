@@ -14,10 +14,10 @@ use zeatend_plan::config::Config;
 use zeatend_plan::kubesolo::{ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, STATE_DIR, UNIT};
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
 use zeatend_plan::record::Record;
+use zeatend_plan::upgrade::release_tag;
 
 use crate::apply::{
-    changed_files, check_host, owe_restart, read_record, restart_owed, restarted, show_checks,
-    write_record,
+    changed_files, check_host, owe_restart, restart_owed, restarted, show_checks, write_record,
 };
 use crate::{InstallError, output, render};
 
@@ -34,7 +34,7 @@ fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
 /// The plan, with the install record read from the host.
 async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
     let mut facts = facts::read().await?;
-    facts.record = read_record(Path::new(STATE_DIR))?;
+    facts.record = crate::installer::read_record(config.distribution).await?;
     if facts.record.is_some() {
         facts.kubernetes = crate::apply::running_kubernetes(&kubectl()).await;
     }
@@ -61,7 +61,13 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
 }
 
 /// `KubeSolo`'s admin `kubectl`.
+/// zeatend's kubectl with the admin kubeconfig. Before zeatend's first `apply` on a host that
+/// zeabur-installer installed, the installer's kubectl.
 pub(crate) fn kubectl() -> Kubectl {
+    let installer = Path::new(zeatend_plan::installer::KUBESOLO_KUBECTL);
+    if !Path::new(KUBECTL).exists() && installer.exists() {
+        return Kubectl::new(installer, ADMIN_KUBECONFIG);
+    }
     Kubectl::new(KUBECTL, ADMIN_KUBECONFIG)
 }
 
@@ -204,12 +210,9 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Whether the binary at `path` is missing or does not report `version`.
+/// Whether the binary at `path` is missing or reports another release than `version`.
 async fn binary_outdated(path: &Path, version: &str) -> bool {
-    !cmd::run(path, &["--version"], None)
-        .await
-        .unwrap_or_default()
-        .contains(version)
+    release_tag(&cmd::version_output(path).await).as_deref() != Some(version)
 }
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> InstallError {

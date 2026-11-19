@@ -167,9 +167,7 @@ fn finding(finding: &Finding) -> String {
             "the API server does not answer /readyz within 30 seconds; `sudo journalctl -u {unit} \
              -n 100` shows why"
         ),
-        Finding::RecordOk { zeatend_version } => {
-            format!("zeatend {zeatend_version} wrote the install record")
-        }
+        Finding::RecordOk { writer } => format!("{writer} wrote the install record"),
         Finding::RecordMissing { path } => format!(
             "no install record at {path}: zeatend did not install this node, or apply stopped \
              before the end; run `sudo zeatend apply`"

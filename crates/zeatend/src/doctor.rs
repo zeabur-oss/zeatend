@@ -18,7 +18,7 @@ use zeatend_host::{facts, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::kubesolo;
-use zeatend_plan::record::RECORD_FILE;
+use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::tuning::OS_IDLE_MIB;
 
 use crate::uninstall::{self, Node};
@@ -121,7 +121,7 @@ async fn cluster(node: Node) -> Vec<Finding> {
         }
         found.push(Finding::ApiReady);
     }
-    found.push(record(Path::new(state_dir)));
+    found.push(record(node.distribution, state_dir).await);
     match read_nodes(&kubectl, admin).await {
         Ok(nodes) if nodes.is_empty() => found.push(Finding::NodesNone { unit }),
         Ok(nodes) => {
@@ -148,15 +148,19 @@ async fn cluster(node: Node) -> Vec<Finding> {
     found
 }
 
-/// The install record that `apply` or `join` wrote in `state_dir`.
-fn record(state_dir: &Path) -> Finding {
-    let path = state_dir.join(RECORD_FILE).display().to_string();
-    match apply::read_record(state_dir) {
-        Ok(Some(record)) if record.check_zeatend_version().is_err() => Finding::RecordNewer {
-            zeatend_version: record.zeatend_version,
+/// The install record that `apply` or `join` wrote in `state_dir`, else the one of the
+/// zeabur-installer install that zeatend takes over.
+async fn record(distribution: Distribution, state_dir: &str) -> Finding {
+    let path = Path::new(state_dir).join(RECORD_FILE).display().to_string();
+    match crate::installer::read_record(distribution).await {
+        Ok(Some(Record {
+            writer: Writer::Zeatend(version),
+            ..
+        })) if check_zeatend_version(&version).is_err() => Finding::RecordNewer {
+            zeatend_version: version,
         },
         Ok(Some(record)) => Finding::RecordOk {
-            zeatend_version: record.zeatend_version,
+            writer: record.writer.to_string(),
         },
         Ok(None) | Err(_) => Finding::RecordMissing { path },
     }

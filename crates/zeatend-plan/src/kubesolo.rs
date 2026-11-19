@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::PlanError;
 use crate::cluster::{HostFile, PortUse};
+use crate::installer::KUBESOLO_WEBHOOK_SCRIPT;
 use crate::tuning::HostTuning;
 
 /// The systemd unit.
@@ -63,6 +64,13 @@ pub struct Options {
     pub tls_san: Vec<String>,
     /// The host's memory settings; the unit sets their `GOMEMLIMIT`.
     pub tuning: HostTuning,
+    /// The unit runs zeabur-installer's webhook script after each start, as the installer's unit
+    /// did.
+    ///
+    /// The installer adds helm-controller to `KubeSolo`. `KubeSolo`'s webhook adds the node to a
+    /// new Job's `nodeSelector`, so helm-controller finds its install Job changed and no chart
+    /// installs. The script takes Jobs out of the webhook's rules.
+    pub installer_webhook: bool,
 }
 
 const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n";
@@ -98,19 +106,31 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
         HostFile {
             path: UNIT_FILE.to_owned(),
             mode: 0o644,
-            content: unit(&options.tuning),
+            content: unit(options),
         },
     ]
 }
 
-/// The unit of `KubeSolo`'s own installer, without its environment file, and with the
-/// `GOMEMLIMIT` of `tuning`.
-fn unit(tuning: &HostTuning) -> String {
-    UNIT_TEXT.replacen(
+/// The unit of `KubeSolo`'s own installer, without its environment file, with the
+/// `GOMEMLIMIT` of the tuning and the installer's webhook script when the host has it.
+fn unit(options: &Options) -> String {
+    let mut unit = UNIT_TEXT.replacen(
         "ExecStart=",
-        &format!("{}ExecStart=", tuning.environment().unwrap_or_default()),
+        &format!(
+            "{}ExecStart=",
+            options.tuning.environment().unwrap_or_default()
+        ),
         1,
-    )
+    );
+    if options.installer_webhook {
+        // `-`: a failed script does not stop KubeSolo.
+        unit = unit.replacen(
+            "KillMode=",
+            &format!("ExecStartPost=-{KUBESOLO_WEBHOOK_SCRIPT}\nKillMode="),
+            1,
+        );
+    }
+    unit
 }
 
 const UNIT_TEXT: &str = "# Written by zeatend; `zeatend apply` writes it again.
@@ -196,6 +216,7 @@ mod tests {
             node_ip: Some("10.0.0.5".to_owned()),
             tls_san: vec!["solo.example.com".to_owned()],
             tuning: tuning(),
+            installer_webhook: false,
         });
         let config = files.iter().find(|f| f.path == CONFIG_FILE).unwrap();
         assert_eq!(config.mode, 0o600);
@@ -212,6 +233,7 @@ mod tests {
             node_ip: None,
             tls_san: Vec::new(),
             tuning: tuning(),
+            installer_webhook: false,
         });
         let value: Value = serde_saphyr::from_str(&bare[0].content).unwrap();
         assert!(value.get("network").is_none());
@@ -225,6 +247,27 @@ mod tests {
             unit.content
                 .contains("[Service]\nType=simple\nEnvironment=GOMEMLIMIT=500MiB\nExecStart=")
         );
+    }
+
+    #[test]
+    fn the_unit_keeps_the_webhook_script_of_an_earlier_install() {
+        let unit = |installer_webhook| {
+            host_files(&Options {
+                node_name: "solo".to_owned(),
+                node_ip: None,
+                tls_san: Vec::new(),
+                tuning: tuning(),
+                installer_webhook,
+            })
+            .into_iter()
+            .find(|f| f.path == UNIT_FILE)
+            .unwrap()
+            .content
+        };
+        assert!(!unit(false).contains("ExecStartPost"));
+        assert!(unit(true).contains(
+            "\nExecStartPost=-/usr/local/libexec/zeabur-kubesolo-webhook\nKillMode=process\n"
+        ));
     }
 
     #[test]

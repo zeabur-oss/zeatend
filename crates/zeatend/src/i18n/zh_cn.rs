@@ -156,9 +156,7 @@ fn finding(finding: &Finding) -> String {
         Finding::ApiDown { unit } => format!(
             "API 服务器 30 秒内没有响应 /readyz，用 `sudo journalctl -u {unit} -n 100` 查看原因"
         ),
-        Finding::RecordOk { zeatend_version } => {
-            format!("安装记录由 zeatend {zeatend_version} 写入")
-        }
+        Finding::RecordOk { writer } => format!("安装记录由 {writer} 写入"),
         Finding::RecordMissing { path } => format!(
             "{path} 没有安装记录，这个节点不是 zeatend 安装的，或者 apply 没有运行完。运行 `sudo \
              zeatend apply`"

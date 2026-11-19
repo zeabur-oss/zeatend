@@ -8,6 +8,7 @@
 //! for hosts with little memory.
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -551,6 +552,46 @@ pub struct Options {
     /// K3s only: an earlier install turned flannel off for a network plugin of its own, which
     /// zeatend keeps.
     pub own_network: bool,
+    /// Packaged components that an earlier install turned off, which zeatend keeps off. See
+    /// [`disabled_components`].
+    pub disable: Vec<String>,
+}
+
+/// The packaged components that the K3s or RKE2 configuration `config` turns off.
+///
+/// zeabur-installer turns off K3s's `local-storage` and the packaged metrics-server, as its own
+/// run in their place; turning them on again would give two of each.
+#[must_use]
+pub fn disabled_components(config: &str) -> Vec<String> {
+    let Ok(value) = serde_saphyr::from_str::<Value>(config) else {
+        return Vec::new();
+    };
+    match value.get("disable") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The `disable` list: `always`, then the components an earlier install turned off.
+pub(crate) fn disable_list(out: &mut String, always: &[&str], kept: &[String]) {
+    let mut items: Vec<String> = always.iter().map(|&item| item.to_owned()).collect();
+    let earlier: Vec<String> = kept
+        .iter()
+        .filter(|item| !item.is_empty() && !items.contains(item))
+        .cloned()
+        .collect();
+    if !earlier.is_empty() {
+        out.push_str("# Kept off from the earlier install, which runs its own: ");
+        out.push_str(&earlier.join(", "));
+        out.push('\n');
+    }
+    items.extend(earlier);
+    yaml_list(out, "disable", &items);
 }
 
 pub(crate) const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n\
@@ -643,6 +684,7 @@ mod tests {
                 tls_san: Vec::new(),
                 tuning,
                 own_network: false,
+                disable: Vec::new(),
             };
             let file = rancher
                 .server_files(&options)
@@ -654,7 +696,7 @@ mod tests {
                 Rancher::Rke2 => crate::rke2::MANIFESTS_DIR,
             }));
             assert_eq!(file.mode, 0o600);
-            let policy: serde_json::Value = serde_saphyr::from_str(&file.content).unwrap();
+            let policy: Value = serde_saphyr::from_str(&file.content).unwrap();
             assert_eq!(policy["kind"], "NetworkPolicy");
             assert_eq!(
                 policy["spec"]["podSelector"]["matchExpressions"][0]["key"],
@@ -714,7 +756,7 @@ mod tests {
 
     #[test]
     fn the_audit_policy_keeps_every_secret_request_first_and_never_bodies() {
-        let policy: serde_json::Value = serde_saphyr::from_str(AUDIT_POLICY).unwrap();
+        let policy: Value = serde_saphyr::from_str(AUDIT_POLICY).unwrap();
         let rules = policy["rules"].as_array().unwrap();
         assert_eq!(
             rules[0],
@@ -732,7 +774,7 @@ mod tests {
     fn join_files_name_the_server_and_the_node_addresses() {
         for d in Rancher::ALL {
             let join = d.join_file("https://10.0.0.5:6443");
-            let value: serde_json::Value = serde_saphyr::from_str(&join.content).unwrap();
+            let value: Value = serde_saphyr::from_str(&join.content).unwrap();
             assert_eq!(value["server"], "https://10.0.0.5:6443");
             assert_eq!(value["token-file"], d.layout().join_token_file);
             assert_eq!(join.mode, 0o600);
@@ -740,7 +782,7 @@ mod tests {
             let ip = d
                 .node_ip_file(&["10.0.0.6".to_owned(), "fd00::6".to_owned()])
                 .unwrap();
-            let value: serde_json::Value = serde_saphyr::from_str(&ip.content).unwrap();
+            let value: Value = serde_saphyr::from_str(&ip.content).unwrap();
             assert_eq!(value["node-ip"], serde_json::json!(["10.0.0.6", "fd00::6"]));
             assert_eq!(d.node_ip_file(&[]), None);
         }

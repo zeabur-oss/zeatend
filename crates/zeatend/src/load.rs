@@ -11,13 +11,26 @@ use crate::InstallError;
 /// Where `zeatend` reads its configuration when `--config` names no other file.
 pub(crate) const DEFAULT_CONFIG: &str = "/etc/zeatend/config.yaml";
 
-/// Reads the configuration file, or gives the defaults when there is none. The flag says whether
-/// the defaults were used.
-pub(crate) fn document_or_defaults(path: &Path) -> Result<(Document, bool), InstallError> {
-    if !path.exists() {
-        return Ok((Document::Install(Config::default()), true));
+/// Where the configuration came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Source {
+    /// The file `--config` names.
+    File,
+    /// zeabur-installer's configuration file, on a host it installed.
+    Installer,
+    /// No file: K3s on this host.
+    Defaults,
+}
+
+/// Reads the configuration file. Without one, reads zeabur-installer's, else gives the defaults.
+pub(crate) fn document_or_defaults(path: &Path) -> Result<(Document, Source), InstallError> {
+    if path.exists() {
+        return Ok((document(path)?, Source::File));
     }
-    Ok((document(path)?, false))
+    if let Some(document) = crate::installer::document()? {
+        return Ok((document, Source::Installer));
+    }
+    Ok((Document::Install(Config::default()), Source::Defaults))
 }
 
 /// Reads a configuration file of either kind. A join configuration that holds its token must not
@@ -53,8 +66,8 @@ mod tests {
     #[test]
     fn a_missing_file_gives_the_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let (document, defaults) = document_or_defaults(&dir.path().join("none.yaml")).unwrap();
-        assert!(defaults);
+        let (document, source) = document_or_defaults(&dir.path().join("none.yaml")).unwrap();
+        assert_eq!(source, Source::Defaults);
         assert_eq!(document, Document::Install(Config::default()));
     }
 
