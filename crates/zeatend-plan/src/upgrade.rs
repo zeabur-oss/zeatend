@@ -155,9 +155,9 @@ pub fn check_kubernetes(
                     running.minor + 1
                 ),
                 Distribution::K3s | Distribution::Rke2 => format!(
-                    "set {}Version to a release of Kubernetes 1.{} and apply, then remove it and \
-                     apply again",
-                    distribution.id(),
+                    "set version to a {} release of Kubernetes 1.{} and apply, then remove it \
+                     and apply again",
+                    distribution.title(),
                     running.minor + 1
                 ),
             },
@@ -251,7 +251,7 @@ mod tests {
         let error = check("v1.35.4+k3s1", "1.37").unwrap_err().to_string();
         assert!(
             error.contains("Kubernetes 1.35.4")
-                && error.contains("k3sVersion")
+                && error.contains("set version to a K3s release")
                 && error.contains("1.36"),
             "{error}"
         );

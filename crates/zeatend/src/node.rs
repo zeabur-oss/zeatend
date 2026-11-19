@@ -255,18 +255,10 @@ fn duration(ttl: Duration) -> String {
 
 /// The shell commands that write the join configuration and run zeatend.
 fn commands(i: &Instructions<'_>) -> String {
-    let mut lines = vec![format!(
-        "distribution: {}",
-        i.distribution.distribution().id()
-    )];
-    if let Some(version) = i
-        .version
-        .filter(|v| *v != i.distribution.distribution().pinned_version())
-    {
-        lines.push(format!(
-            "{}Version: {version}",
-            i.distribution.distribution().id()
-        ));
+    let distribution = i.distribution.distribution();
+    let mut lines = vec![format!("distribution: {}", distribution.id())];
+    if let Some(version) = i.version.filter(|v| *v != distribution.pinned_version()) {
+        lines.push(format!("version: {version}"));
     }
     if !i.disable.is_empty() {
         let names: Vec<&str> = i.disable.iter().map(|c| c.name()).collect();
@@ -358,7 +350,7 @@ mod tests {
         assert_eq!(config.join.role, Role::Worker);
         assert_eq!(config.join.node_names, ["vps-1", "vps-2"]);
         assert_eq!(config.disable, []);
-        assert_eq!(config.version(), Some("v1.37.1+rke2r1"));
+        assert_eq!(config.version.as_deref(), Some("v1.37.1+rke2r1"));
         assert!(text.contains("joins workers for 30m"), "{text}");
         assert!(
             text.contains("/usr/local/bin/rke2 token delete abcdef"),
@@ -381,7 +373,7 @@ mod tests {
         });
         let config = pasted(&text);
         assert_eq!(config.join.role, Role::Server);
-        assert_eq!(config.version(), None);
+        assert_eq!(config.version.as_deref(), None);
         assert_eq!(
             config.disable,
             [Component::Traefik, Component::MetricsServer]
@@ -404,7 +396,7 @@ mod tests {
             disable: &[],
             ttl: Duration::from_hours(1),
         });
-        assert_eq!(pasted(&text).version(), None, "{text}");
+        assert_eq!(pasted(&text).version.as_deref(), None, "{text}");
     }
 
     #[test]

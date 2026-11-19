@@ -317,7 +317,7 @@ fn confirming_the_review_starts_the_install_with_the_plan_it_showed() {
 #[test]
 fn another_distribution_drops_the_release_override() {
     let config = Config {
-        k3s_version: Some("v1.37.1+k3s1".to_owned()),
+        version: Some("v1.37.1+k3s1".to_owned()),
         ..Config::default()
     };
     let choices = Choices::new(host(), config, "/etc/zeatend/config.yaml".to_owned(), true);
@@ -325,11 +325,11 @@ fn another_distribution_drops_the_release_override() {
     press(&mut app, KeyCode::Down);
     let config = app.choices.as_ref().unwrap().config();
     assert_eq!(config.distribution, Distribution::Rke2);
-    assert_eq!(config.k3s_version, None);
+    assert_eq!(config.version, None);
     assert!(config.check().is_ok());
     press(&mut app, KeyCode::Up);
     let config = app.choices.as_ref().unwrap().config();
-    assert_eq!(config.k3s_version.as_deref(), Some("v1.37.1+k3s1"));
+    assert_eq!(config.version.as_deref(), Some("v1.37.1+k3s1"));
 }
 
 #[test]

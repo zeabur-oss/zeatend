@@ -284,7 +284,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     let mut findings = Vec::new();
     let cluster = cluster_plan(
         distribution,
-        config.version(),
+        config.version.as_deref(),
         &facts.facts.arch,
         &mut findings,
     )?;
