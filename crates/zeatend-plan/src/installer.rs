@@ -53,15 +53,18 @@ pub const fn state_dir(distribution: Distribution) -> &'static str {
 pub fn document(yaml: &str) -> Result<Document, PlanError> {
     let installer: Value = serde_saphyr::from_str(yaml)
         .map_err(|e| PlanError::Config(format!("{CONFIG_FILE}: {e}")))?;
+    let personal = installer.get("use").and_then(Value::as_str) == Some("personal");
     let mut config = Map::new();
-    if installer.get("use").and_then(Value::as_str) == Some("personal") {
+    if personal {
+        // A personal configuration has no distribution, release or join keys.
         config.insert("distribution".to_owned(), Value::from("kubesolo"));
+    } else {
+        keep(
+            &mut config,
+            &installer,
+            &["distribution", "rke2Version", "k3sVersion"],
+        );
     }
-    keep(
-        &mut config,
-        &installer,
-        &["distribution", "rke2Version", "k3sVersion"],
-    );
     if let Some(host) = installer.get("host") {
         let mut kept = Map::new();
         keep(
@@ -72,7 +75,7 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
         config.insert("host".to_owned(), Value::Object(kept));
     }
     let error = |e: serde_json::Error| PlanError::Config(format!("{CONFIG_FILE}: {e}"));
-    let Some(installer_join) = installer.get("join") else {
+    let Some(installer_join) = installer.get("join").filter(|_| !personal) else {
         let config: Config = serde_json::from_value(Value::Object(config)).map_err(error)?;
         config.check()?;
         return Ok(Document::Install(config));
@@ -133,6 +136,13 @@ mod tests {
     #[test]
     fn a_personal_config_is_kubesolo_and_the_default_is_k3s() {
         let Document::Install(personal) = document("use: personal\ntelemetry: false\n").unwrap()
+        else {
+            panic!("an install");
+        };
+        assert_eq!(personal.distribution, Distribution::KubeSolo);
+        let Document::Install(personal) =
+            document("use: personal\ndistribution: rke2\njoin:\n  server: https://a:9345\n")
+                .unwrap()
         else {
             panic!("an install");
         };

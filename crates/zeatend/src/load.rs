@@ -39,7 +39,13 @@ pub(crate) fn document(path: &Path) -> Result<Document, InstallError> {
     let text = fs::read_to_string(path)
         .map_err(|e| InstallError::Message(format!("{}: {e}", path.display())))?;
     let document = Document::parse(&text)?;
-    if let Document::Join(JoinConfig { join, .. }) = &document
+    refuse_shared_token(path, &document)?;
+    Ok(document)
+}
+
+/// Refuses a join configuration that holds its token in a file others can read.
+pub(crate) fn refuse_shared_token(path: &Path, document: &Document) -> Result<(), InstallError> {
+    if let Document::Join(JoinConfig { join, .. }) = document
         && join.token.is_some()
     {
         let mode = fs::metadata(path)
@@ -54,7 +60,7 @@ pub(crate) fn document(path: &Path) -> Result<Document, InstallError> {
             )));
         }
     }
-    Ok(document)
+    Ok(())
 }
 
 #[cfg(test)]

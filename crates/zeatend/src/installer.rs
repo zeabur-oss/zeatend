@@ -14,9 +14,14 @@ use zeatend_plan::upgrade::release_tag;
 use crate::{InstallError, apply};
 
 /// zeatend's configuration from the installer's configuration file; `None` when there is none.
+/// A join token in it must not be readable by others, as in zeatend's own file.
 pub(crate) fn document() -> Result<Option<Document>, InstallError> {
     match fs::read_to_string(CONFIG_FILE) {
-        Ok(text) => Ok(Some(installer::document(&text)?)),
+        Ok(text) => {
+            let document = installer::document(&text)?;
+            crate::load::refuse_shared_token(Path::new(CONFIG_FILE), &document)?;
+            Ok(Some(document))
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(e) => Err(InstallError::Message(format!("{CONFIG_FILE}: {e}"))),
     }
