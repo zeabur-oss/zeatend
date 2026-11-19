@@ -14,7 +14,7 @@ use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
 use zeatend_plan::cluster::{self, Rancher};
 use zeatend_plan::config::{Component, Role};
-use zeatend_plan::{PlanError, join};
+use zeatend_plan::{PlanError, join, ports};
 
 use crate::{InstallError, apply, output};
 
@@ -101,7 +101,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     };
     let text = instructions(&Instructions {
         distribution,
-        server: &server_url(&address, distribution.join_port()),
+        server: &ports::api_server_url(&address, distribution.join_port()),
         role: options.role,
         token: &token,
         version: record.as_ref().and_then(|r| r.version.as_deref()),
@@ -114,15 +114,6 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     });
     output::line(text.trim_end());
     Ok(())
-}
-
-/// `https://<address>:<port>`, with an IPv6 address in brackets.
-fn server_url(address: &str, port: u16) -> String {
-    if address.contains(':') {
-        format!("https://[{address}]:{port}")
-    } else {
-        format!("https://{address}:{port}")
-    }
 }
 
 fn internal_ip(node: &Node) -> Option<String> {
@@ -406,12 +397,6 @@ mod tests {
             ttl: Duration::from_hours(1),
         });
         assert_eq!(pasted(&text).version(), None, "{text}");
-    }
-
-    #[test]
-    fn an_ipv6_address_is_bracketed() {
-        assert_eq!(server_url("fd00::5", 9345), "https://[fd00::5]:9345");
-        assert_eq!(server_url("10.0.0.5", 6443), "https://10.0.0.5:6443");
     }
 
     #[test]

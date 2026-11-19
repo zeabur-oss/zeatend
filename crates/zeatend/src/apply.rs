@@ -13,12 +13,12 @@ use zeatend_plan::cluster::{
 };
 use zeatend_plan::config::{Component, Config};
 use zeatend_plan::finding::Status;
-use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::precondition::{Change, Preconditions, RecordState};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
 use zeatend_plan::upgrade::{Kubernetes, release_tag};
+use zeatend_plan::{k3s, ports};
 
 use crate::{InstallError, i18n, output, render};
 
@@ -120,9 +120,11 @@ pub(crate) async fn run(
     output::step(messages.done);
     let layout = rancher.layout();
     let host = reachable_host(&config.host.tls_san).await;
+    // The `server:` URL in the admin kubeconfig that K3s and RKE2 write.
+    let loopback = ports::api_server_url("127.0.0.1", ports::API_SERVER);
     let url = host
         .as_deref()
-        .map(|host| format!("https://{}:6443", url_host(host)));
+        .map(|host| ports::api_server_url(host, ports::API_SERVER));
     output::line(&(messages.ready)(&i18n::Ready {
         cluster: &format!("{} {}", rancher.title(), plan.release.version()),
         node: &name,
@@ -132,14 +134,11 @@ pub(crate) async fn run(
         ),
         kubeconfig: layout.admin_kubeconfig,
         host: host.as_deref(),
-        rewrite: url.as_deref().map(|url| (LOOPBACK_SERVER, url)),
+        rewrite: url.as_deref().map(|url| (loopback.as_str(), url)),
         add_nodes: true,
     }));
     Ok(())
 }
-
-/// The `server:` URL in the admin kubeconfig that K3s and RKE2 write.
-const LOOPBACK_SERVER: &str = "https://127.0.0.1:6443";
 
 /// The address a person's computer reaches this server at: the first of `host.tlsSan`, else the
 /// host's first address.
@@ -147,15 +146,6 @@ pub(crate) async fn reachable_host(tls_san: &[String]) -> Option<String> {
     match tls_san.first() {
         Some(name) => Some(name.clone()),
         None => facts::addresses().await.into_iter().next(),
-    }
-}
-
-/// `host` as the host of a URL: an IPv6 address in brackets.
-fn url_host(host: &str) -> String {
-    if host.contains(':') {
-        format!("[{host}]")
-    } else {
-        host.to_owned()
     }
 }
 

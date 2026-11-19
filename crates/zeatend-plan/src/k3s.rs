@@ -25,12 +25,12 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use serde::{Deserialize, Serialize};
 
-use crate::PlanError;
 use crate::cluster::{
     AUDIT_POLICY, Distribution, HostFile, Options, Rancher, RancherConfig, managed, manifest,
 };
 use crate::config::Component;
 use crate::tuning::HostTuning;
+use crate::{PlanError, ports};
 
 /// The binary; `install.sh` expects it here.
 pub const BINARY: &str = "/usr/local/bin/k3s";
@@ -178,9 +178,6 @@ plugins:
           burst: 20000
 ";
 
-/// The port K3s's packaged metrics-server serves on (`--secure-port`).
-const METRICS_SERVER_PORT: u16 = 10250;
-
 /// What RKE2's `cis` profile creates in the system namespaces and K3s does not: network policies
 /// and default service accounts that mount no token. The metrics-server port stays open, as the
 /// API server reaches it from the host.
@@ -213,7 +210,7 @@ fn system_objects(disable: &[Component]) -> Result<HostFile, PlanError> {
         "default-network-metrics-server-policy",
         "kube-system",
         pods("k8s-app", "metrics-server"),
-        ports(&[(IntOrString::Int(METRICS_SERVER_PORT.into()), "TCP")]),
+        ports(&[(IntOrString::Int(ports::KUBELET.into()), "TCP")]),
     ));
     if !disable.contains(&Component::Traefik) {
         // As RKE2's `default-network-traefik-policy`.
