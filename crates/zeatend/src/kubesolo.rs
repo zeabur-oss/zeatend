@@ -8,14 +8,13 @@ use std::time::Duration;
 
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::preflight::Node;
-use zeatend_host::{archive, cmd, download, facts, files, systemd};
+use zeatend_host::{archive, download, facts, files, systemd};
 use zeatend_plan::config::Config;
 use zeatend_plan::kubesolo::{
     ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
 };
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
 use zeatend_plan::record::Record;
-use zeatend_plan::upgrade::release_tag;
 
 use crate::apply::{
     changed_files, check_host, owe_restart, restart_owed, restarted, show_checks, write_record,
@@ -89,7 +88,7 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
             kubectl
                 .wait(&["node", "--all", "--for=condition=Ready", "--timeout=10s"])
                 .await
-                .is_ok()
+                .map(|()| true)
         },
     )
     .await?;
@@ -97,7 +96,13 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
         ("kube-system", "coredns"),
         ("local-path-storage", "local-path-provisioner"),
     ] {
-        wait_available(&kubectl, namespace, deployment).await?;
+        kubectl
+            .rollout(
+                namespace,
+                &format!("deployment/{deployment}"),
+                Duration::from_mins(10),
+            )
+            .await?;
     }
     write_record(
         Path::new(STATE_DIR),
@@ -117,32 +122,6 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
         rewrite: None,
         add_nodes: false,
     }));
-    Ok(())
-}
-
-async fn wait_available(
-    kubectl: &Kubectl,
-    namespace: &str,
-    name: &str,
-) -> Result<(), InstallError> {
-    let target = format!("deployment/{name}");
-    kubectl::poll(
-        Duration::from_mins(10),
-        &format!("{namespace}/{name}"),
-        async || {
-            kubectl
-                .wait(&[
-                    "--namespace",
-                    namespace,
-                    &target,
-                    "--for=condition=Available",
-                    "--timeout=10s",
-                ])
-                .await
-                .is_ok()
-        },
-    )
-    .await?;
     Ok(())
 }
 
@@ -209,7 +188,7 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
 
 /// Whether the binary at `path` is missing or reports another release than `version`.
 async fn binary_outdated(path: &Path, version: &str) -> bool {
-    release_tag(&cmd::version_output(path).await).as_deref() != Some(version)
+    crate::apply::installed_release(path).await.as_deref() != Some(version)
 }
 
 fn io(path: &Path) -> impl Fn(std::io::Error) -> InstallError {

@@ -3,16 +3,11 @@
 //! A subprocess rather than a client library: zeatend reads a few objects and waits on them, and
 //! `kubectl` is already on the host, matched to the server.
 
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
 use zeatend_plan::cluster::Rancher;
-use zeatend_plan::plan::MANAGER;
 
 use crate::{HostError, cmd};
 
@@ -51,40 +46,6 @@ impl Kubectl {
         let mut all = vec![kubeconfig.as_str()];
         all.extend_from_slice(args);
         cmd::run(&self.binary, &all, stdin).await
-    }
-
-    /// Server-side applies documents into `namespace` when they name none.
-    ///
-    /// An admission webhook can be registered before its pods serve, and a kind can be applied
-    /// just after its `CustomResourceDefinition`, before the API server serves it. Such objects
-    /// are retried for a few minutes.
-    ///
-    /// # Errors
-    ///
-    /// When the server rejects them.
-    pub async fn apply_in(&self, namespace: &str, documents: &[u8]) -> Result<String, HostError> {
-        let manager = format!("--field-manager={MANAGER}");
-        let args = [
-            "apply",
-            "--server-side",
-            "--force-conflicts",
-            &manager,
-            "--namespace",
-            namespace,
-            "-f",
-            "-",
-        ];
-        let start = Instant::now();
-        loop {
-            match self.run(&args, Some(documents)).await {
-                Err(HostError::Command { reason, .. })
-                    if not_serving_yet(&reason) && start.elapsed() < Duration::from_mins(5) =>
-                {
-                    tokio::time::sleep(Duration::from_secs(5)).await;
-                }
-                result => return result,
-            }
-        }
     }
 
     /// Gets an object, such as a `k8s_openapi` `Node`, or `None` when it does not exist.
@@ -156,92 +117,99 @@ impl Kubectl {
         poll(timeout, "the API server to become ready", async || {
             self.run(&["get", "--raw=/readyz", READ_TIMEOUT], None)
                 .await
-                .is_ok()
+                .map(|_| true)
         })
         .await
     }
+
+    /// Waits for `object`, such as `deployment/coredns`, to exist and then for its rollout to
+    /// complete, each within `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// When it does not, with the reason `kubectl` gives.
+    pub async fn rollout(
+        &self,
+        namespace: &str,
+        object: &str,
+        timeout: Duration,
+    ) -> Result<(), HostError> {
+        let timeout = format!("--timeout={}s", timeout.as_secs());
+        let namespaced = ["--namespace", namespace, object, &timeout];
+        self.wait(&[&namespaced[..], &["--for=create"]].concat())
+            .await?;
+        self.run(&[&["rollout", "status"][..], &namespaced].concat(), None)
+            .await
+            .map(drop)
+    }
 }
 
-/// Calls `ready` every few seconds until it returns `true`.
+/// Calls `ready` every few seconds until it returns `Ok(true)`. It calls `ready` at least once.
 ///
 /// # Errors
 ///
-/// When it does not within `timeout`.
-pub async fn poll(
+/// When it does not within `timeout`. The error holds the last error of `ready`, if the last try
+/// failed.
+pub async fn poll<E>(
     timeout: Duration,
     what: &str,
-    mut ready: impl AsyncFnMut() -> bool,
-) -> Result<(), HostError> {
+    mut ready: impl AsyncFnMut() -> Result<bool, E>,
+) -> Result<(), E>
+where
+    E: From<HostError> + std::fmt::Display,
+{
     let start = Instant::now();
-    while start.elapsed() < timeout {
-        if ready().await {
-            return Ok(());
+    loop {
+        let last = match ready().await {
+            Ok(true) => return Ok(()),
+            Ok(false) => None,
+            Err(e) => Some(e),
+        };
+        if start.elapsed() >= timeout {
+            let mut reason = format!("not done after {} s", timeout.as_secs());
+            if let Some(e) = last {
+                reason = format!("{reason}: {e}");
+            }
+            return Err(HostError::Command {
+                command: format!("waiting for {what}"),
+                reason,
+            }
+            .into());
         }
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
-    Err(HostError::Command {
-        command: format!("waiting for {what}"),
-        reason: format!("not done after {} s", timeout.as_secs()),
-    })
-}
-
-fn not_serving_yet(reason: &str) -> bool {
-    reason.contains("failed calling webhook")
-        || reason.contains("no endpoints available for service")
-        || reason.contains("ensure CRDs are installed first")
-}
-
-/// A Secret object, labelled as zeatend's.
-#[must_use]
-pub fn secret(namespace: &str, name: &str, data: &BTreeMap<String, Vec<u8>>) -> Value {
-    let data: BTreeMap<&str, String> = data
-        .iter()
-        .map(|(k, v)| (k.as_str(), STANDARD.encode(v)))
-        .collect();
-    json!({
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {"name": name, "namespace": namespace, "labels": {"app.kubernetes.io/managed-by": MANAGER}},
-        "type": "Opaque",
-        "data": data,
-    })
-}
-
-/// A key of a Secret object, decoded.
-#[must_use]
-pub fn secret_key(secret: &Value, key: &str) -> Option<Vec<u8>> {
-    STANDARD
-        .decode(secret.get("data")?.get(key)?.as_str()?)
-        .ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn secrets_round_trip() {
-        let data = BTreeMap::from([("k".to_owned(), b"v".to_vec())]);
-        let s = secret("ns", "n", &data);
-        assert_eq!(s["data"]["k"], "dg==");
-        assert_eq!(secret_key(&s, "k").unwrap(), b"v");
-        assert!(secret_key(&s, "x").is_none());
+    #[tokio::test]
+    async fn a_timeout_reports_the_last_error() {
+        let error = poll(Duration::ZERO, "the widget", async || {
+            Err::<bool, HostError>(HostError::Command {
+                command: "kubectl wait".to_owned(),
+                reason: "deployments.apps \"widget\" not found".to_owned(),
+            })
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.starts_with("waiting for the widget: not done"),
+            "{error}"
+        );
+        assert!(error.contains("\"widget\" not found"), "{error}");
     }
 
-    #[test]
-    fn webhooks_not_yet_serving_are_retried() {
-        assert!(not_serving_yet(
-            "exit status: 1\nError from server (InternalError): Internal error occurred: failed \
-             calling webhook \"validate.widgets.example.com\": failed to call webhook: no \
-             endpoints available for service \"widget-webhook\""
-        ));
-        assert!(not_serving_yet(
-            "error: resource mapping not found for name: \"one\" namespace: \"\" from \"STDIN\": \
-             no matches for kind \"Widget\" in version \"example.com/v1\"\nensure CRDs are \
-             installed first"
-        ));
-        assert!(!not_serving_yet(
-            "Error from server (Invalid): Widget.example.com \"one\" is invalid"
-        ));
+    #[tokio::test]
+    async fn a_timeout_without_an_error_says_what_is_not_done() {
+        let error = poll(Duration::ZERO, "the widget", async || {
+            Ok::<_, HostError>(false)
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+        assert_eq!(error, "waiting for the widget: not done after 0 s");
     }
 }

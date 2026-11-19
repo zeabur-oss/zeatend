@@ -47,6 +47,69 @@ pub async fn is_active(unit: &str) -> bool {
     cmd::succeeds("systemctl", &["is-active", "--quiet", unit]).await
 }
 
+/// When the main process of a unit started, in seconds since the Unix epoch.
+///
+/// The time comes from the D-Bus property in microseconds, because the text of
+/// `systemctl show` depends on the systemd version and the time zone.
+///
+/// # Errors
+///
+/// When `busctl` fails or the unit has not started.
+pub async fn main_started(unit: &str) -> Result<i64, HostError> {
+    let object = bus_object(unit);
+    let shown = cmd::run(
+        "busctl",
+        &[
+            "--json=short",
+            "get-property",
+            "org.freedesktop.systemd1",
+            &object,
+            "org.freedesktop.systemd1.Service",
+            "ExecMainStartTimestamp",
+        ],
+        None,
+    )
+    .await?;
+    unix_seconds(&shown).ok_or_else(|| HostError::Parse {
+        what: format!("the start of {unit}"),
+        reason: format!("not a time: {:?}", shown.trim()),
+    })
+}
+
+/// The D-Bus object of a unit. A name without a type, such as `k3s`, is a service.
+fn bus_object(unit: &str) -> String {
+    let name = if unit.contains('.') {
+        unit.to_owned()
+    } else {
+        format!("{unit}.service")
+    };
+    format!("/org/freedesktop/systemd1/unit/{}", bus_label(&name))
+}
+
+/// A unit name as a D-Bus object path label: every byte but a letter or digit is `_` and two
+/// hex digits.
+fn bus_label(unit: &str) -> String {
+    unit.bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() {
+                char::from(byte).to_string()
+            } else {
+                format!("_{byte:02x}")
+            }
+        })
+        .collect()
+}
+
+/// The seconds in `{"type":"t","data":1792742430000000}`, the microseconds `busctl` prints.
+fn unix_seconds(shown: &str) -> Option<i64> {
+    #[derive(serde::Deserialize)]
+    struct Property {
+        data: i64,
+    }
+    let property: Property = serde_json::from_str(shown).ok()?;
+    (property.data > 0).then_some(property.data / 1_000_000)
+}
+
 /// Whether systemd manages this host: the test of `sd_booted(3)`.
 #[must_use]
 pub fn booted() -> bool {
@@ -181,6 +244,30 @@ mod tests {
             literal("/etc/zeatend/config.yaml"),
             "/etc/zeatend/config.yaml"
         );
+    }
+
+    #[test]
+    fn unix_seconds_come_from_microseconds() {
+        assert_eq!(
+            unix_seconds("{\"type\":\"t\",\"data\":1792742430999999}\n"),
+            Some(1_792_742_430)
+        );
+        assert_eq!(unix_seconds("{\"type\":\"t\",\"data\":0}"), None);
+        assert_eq!(unix_seconds("n/a"), None);
+    }
+
+    #[test]
+    fn a_unit_without_a_type_is_a_service() {
+        assert_eq!(
+            bus_object("k3s"),
+            "/org/freedesktop/systemd1/unit/k3s_2eservice"
+        );
+        assert_eq!(bus_object("k3s.service"), bus_object("k3s"));
+    }
+
+    #[test]
+    fn unit_names_become_bus_labels() {
+        assert_eq!(bus_label("rke2-server.service"), "rke2_2dserver_2eservice");
     }
 
     #[test]

@@ -4,12 +4,10 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
-use zeatend_host::cmd;
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::Document;
 use zeatend_plan::installer::{self, CONFIG_FILE, VERSION_FILE};
 use zeatend_plan::record::{Record, Writer};
-use zeatend_plan::upgrade::release_tag;
 
 use crate::{InstallError, apply};
 
@@ -78,6 +76,6 @@ async fn record(distribution: Distribution) -> Option<Record> {
     Some(Record {
         writer: Writer::Installer(installer_version),
         distribution: Some(distribution.id().to_owned()),
-        version: release_tag(&cmd::version_output(binary).await),
+        version: apply::installed_release(&binary).await,
     })
 }

@@ -111,22 +111,21 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
         0o600,
         format!("{token}\n").as_bytes(),
     )?;
-    let started = apply::install_cluster(&ClusterInstall {
+    let install = ClusterInstall {
         cluster: &plan.cluster,
         files: &plan.host_files,
         server: plan.role == Role::Server,
         changed,
-    })
-    .await?;
+    };
+    let restarted = apply::install_cluster(&install).await?;
 
     let name = plan.node_name.clone();
     let messages = crate::i18n::messages();
     output::step(&(messages.waiting_for_node)(&name));
-    let own = own_kubectl(distribution);
-    kubectl::poll(
-        Duration::from_mins(10),
-        &format!("node {name} to be Ready"),
-        async || node_ready(&own, &name, started).await.unwrap_or(false),
+    wait_node_ready(
+        &own_kubectl(distribution),
+        &name,
+        restarted.then(|| install.unit()),
     )
     .await?;
     apply::write_record(
@@ -146,20 +145,33 @@ pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Whether the node reports Ready, after `since` (seconds since the Unix epoch) when given: the
-/// kubelet reports its status as soon as it starts, so a heartbeat from before a restart is the
+/// Waits for node `name` to be Ready. After a restart of `restarted`, only a Ready condition that
+/// the new kubelet reported counts: a heartbeat from before the unit's main process started is the
 /// old kubelet's. The kubelet's own credentials may read its Node object, so this works on an
 /// agent, which has no admin kubeconfig.
-pub(crate) async fn node_ready(
+pub(crate) async fn wait_node_ready(
     kubectl: &Kubectl,
     name: &str,
-    since: Option<u64>,
-) -> Result<bool, InstallError> {
-    let node: Option<Node> = kubectl.get("node", name, None).await?;
-    Ok(node.as_ref().is_some_and(|n| ready_since(n, since)))
+    restarted: Option<&str>,
+) -> Result<(), InstallError> {
+    let since = match restarted {
+        Some(unit) => Some(systemd::main_started(unit).await?),
+        None => None,
+    };
+    kubectl::poll(
+        Duration::from_mins(10),
+        &format!("node {name} to be Ready"),
+        async || {
+            let node: Option<Node> = kubectl.get("node", name, None).await?;
+            Ok::<_, InstallError>(node.as_ref().is_some_and(|n| ready_since(n, since)))
+        },
+    )
+    .await
 }
 
-pub(crate) fn ready_since(node: &Node, since: Option<u64>) -> bool {
+/// Whether the node reports Ready, with a heartbeat at or after `since` (seconds since the Unix
+/// epoch) when given.
+pub(crate) fn ready_since(node: &Node, since: Option<i64>) -> bool {
     node.status
         .iter()
         .flat_map(|s| s.conditions.iter().flatten())
@@ -169,8 +181,7 @@ pub(crate) fn ready_since(node: &Node, since: Option<u64>) -> bool {
                 && since.is_none_or(|since| {
                     c.last_heartbeat_time
                         .as_ref()
-                        .and_then(|beat| u64::try_from(beat.0.as_second()).ok())
-                        .is_some_and(|beat| beat > since)
+                        .is_some_and(|beat| beat.0.as_second() >= since)
                 })
         })
 }
@@ -187,8 +198,8 @@ mod tests {
         let node: Node = serde_json::from_str(NODE).unwrap();
         let at = 1_792_742_430; // 2026-10-23T08:00:30Z
         assert!(ready_since(&node, None));
-        assert!(ready_since(&node, Some(at - 1)));
-        assert!(!ready_since(&node, Some(at)));
+        assert!(ready_since(&node, Some(at)));
+        assert!(!ready_since(&node, Some(at + 1)));
         let not_ready: Node = serde_json::from_str(&NODE.replace(
             r#""status": "True", "type": "Ready""#,
             r#""status": "Unknown", "type": "Ready""#,
