@@ -32,6 +32,11 @@ cargo nextest run --workspace --all-features --locked --no-tests=warn
 cargo deny --locked check
 ```
 
+The pictures of the screens in `docs/screens` are drawn again before a release, not in the pull
+request that changes a screen, so two such pull requests do not conflict over them. Before a
+release, run `cargo nextest run -p zeatend --run-ignored only draw_the_pictures_in_docs` and commit
+`docs/screens`.
+
 A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds a change file in
 `.changeset/` (`knope document-change`) or carries the label `changelog: none`.
 
