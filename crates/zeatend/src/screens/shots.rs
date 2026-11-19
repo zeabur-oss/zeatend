@@ -1,6 +1,6 @@
 //! The pictures of the screens in `docs/screens`, drawn from the same keys a person presses on a
-//! made-up host. `ZEATEND_WRITE_SCREENS=1 cargo nextest run shots` writes them again; otherwise
-//! the test fails when a picture differs from what the screens draw.
+//! made-up host. They are drawn again before a release, not in each pull request, so two pull
+//! requests that change the screens do not conflict over the pictures (`CONTRIBUTING.md`).
 
 use std::path::{Path, PathBuf};
 
@@ -183,23 +183,15 @@ fn pictures() -> Vec<(String, String)> {
     pictures
 }
 
+/// Writes every picture into `docs/screens`.
 #[test]
-fn the_pictures_in_docs_are_what_the_screens_draw() {
-    let write = std::env::var_os("ZEATEND_WRITE_SCREENS").is_some();
-    let mut stale = Vec::new();
+#[ignore = "writes docs/screens; run it before a release"]
+fn draw_the_pictures_in_docs() {
     for (path, svg) in pictures() {
         let file = docs().join(&path);
-        if write {
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(&file, svg).unwrap();
-        } else if std::fs::read_to_string(&file).ok().as_deref() != Some(svg.as_str()) {
-            stale.push(path);
-        }
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, svg).unwrap();
     }
-    assert!(
-        stale.is_empty(),
-        "run ZEATEND_WRITE_SCREENS=1 cargo nextest run shots; stale: {stale:?}"
-    );
 }
 
 /// The text of the screens drawn at `cols` by `rows`, one line for each row.
