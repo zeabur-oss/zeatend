@@ -4,8 +4,8 @@
 //! and used as a test input. Secret values never appear here: a join token is in a file of mode
 //! 0600 that the configuration names, or in the configuration file, which must then be mode 0600.
 
+use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::PlanError;
 use crate::cluster::Distribution;
@@ -116,9 +116,14 @@ impl Document {
     ///
     /// When the YAML does not match or a value is invalid.
     pub fn parse(yaml: &str) -> Result<Self, PlanError> {
-        let value: Value =
+        /// The key that tells the kinds apart.
+        #[derive(Deserialize)]
+        struct Kind {
+            join: Option<IgnoredAny>,
+        }
+        let kind: Kind =
             serde_saphyr::from_str(yaml).map_err(|e| PlanError::Config(e.to_string()))?;
-        if value.get("join").is_some() {
+        if kind.join.is_some() {
             JoinConfig::parse(yaml).map(Self::Join)
         } else {
             Config::parse(yaml).map(Self::Install)

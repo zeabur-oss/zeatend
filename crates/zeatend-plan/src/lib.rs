@@ -49,6 +49,14 @@ pub enum PlanError {
         /// What the host has.
         have: u64,
     },
+    /// A host file that cannot be serialised.
+    #[error("{path}: {reason}")]
+    HostFile {
+        /// The file.
+        path: String,
+        /// Why.
+        reason: String,
+    },
     /// An admin kubeconfig that cannot be used.
     #[error("kubeconfig: {0}")]
     Kubeconfig(String),

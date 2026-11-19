@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use zeatend_plan::cluster::Rancher;
 use zeatend_plan::plan::MANAGER;
@@ -86,17 +87,17 @@ impl Kubectl {
         }
     }
 
-    /// Gets an object as JSON, or `None` when it does not exist.
+    /// Gets an object, such as a `k8s_openapi` `Node`, or `None` when it does not exist.
     ///
     /// # Errors
     ///
-    /// When the request fails for another reason.
-    pub async fn get(
+    /// When the request fails for another reason, or the answer is not a `T`.
+    pub async fn get<T: DeserializeOwned>(
         &self,
         kind: &str,
         name: &str,
         namespace: Option<&str>,
-    ) -> Result<Option<Value>, HostError> {
+    ) -> Result<Option<T>, HostError> {
         let mut args = vec![
             "get",
             kind,
@@ -120,12 +121,12 @@ impl Kubectl {
             })
     }
 
-    /// Gets an API path as JSON, such as `/api/v1/nodes`.
+    /// Gets an API path, such as `/api/v1/nodes`.
     ///
     /// # Errors
     ///
-    /// When the request fails or the answer is not JSON.
-    pub async fn raw(&self, path: &str) -> Result<Value, HostError> {
+    /// When the request fails or the answer is not a `T`.
+    pub async fn raw<T: DeserializeOwned>(&self, path: &str) -> Result<T, HostError> {
         let raw = format!("--raw={path}");
         let out = self.run(&["get", &raw, READ_TIMEOUT], None).await?;
         serde_json::from_str(&out).map_err(|e| HostError::Parse {
@@ -159,13 +160,6 @@ impl Kubectl {
         })
         .await
     }
-}
-
-/// A Kubernetes timestamp (`2026-10-23T08:00:30Z`, RFC 3339) in seconds since the Unix epoch.
-#[must_use]
-pub fn unix_seconds(text: &str) -> Option<u64> {
-    let at: jiff::Timestamp = text.parse().ok()?;
-    u64::try_from(at.as_second()).ok()
 }
 
 /// Calls `ready` every few seconds until it returns `true`.
@@ -224,20 +218,6 @@ pub fn secret_key(secret: &Value, key: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn timestamps() {
-        assert_eq!(unix_seconds("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(unix_seconds("2000-03-01T00:00:00Z"), Some(951_868_800));
-        assert_eq!(unix_seconds("2026-10-23T08:00:30Z"), Some(1_792_742_430));
-        assert_eq!(unix_seconds("2026-10-23T08:00:30.5Z"), Some(1_792_742_430));
-        assert_eq!(
-            unix_seconds("2026-10-23T16:00:30+08:00"),
-            Some(1_792_742_430)
-        );
-        assert_eq!(unix_seconds("1969-12-31T23:59:59Z"), None);
-        assert_eq!(unix_seconds("yesterday"), None);
-    }
 
     #[test]
     fn secrets_round_trip() {

@@ -7,11 +7,16 @@
 //! server, the encryption of Secrets. A worker has no admin kubeconfig, so it reads its own node
 //! only, with the kubelet's credentials.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use serde_json::Value;
+use k8s_openapi::List;
+use k8s_openapi::api::core::v1;
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 use zeatend_host::kubectl::Kubectl;
 use zeatend_host::preflight::{self, Check, Finding, Kept, Status};
 use zeatend_host::{facts, systemd};
@@ -167,17 +172,13 @@ async fn record(distribution: Distribution, state_dir: &str) -> Finding {
 }
 
 /// Every node with an admin kubeconfig; else this node, read with the kubelet's credentials.
-async fn read_nodes(kubectl: &Kubectl, admin: bool) -> Result<Vec<Value>, String> {
+async fn read_nodes(kubectl: &Kubectl, admin: bool) -> Result<Vec<v1::Node>, String> {
     if admin {
-        let list = kubectl
+        let list: List<v1::Node> = kubectl
             .raw("/api/v1/nodes")
             .await
             .map_err(|e| e.to_string())?;
-        return Ok(list
-            .get("items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default());
+        return Ok(list.items);
     }
     let name = facts::installed_node_name(Path::new("/"))
         .ok_or_else(|| "the kubelet's certificate names no node".to_owned())?;
@@ -208,18 +209,15 @@ fn kubectl_command(distribution: Distribution) -> String {
     )
 }
 
-fn name(node: &Value) -> String {
-    node.pointer("/metadata/name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
+fn name(node: &v1::Node) -> String {
+    node.metadata.name.clone().unwrap_or_default()
 }
 
 /// Whether the nodes are Ready. `command` gives the command that shows why a node is not.
-fn readiness(nodes: &[Value], command: impl Fn(&str) -> String) -> Finding {
-    let (ready, not_ready): (Vec<&Value>, Vec<&Value>) =
+fn readiness(nodes: &[v1::Node], command: impl Fn(&str) -> String) -> Finding {
+    let (ready, not_ready): (Vec<&v1::Node>, Vec<&v1::Node>) =
         nodes.iter().partition(|n| join::ready_since(n, None));
-    let names = |nodes: Vec<&Value>| nodes.into_iter().map(name).collect::<Vec<_>>();
+    let names = |nodes: Vec<&v1::Node>| nodes.into_iter().map(name).collect::<Vec<_>>();
     if not_ready.is_empty() {
         return Finding::NodesReady {
             names: names(ready),
@@ -237,16 +235,18 @@ fn readiness(nodes: &[Value], command: impl Fn(&str) -> String) -> Finding {
 /// (<https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable>).
 /// A kubelet that keeps less than the OS needs at idle has no reserves, at most its default
 /// threshold of 100 MiB, and pods may take the memory the OS and the kubelet need.
-fn reserves(nodes: &[Value], distribution: Distribution) -> Vec<Finding> {
+fn reserves(nodes: &[v1::Node], distribution: Distribution) -> Vec<Finding> {
     let mut found = Vec::new();
     let mut low = Vec::new();
     for node in nodes {
-        let memory = |field: &str| {
-            node.pointer(&format!("/status/{field}/memory"))
-                .and_then(Value::as_str)
-                .and_then(bytes)
+        let memory = |field: Option<&BTreeMap<String, Quantity>>| {
+            field?.get("memory").and_then(|q| bytes(&q.0))
         };
-        match (memory("capacity"), memory("allocatable")) {
+        let status = node.status.as_ref();
+        match (
+            memory(status.and_then(|s| s.capacity.as_ref())),
+            memory(status.and_then(|s| s.allocatable.as_ref())),
+        ) {
             (Some(capacity), Some(allocatable)) => {
                 let mib = capacity.saturating_sub(allocatable) >> 20;
                 if mib < OS_IDLE_MIB {
@@ -299,31 +299,40 @@ fn bytes(quantity: &str) -> Option<u64> {
 /// them as they are
 /// (<https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#understanding-the-encryption-at-rest-configuration>).
 fn secrets_encryption(distribution: Rancher, config: Option<&str>) -> Finding {
-    let config: Value = config
+    let config: EncryptionConfiguration = config
         .and_then(|c| serde_json::from_str(c).ok())
         .unwrap_or_default();
     let writer = config
-        .get("resources")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .find(|r| {
-            r.get("resources")
-                .and_then(Value::as_array)
-                .is_some_and(|names| names.iter().any(|n| n == "secrets"))
-        })
-        .and_then(|r| {
-            r.get("providers")?
-                .get(0)?
-                .as_object()?
-                .keys()
-                .next()
-                .cloned()
-        });
+        .resources
+        .iter()
+        .find(|r| r.resources.iter().any(|n| n == "secrets"))
+        .and_then(|r| r.providers.first()?.keys().next().cloned());
     match writer {
         Some(provider) if provider != "identity" => Finding::SecretsEncrypted { provider },
         _ => Finding::SecretsPlain { distribution },
     }
+}
+
+/// The fields zeatend reads of kube-apiserver's `EncryptionConfiguration`
+/// (`apiserver.config.k8s.io/v1`).
+#[derive(Debug, Default, Deserialize)]
+struct EncryptionConfiguration {
+    #[serde(default)]
+    resources: Vec<ResourceConfiguration>,
+}
+
+/// Resources and the providers that write and read them, in order. Each provider has one key,
+/// its name.
+#[derive(Debug, Deserialize)]
+struct ResourceConfiguration {
+    #[serde(default)]
+    resources: Vec<String>,
+    #[serde(default)]
+    #[expect(
+        clippy::zero_sized_map_values,
+        reason = "a provider is a map with one key, its name, which is all that is read"
+    )]
+    providers: Vec<BTreeMap<String, IgnoredAny>>,
 }
 
 #[cfg(test)]
@@ -347,12 +356,16 @@ mod tests {
         assert_eq!(exit_code(&checks(vec![fail, warn, Finding::ApiReady])), 2);
     }
 
-    fn node(name: &str, ready: &str, capacity: &str, allocatable: &str) -> Value {
-        json!({"metadata": {"name": name}, "status": {
+    fn node(name: &str, ready: &str, capacity: &str, allocatable: &str) -> v1::Node {
+        typed(json!({"metadata": {"name": name}, "status": {
             "conditions": [{"type": "Ready", "status": ready}],
             "capacity": {"memory": capacity},
             "allocatable": {"memory": allocatable},
-        }})
+        }}))
+    }
+
+    fn typed(value: serde_json::Value) -> v1::Node {
+        serde_json::from_value(value).unwrap()
     }
 
     #[test]
@@ -360,7 +373,7 @@ mod tests {
         let nodes = [
             node("a", "True", "", ""),
             node("b", "Unknown", "", ""),
-            json!({"metadata": {"name": "c"}}),
+            typed(json!({"metadata": {"name": "c"}})),
         ];
         let describe = |name: &str| format!("sudo kubectl describe node {name}");
         assert_eq!(
@@ -410,12 +423,38 @@ mod tests {
             }]
         );
         assert_eq!(
-            reserves(&[json!({"metadata": {"name": "x"}})], Distribution::K3s),
+            reserves(
+                &[typed(json!({"metadata": {"name": "x"}}))],
+                Distribution::K3s
+            ),
             [Finding::ReservesUnknown {
                 name: "x".to_owned()
             }]
         );
         assert_eq!(reserves(&[], Distribution::K3s), []);
+    }
+
+    #[test]
+    fn the_node_list_of_the_api_reads_as_nodes() {
+        let list: List<v1::Node> = serde_json::from_str(&format!(
+            r#"{{"apiVersion": "v1", "kind": "NodeList", "metadata": {{"resourceVersion": "812"}},
+                "items": [{}]}}"#,
+            include_str!("../fixtures/node.json")
+        ))
+        .unwrap();
+        let describe = |name: &str| format!("sudo kubectl describe node {name}");
+        assert_eq!(
+            readiness(&list.items, describe),
+            Finding::NodesReady {
+                names: vec!["k3s-1".to_owned()]
+            }
+        );
+        assert_eq!(
+            reserves(&list.items, Distribution::K3s),
+            [Finding::ReservesSet {
+                names: vec!["k3s-1".to_owned()]
+            }]
+        );
     }
 
     #[test]

@@ -16,7 +16,6 @@ base64.workspace = true
 flate2.workspace = true
 hex.workspace = true
 httpdate.workspace = true
-jiff.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde-saphyr.workspace = true

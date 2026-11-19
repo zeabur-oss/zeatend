@@ -239,9 +239,9 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tuning,
             own_network: rancher == Rancher::K3s && facts.k3s_own_network,
             disable: config.disable.clone(),
-        });
-        files.push(rancher.node_name_file(&node_name));
-        files.extend(rancher.node_ip_file(&facts.node_ips));
+        })?;
+        files.push(rancher.node_name_file(&node_name)?);
+        files.extend(rancher.node_ip_file(&facts.node_ips)?);
         (Release::Cluster(cluster), files)
     } else {
         let arch = facts.arch.as_str();
@@ -273,7 +273,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tls_san: config.host.tls_san.clone(),
             tuning,
             installer_webhook: facts.installer_webhook,
-        });
+        })?;
         (Release::KubeSolo(solo), files)
     };
     host_files.extend(facts.apparmor_profile());
