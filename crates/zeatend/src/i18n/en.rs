@@ -45,9 +45,9 @@ const SCREENS: Screens = Screens {
     addresses: "Addresses",
     cpus: |n| {
         if n == 1 {
-            "1 CPU".to_owned()
+            "1 core".to_owned()
         } else {
-            format!("{n} CPUs")
+            format!("{n} cores")
         }
     },
     private_address: |address| format!("{address} (private)"),

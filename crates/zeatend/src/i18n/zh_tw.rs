@@ -42,7 +42,7 @@ const SCREENS: Screens = Screens {
     cpu: "CPU",
     memory: "記憶體",
     addresses: "位址",
-    cpus: |n| format!("{n} 顆 CPU"),
+    cpus: |n| format!("{n} 核 CPU"),
     private_address: |address| format!("{address}（內網）"),
     no_address: "沒有",
     distribution_title: "要安裝哪一種 Kubernetes",
