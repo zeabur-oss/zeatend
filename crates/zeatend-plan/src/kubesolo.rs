@@ -6,10 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::PlanError;
 use crate::cluster::{HostFile, PortUse};
 use crate::installer::KUBESOLO_WEBHOOK_SCRIPT;
 use crate::tuning::HostTuning;
+use crate::{PlanError, ports};
 
 /// The systemd unit.
 pub const UNIT: &str = "kubesolo";
@@ -44,11 +44,11 @@ pub const MIN_MEMORY_MIB: u64 = 1400;
 #[must_use]
 pub fn ports() -> Vec<(u16, PortUse)> {
     vec![
-        (80, PortUse::KubeSoloHttp),
-        (443, PortUse::KubeSoloHttps),
-        (6443, PortUse::KubernetesApi),
-        (10250, PortUse::Kubelet),
-        (10443, PortUse::KubeSoloWebhook),
+        (ports::HTTP, PortUse::KubeSoloHttp),
+        (ports::HTTPS, PortUse::KubeSoloHttps),
+        (ports::API_SERVER, PortUse::KubernetesApi),
+        (ports::KUBELET, PortUse::Kubelet),
+        (ports::KUBESOLO_WEBHOOK, PortUse::KubeSoloWebhook),
     ]
 }
 

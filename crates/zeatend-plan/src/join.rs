@@ -15,7 +15,7 @@ use crate::plan::{ClusterPlan, Facts, cluster_plan};
 use crate::precondition::Preconditions;
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
-use crate::{PlanError, node_name};
+use crate::{PlanError, node_name, ports};
 
 /// Connections timed to the server's join port.
 pub const RTT_SAMPLES: usize = 5;
@@ -31,15 +31,18 @@ pub const RTT_CRITICAL_US: u64 = 50_000;
 #[must_use]
 pub fn server_ports(distribution: Rancher, role: Role) -> Vec<(u16, PortUse)> {
     let mut ports = match distribution {
-        Rancher::K3s => vec![(6443, PortUse::K3sApiAndSupervisor)],
+        Rancher::K3s => vec![(ports::API_SERVER, PortUse::K3sApiAndSupervisor)],
         Rancher::Rke2 => vec![
-            (9345, PortUse::Rke2Supervisor),
-            (6443, PortUse::KubernetesApi),
+            (ports::SUPERVISOR, PortUse::Rke2Supervisor),
+            (ports::API_SERVER, PortUse::KubernetesApi),
         ],
     };
-    ports.push((10250, PortUse::Kubelet));
+    ports.push((ports::KUBELET, PortUse::Kubelet));
     if role == Role::Server {
-        ports.extend([(2379, PortUse::EtcdClient), (2380, PortUse::EtcdPeer)]);
+        ports.extend([
+            (ports::ETCD_CLIENT, PortUse::EtcdClient),
+            (ports::ETCD_PEER, PortUse::EtcdPeer),
+        ]);
     }
     ports
 }

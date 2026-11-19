@@ -17,10 +17,10 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::PlanError;
 use crate::config::Component;
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
+use crate::{PlanError, ports};
 
 /// The Kubernetes distribution zeatend installs.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -330,8 +330,8 @@ impl Rancher {
     #[must_use]
     pub const fn join_port(self) -> u16 {
         match self {
-            Self::K3s => 6443,
-            Self::Rke2 => 9345,
+            Self::K3s => ports::API_SERVER,
+            Self::Rke2 => ports::SUPERVISOR,
         }
     }
 
@@ -437,15 +437,18 @@ impl Rancher {
     /// ingress. A worker runs no API server or supervisor.
     #[must_use]
     pub fn node_ports(self, server: bool) -> Vec<(u16, PortUse)> {
-        let mut ports = vec![(80, PortUse::ServiceLbHttp), (443, PortUse::ServiceLbHttps)];
+        let mut node = vec![
+            (ports::HTTP, PortUse::ServiceLbHttp),
+            (ports::HTTPS, PortUse::ServiceLbHttps),
+        ];
         if server {
-            ports.push((6443, PortUse::KubernetesApi));
+            node.push((ports::API_SERVER, PortUse::KubernetesApi));
             if self == Self::Rke2 {
-                ports.push((9345, PortUse::Rke2Supervisor));
+                node.push((ports::SUPERVISOR, PortUse::Rke2Supervisor));
             }
         }
-        ports.push((10250, PortUse::Kubelet));
-        ports
+        node.push((ports::KUBELET, PortUse::Kubelet));
+        node
     }
 
     /// The files of a server, in the order to write them.
