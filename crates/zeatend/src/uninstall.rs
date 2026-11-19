@@ -17,7 +17,7 @@ use zeatend_host::{HostError, cmd, facts, files, systemd};
 use zeatend_plan::cluster::{APPARMOR_PROFILE, Distribution, Options, Rancher};
 use zeatend_plan::config::Role;
 use zeatend_plan::tuning::{HostTuning, MemoryTier};
-use zeatend_plan::{k3s, kubesolo};
+use zeatend_plan::{installer, k3s, kubesolo};
 
 use crate::{InstallError, apply, load, output};
 
@@ -114,11 +114,18 @@ impl Node {
                 Remove::Tree(kubesolo::STATE_DIR.to_owned()),
                 Remove::Tree(kubesolo::KUBECONFIG.to_owned()),
                 Remove::Tree(APPARMOR_PROFILE.to_owned()),
+                Remove::Tree(installer::KUBESOLO_STATE_DIR.to_owned()),
+                Remove::Tree(installer::KUBESOLO_KUBECONFIG.to_owned()),
+                Remove::Tree(installer::KUBESOLO_WEBHOOK_SCRIPT.to_owned()),
                 Remove::EmptyDir(parent(kubesolo::CONFIG_FILE)),
                 Remove::EmptyDir(parent(kubesolo::KUBECONFIG)),
+                Remove::EmptyDir(parent(installer::KUBESOLO_KUBECONFIG)),
             ];
         };
-        let mut paths = vec![Remove::Tree(apply::STATE_DIR.to_owned())];
+        let mut paths = vec![
+            Remove::Tree(apply::STATE_DIR.to_owned()),
+            Remove::Tree(installer::RANCHER_STATE_DIR.to_owned()),
+        ];
         for tier in [MemoryTier::Small, MemoryTier::Standard] {
             let tuning = HostTuning::new(rancher.into(), tier);
             let written = match self.role {
@@ -126,6 +133,7 @@ impl Node {
                     tls_san: Vec::new(),
                     tuning,
                     own_network: false,
+                    disable: Vec::new(),
                 }),
                 Role::Worker => rancher.agent_files(&tuning),
             };
@@ -139,6 +147,7 @@ impl Node {
             more.extend([
                 rancher.join_file("").path,
                 rancher.layout().join_token_file.to_owned(),
+                installer::join_token_file(rancher),
             ]);
         }
         more.extend(rancher.node_ip_file(&[String::new()]).map(|f| f.path));
@@ -243,9 +252,13 @@ struct Uninstall {
 /// The nodes on a host where `exists` says which paths exist.
 pub(crate) fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
     let mut nodes = Vec::new();
+    // zeatend's join token, or zeabur-installer's on a node it joined.
+    let joined = |rancher: Rancher| {
+        exists(rancher.layout().join_token_file) || exists(&installer::join_token_file(rancher))
+    };
     if exists(K3S_UNINSTALL) {
         // `join` takes no K3s server today; a server with a join token joined all the same.
-        let joined = exists(Rancher::K3s.layout().join_token_file);
+        let joined = joined(Rancher::K3s);
         nodes.push(Node::new(Distribution::K3s, Role::Server, joined));
     }
     if exists(K3S_AGENT_UNINSTALL) {
@@ -259,7 +272,7 @@ pub(crate) fn detect(exists: impl Fn(&str) -> bool) -> Vec<Node> {
         } else {
             Role::Worker
         };
-        let joined = role == Role::Worker || exists(layout.join_token_file);
+        let joined = role == Role::Worker || joined(Rancher::Rke2);
         nodes.push(Node::new(Distribution::Rke2, role, joined));
     }
     if exists(kubesolo::BINARY) || exists(kubesolo::UNIT_FILE) {
@@ -305,7 +318,7 @@ fn describe(
     remove: &[&str],
     volumes: &[&str],
     delete_volumes: bool,
-    kept_config: Option<&str>,
+    configs: &[&str],
 ) -> String {
     let mut out = String::new();
     let mut line = |text: &str| {
@@ -336,7 +349,7 @@ fn describe(
             line(&format!("  {path}"));
         }
     }
-    let kept = kept(&plan.nodes, volumes, delete_volumes, kept_config);
+    let kept = kept(&plan.nodes, volumes, delete_volumes, configs);
     if !kept.is_empty() {
         line("\nThese stay:");
         for item in &kept {
@@ -347,12 +360,7 @@ fn describe(
 }
 
 /// What stays on the host.
-fn kept(
-    nodes: &[Node],
-    volumes: &[&str],
-    delete_volumes: bool,
-    config: Option<&str>,
-) -> Vec<String> {
+fn kept(nodes: &[Node], volumes: &[&str], delete_volumes: bool, configs: &[&str]) -> Vec<String> {
     let mut kept = Vec::new();
     if !delete_volumes {
         kept.extend(
@@ -361,7 +369,14 @@ fn kept(
                 .map(|path| format!("{path}  (volumes; --delete-volumes removes them)")),
         );
     }
-    kept.extend(config.map(|path| format!("{path}  (zeatend's configuration)")));
+    kept.extend(configs.iter().map(|&path| {
+        let whose = if path == installer::CONFIG_FILE {
+            "zeabur-installer's"
+        } else {
+            "zeatend's"
+        };
+        format!("{path}  ({whose} configuration)")
+    }));
     if nodes
         .iter()
         .any(|n| (n.distribution, n.role) == (Distribution::Rke2, Role::Server))
@@ -423,13 +438,16 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         .volumes
         .iter()
         .any(|v| v.stash.is_some_and(|s| exists(root, s)));
-    let kept_config = exists(root, load::DEFAULT_CONFIG).then_some(load::DEFAULT_CONFIG);
+    let kept_configs: Vec<&str> = [load::DEFAULT_CONFIG, installer::CONFIG_FILE]
+        .into_iter()
+        .filter(|path| exists(root, path))
+        .collect();
     let volumes_to_delete = delete_volumes && !volumes.is_empty();
     if plan.nodes.is_empty() && remove.is_empty() && !stashed && !volumes_to_delete {
         output::line(
             "Nothing to remove: K3s, RKE2 and KubeSolo are not installed on this host, and zeatend left no files.",
         );
-        let kept = kept(&plan.nodes, &volumes, false, kept_config);
+        let kept = kept(&plan.nodes, &volumes, false, &kept_configs);
         if !kept.is_empty() {
             output::line(&format!("These stay:\n  {}", kept.join("\n  ")));
         }
@@ -444,7 +462,7 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
              that file system"
         )));
     }
-    output::line(describe(&plan, &remove, &volumes, delete_volumes, kept_config).trim_end());
+    output::line(describe(&plan, &remove, &volumes, delete_volumes, &kept_configs).trim_end());
     if !yes {
         confirm()?;
     }
@@ -848,6 +866,19 @@ mod tests {
             ]),
             vec![RKE2_JOINED]
         );
+        assert_eq!(
+            host(&[K3S_AGENT_UNINSTALL, "/etc/rancher/k3s/zeabur-join-token"]),
+            vec![K3S_WORKER],
+            "a node zeabur-installer joined"
+        );
+        assert_eq!(
+            host(&[
+                RKE2_UNINSTALL,
+                "/var/lib/rancher/rke2/server/token",
+                "/etc/rancher/rke2/zeabur-join-token"
+            ]),
+            vec![RKE2_JOINED]
+        );
         assert_eq!(host(&[kubesolo::BINARY]), vec![KUBESOLO]);
         assert_eq!(host(&[kubesolo::UNIT_FILE]), vec![KUBESOLO]);
         // Volumes that an earlier uninstall kept are not an install.
@@ -906,6 +937,33 @@ mod tests {
         }
         assert!(!paths.iter().any(|p| p.contains("manifests")), "{paths:?}");
         assert!(!paths.contains(&k3s::MEMORY_DROP_IN.to_owned()));
+    }
+
+    #[test]
+    fn what_zeabur_installer_left_is_removed_too() {
+        assert!(tree_paths(K3S_SERVER).contains(&"/var/lib/rancher/zeabur-installer".to_owned()));
+        assert!(
+            tree_paths(RKE2_JOINED).contains(&"/etc/rancher/rke2/zeabur-join-token".to_owned())
+        );
+        let solo = tree_paths(KUBESOLO);
+        for path in [
+            "/var/lib/zeabur-installer",
+            "/etc/zeabur-installer/kubeconfig.yaml",
+            "/usr/local/libexec/zeabur-kubesolo-webhook",
+        ] {
+            assert!(solo.contains(&path.to_owned()), "{path}");
+        }
+        let text = describe(
+            &plan(vec![KUBESOLO]),
+            &[],
+            &[],
+            false,
+            &[installer::CONFIG_FILE],
+        );
+        assert!(
+            text.contains("/etc/zeabur-installer/config.yaml  (zeabur-installer's configuration)"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -1008,7 +1066,7 @@ mod tests {
             &[apply::STATE_DIR],
             &[K3S_LOCAL_PATH],
             false,
-            Some(load::DEFAULT_CONFIG),
+            &[load::DEFAULT_CONFIG],
         );
         assert!(
             text.contains("removes K3s (server) from this host"),
@@ -1026,7 +1084,7 @@ mod tests {
             )),
             "{text}"
         );
-        let deleting = describe(&k3s, &[], &[K3S_LOCAL_PATH, LONGHORN], true, None);
+        let deleting = describe(&k3s, &[], &[K3S_LOCAL_PATH, LONGHORN], true, &[]);
         assert!(
             deleting.contains(&format!(
                 "--delete-volumes removes the volumes, and the data in them:\n  {K3S_LOCAL_PATH}\n  {LONGHORN}\n"
@@ -1034,9 +1092,9 @@ mod tests {
             "{deleting}"
         );
         assert!(!deleting.contains("These stay"), "{deleting}");
-        let rke2 = describe(&plan(vec![RKE2_FIRST]), &[], &[], false, None);
+        let rke2 = describe(&plan(vec![RKE2_FIRST]), &[], &[], false, &[]);
         assert!(rke2.contains("the etcd user"), "{rke2}");
-        let solo = describe(&plan(vec![KUBESOLO]), &[], &[], false, None);
+        let solo = describe(&plan(vec![KUBESOLO]), &[], &[], false, &[]);
         assert!(solo.contains("zeatend stops KubeSolo"), "{solo}");
     }
 

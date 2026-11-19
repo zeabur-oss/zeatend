@@ -18,7 +18,7 @@
 
 use serde_json::{Value, json};
 
-use crate::cluster::{AUDIT_POLICY, HEADER, HostFile, Options, Rancher, yaml_list};
+use crate::cluster::{AUDIT_POLICY, HEADER, HostFile, Options, Rancher, disable_list, yaml_list};
 use crate::plan::MANAGER;
 use crate::tuning::HostTuning;
 
@@ -136,8 +136,7 @@ fn config(options: &Options) -> String {
     // Traefik comes from the Zeabur catalog, which needs a newer chart with the Gateway API
     // provider, so the packaged one is off. The packaged local-path stays as the default storage
     // class. ServiceLB stays and gives an ingress ports 80 and 443.
-    let disable = ["traefik".to_owned()];
-    yaml_list(&mut out, "disable", &disable);
+    disable_list(&mut out, &["traefik"], &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -261,6 +260,7 @@ mod tests {
             tls_san: vec!["k8s.example.com".to_owned()],
             tuning: tuning(MemoryTier::Small),
             own_network: false,
+            disable: Vec::new(),
         }
     }
 
@@ -407,6 +407,29 @@ mod tests {
         }));
         assert_eq!(config["flannel-backend"], "none");
         assert_eq!(config["disable-network-policy"], true);
+    }
+
+    #[test]
+    fn components_an_earlier_install_turned_off_stay_off() {
+        let earlier = "disable:\n  - traefik\n  - local-storage\n  - metrics-server\n";
+        let kept = crate::cluster::disabled_components(earlier);
+        assert_eq!(kept, ["traefik", "local-storage", "metrics-server"]);
+        assert_eq!(
+            crate::cluster::disabled_components("disable: traefik, servicelb\n"),
+            ["traefik", "servicelb"]
+        );
+        assert_eq!(
+            crate::cluster::disabled_components("not: [yaml"),
+            Vec::<String>::new()
+        );
+        let config = config_of(&host_files(&Options {
+            disable: kept,
+            ..options()
+        }));
+        assert_eq!(
+            config["disable"],
+            json!(["traefik", "local-storage", "metrics-server"])
+        );
     }
 
     #[test]

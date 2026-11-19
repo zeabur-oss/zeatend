@@ -11,7 +11,8 @@
 //! overrides it cleanly.
 
 use crate::cluster::{
-    AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, yaml_list,
+    AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, disable_list,
+    yaml_list,
 };
 use crate::tuning::HostTuning;
 
@@ -71,6 +72,7 @@ fn config(options: &Options) -> String {
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     out.push_str(&control_plane_requests());
+    disable_list(&mut out, &[], &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -103,7 +105,28 @@ mod tests {
             tls_san,
             tuning: tuning(),
             own_network: false,
+            disable: Vec::new(),
         }
+    }
+
+    #[test]
+    fn components_an_earlier_install_turned_off_stay_off() {
+        let config = |disable: Vec<String>| -> serde_json::Value {
+            let files = host_files(&Options {
+                disable,
+                ..options(Vec::new())
+            });
+            let file = files
+                .iter()
+                .find(|f| f.path == "/etc/rancher/rke2/config.yaml")
+                .unwrap();
+            serde_saphyr::from_str(&file.content).unwrap()
+        };
+        assert!(config(Vec::new()).get("disable").is_none());
+        assert_eq!(
+            config(vec!["rke2-metrics-server".to_owned()])["disable"],
+            serde_json::json!(["rke2-metrics-server"])
+        );
     }
 
     #[test]

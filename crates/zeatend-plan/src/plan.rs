@@ -47,6 +47,14 @@ pub struct Facts {
     /// network plugin of its own, which zeatend keeps. See [`crate::k3s::runs_own_network`].
     #[serde(default)]
     pub k3s_own_network: bool,
+    /// The packaged components that the K3s or RKE2 configuration on the host turns off. See
+    /// [`crate::cluster::disabled_components`].
+    #[serde(default)]
+    pub disabled_components: Vec<String>,
+    /// The script that zeabur-installer's `KubeSolo` unit runs after each start is on the host.
+    /// See [`crate::kubesolo::Options::installer_webhook`].
+    #[serde(default)]
+    pub installer_webhook: bool,
 }
 
 impl Facts {
@@ -234,6 +242,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tls_san: config.host.tls_san.clone(),
             tuning,
             own_network: rancher == Rancher::K3s && facts.k3s_own_network,
+            disable: facts.disabled_components.clone(),
         });
         files.push(rancher.node_name_file(&node_name));
         files.extend(rancher.node_ip_file(&facts.node_ips));
@@ -267,6 +276,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             node_ip: facts.node_ips.first().cloned(),
             tls_san: config.host.tls_san.clone(),
             tuning,
+            installer_webhook: facts.installer_webhook,
         });
         (Release::KubeSolo(solo), files)
     };
@@ -413,7 +423,7 @@ pub(crate) fn cluster_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record;
+    use crate::record::{self, Writer};
 
     fn config(yaml: &str) -> Config {
         Config::parse(yaml).unwrap()
@@ -431,6 +441,8 @@ mod tests {
             kubernetes: None,
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
+            disabled_components: Vec::new(),
+            installer_webhook: false,
         }
     }
 
@@ -442,7 +454,7 @@ mod tests {
     fn a_host_last_applied_by_a_newer_zeatend_is_left_alone() {
         let newer = Facts {
             record: Some(Record {
-                zeatend_version: "99.0.0".to_owned(),
+                writer: Writer::Zeatend("99.0.0".to_owned()),
                 distribution: None,
                 version: None,
             }),
@@ -545,7 +557,7 @@ mod tests {
         assert!(err.to_string().contains("distribution: kubesolo"), "{err}");
         let installed = Facts {
             record: Some(Record {
-                zeatend_version: record::ZEATEND_VERSION.to_owned(),
+                writer: Writer::Zeatend(record::ZEATEND_VERSION.to_owned()),
                 distribution: Some("k3s".to_owned()),
                 version: Some("v1.0.0+k3s1".to_owned()),
             }),

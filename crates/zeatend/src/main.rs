@@ -4,6 +4,7 @@
 mod apply;
 mod doctor;
 mod i18n;
+mod installer;
 mod join;
 mod kubesolo;
 mod load;
@@ -192,12 +193,21 @@ async fn run(cli: &Cli) -> Result<(), InstallError> {
     {
         return unit::apply(&cli.config).await;
     }
-    let (document, defaults) = load::document_or_defaults(&cli.config)?;
-    if defaults && !matches!(cli.command, Command::Plan { json: true }) {
-        output::note(&format!(
-            "No configuration at {}; using the defaults: K3s on this host.",
-            cli.config.display()
-        ));
+    let (document, source) = load::document_or_defaults(&cli.config)?;
+    if !matches!(cli.command, Command::Plan { json: true }) {
+        match source {
+            load::Source::File => {}
+            load::Source::Installer => output::note(&format!(
+                "No configuration at {}; using the distribution and host settings of {}, which \
+                 zeabur-installer wrote.",
+                cli.config.display(),
+                zeatend_plan::installer::CONFIG_FILE
+            )),
+            load::Source::Defaults => output::note(&format!(
+                "No configuration at {}; using the defaults: K3s on this host.",
+                cli.config.display()
+            )),
+        }
     }
     match (&cli.command, document) {
         (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json).await,

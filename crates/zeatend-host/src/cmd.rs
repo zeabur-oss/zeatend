@@ -72,6 +72,21 @@ pub async fn run_with(
     String::from_utf8(output.stdout).map_err(|e| fail(e.to_string()))
 }
 
+/// The standard output and then the standard error of `program --version`, where K3s and RKE2
+/// print their release and `KubeSolo` logs it; empty when it cannot run.
+pub async fn version_output(program: impl AsRef<Path>) -> String {
+    let Ok(output) = Command::new(program.as_ref())
+        .arg("--version")
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await
+    else {
+        return String::new();
+    };
+    String::from_utf8_lossy(&output.stdout).into_owned() + &String::from_utf8_lossy(&output.stderr)
+}
+
 /// Whether a command exits successfully; output is discarded.
 #[must_use]
 pub async fn succeeds(program: &str, args: &[&str]) -> bool {

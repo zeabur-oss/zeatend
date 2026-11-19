@@ -76,6 +76,20 @@ fn release_numbers(tag: &str) -> Option<[u32; 4]> {
     Some(numbers)
 }
 
+/// The release tag in the `--version` output of K3s, RKE2 or `KubeSolo`: `v1.36.5+k3s1` in
+/// `k3s version v1.36.5+k3s1 (abc)`, `v1.2.3` in `KubeSolo`'s `{"version":"v1.2.3",...}`.
+#[must_use]
+pub fn release_tag(version_output: &str) -> Option<String> {
+    version_output
+        .split(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-')))
+        .find(|word| {
+            word.strip_prefix('v').is_some_and(|rest| {
+                rest.starts_with(|c: char| c.is_ascii_digit()) && rest.contains('.')
+            })
+        })
+        .map(str::to_owned)
+}
+
 /// Stops an `apply` that would install an older release of the same distribution than the
 /// record names.
 ///
@@ -159,7 +173,7 @@ pub fn check_kubernetes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::record::ZEATEND_VERSION;
+    use crate::record::{Writer, ZEATEND_VERSION};
 
     fn k8s(text: &str) -> Kubernetes {
         Kubernetes::parse(text).unwrap()
@@ -167,7 +181,7 @@ mod tests {
 
     fn record(distribution: &str, version: &str) -> Record {
         Record {
-            zeatend_version: ZEATEND_VERSION.to_owned(),
+            writer: Writer::Zeatend(ZEATEND_VERSION.to_owned()),
             distribution: Some(distribution.to_owned()),
             version: Some(version.to_owned()),
         }
@@ -261,5 +275,23 @@ mod tests {
         assert!(check("v1.37.2+rke2r1", "1.36").is_ok());
         let error = check("v1.36.6+rke2r1", "1.37").unwrap_err().to_string();
         assert!(error.contains("servers first"), "{error}");
+    }
+
+    #[test]
+    fn the_release_is_read_from_version_output() {
+        assert_eq!(
+            release_tag("k3s version v1.36.5+k3s1 (4a6d6d0b)\ngo version go1.25.6\n").as_deref(),
+            Some("v1.36.5+k3s1")
+        );
+        assert_eq!(
+            release_tag("rke2 version v1.36.5+rke2r1 (abc)\n").as_deref(),
+            Some("v1.36.5+rke2r1")
+        );
+        assert_eq!(
+            release_tag(r#"{"level":"info","version":"v1.2.3","message":"kubesolo version"}"#)
+                .as_deref(),
+            Some("v1.2.3")
+        );
+        assert_eq!(release_tag("no version here"), None);
     }
 }

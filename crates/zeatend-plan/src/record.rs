@@ -16,15 +16,49 @@ pub const ZEATEND_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const RECORD_FILE: &str = "record.json";
 
 /// What an earlier `apply` or `join` recorded.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {
-    /// The version of the zeatend that wrote it.
-    pub zeatend_version: String,
+    /// The tool that made the install.
+    pub writer: Writer,
     /// The distribution's id, such as `k3s`.
     pub distribution: Option<String>,
     /// The K3s, RKE2 or `KubeSolo` release.
     pub version: Option<String>,
+}
+
+/// The tool that made an install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Writer {
+    /// zeatend, at this version.
+    Zeatend(String),
+    /// zeabur-installer, at this version when the host says it. zeatend writes its own record at
+    /// its first `apply`.
+    Installer(Option<String>),
+}
+
+impl std::fmt::Display for Writer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Zeatend(version) => write!(f, "zeatend {version}"),
+            Self::Installer(Some(version)) => write!(f, "zeabur-installer {version}"),
+            Self::Installer(None) => f.write_str("zeabur-installer"),
+        }
+    }
+}
+
+impl Serialize for Record {
+    /// The JSON of [`RECORD_FILE`]; the installer's version, which zeatend never writes, is left
+    /// out.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(None)?;
+        if let Writer::Zeatend(version) = &self.writer {
+            map.serialize_entry("zeatendVersion", version)?;
+        }
+        map.serialize_entry("distribution", &self.distribution)?;
+        map.serialize_entry("version", &self.version)?;
+        map.end()
+    }
 }
 
 impl Record {
@@ -32,7 +66,7 @@ impl Record {
     #[must_use]
     pub fn new(distribution: Distribution, version: &str) -> Self {
         Self {
-            zeatend_version: ZEATEND_VERSION.to_owned(),
+            writer: Writer::Zeatend(ZEATEND_VERSION.to_owned()),
             distribution: Some(distribution.id().to_owned()),
             version: Some(version.to_owned()),
         }
@@ -44,7 +78,7 @@ impl Record {
     pub fn from_data(data: &Value) -> Option<Self> {
         let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
         Some(Self {
-            zeatend_version: text("zeatendVersion")?,
+            writer: Writer::Zeatend(text("zeatendVersion")?),
             distribution: text("distribution"),
             version: text("version"),
         })
@@ -56,7 +90,10 @@ impl Record {
     ///
     /// [`PlanError::NewerZeatend`].
     pub fn check_zeatend_version(&self) -> Result<(), PlanError> {
-        check_zeatend_version(&self.zeatend_version)
+        match &self.writer {
+            Writer::Zeatend(version) => check_zeatend_version(version),
+            Writer::Installer(_) => Ok(()),
+        }
     }
 }
 
@@ -79,8 +116,8 @@ pub fn check_zeatend_version(recorded: &str) -> Result<(), PlanError> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Changes {
-    /// The version of the zeatend that wrote the record.
-    pub zeatend_version: String,
+    /// The tool that wrote the record, such as `zeatend 0.1.0`.
+    pub written_by: String,
     /// The K3s, RKE2 or `KubeSolo` release, when it changes.
     pub version: Option<VersionChange>,
     /// Host files whose content changes; `apply` fills it.
@@ -111,7 +148,7 @@ impl Changes {
                 to: version.to_owned(),
             });
         Self {
-            zeatend_version: record.zeatend_version.clone(),
+            written_by: record.writer.to_string(),
             restart: version.is_some(),
             version,
             host_files: Vec::new(),
@@ -164,14 +201,14 @@ mod tests {
     #[test]
     fn a_record_from_a_newer_zeatend_names_the_version_to_use() {
         let record = Record {
-            zeatend_version: "99.0.0".to_owned(),
+            writer: Writer::Zeatend("99.0.0".to_owned()),
             distribution: None,
             version: None,
         };
         let error = record.check_zeatend_version().unwrap_err().to_string();
         assert!(error.contains("zeatend 99.0.0 or newer"), "{error}");
         let own = Record {
-            zeatend_version: ZEATEND_VERSION.to_owned(),
+            writer: Writer::Zeatend(ZEATEND_VERSION.to_owned()),
             ..record
         };
         own.check_zeatend_version().unwrap();
@@ -180,7 +217,7 @@ mod tests {
     #[test]
     fn a_new_release_or_changed_file_restarts() {
         let record = Record {
-            zeatend_version: ZEATEND_VERSION.to_owned(),
+            writer: Writer::Zeatend(ZEATEND_VERSION.to_owned()),
             distribution: Some("k3s".to_owned()),
             version: Some("v1.0.0+k3s1".to_owned()),
         };

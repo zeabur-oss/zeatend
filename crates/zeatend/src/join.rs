@@ -51,7 +51,7 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
         Role::Server => distribution.server_unit(),
     };
     let mut facts = facts::read().await?;
-    facts.record = apply::read_record(Path::new(apply::STATE_DIR))?;
+    facts.record = crate::installer::read_record(distribution.into()).await?;
     if facts.record.is_some() {
         facts.kubernetes = apply::running_kubernetes(&own_kubectl(distribution)).await;
     }

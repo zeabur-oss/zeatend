@@ -99,7 +99,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             Token::Server(text.trim().to_owned())
         }
     };
-    let record = apply::read_record(Path::new(apply::STATE_DIR))?;
+    let record = crate::installer::read_record(distribution.into()).await?;
     let text = instructions(&Instructions {
         distribution,
         server: &server_url(&address, distribution.join_port()),

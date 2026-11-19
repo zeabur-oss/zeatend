@@ -136,7 +136,7 @@ pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> 
 /// The plan, with the install record and the running Kubernetes version read from the host.
 async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
     let mut facts = facts::read().await?;
-    facts.record = read_record(Path::new(STATE_DIR))?;
+    facts.record = crate::installer::read_record(rancher.into()).await?;
     if facts.record.is_some() {
         facts.kubernetes = running_kubernetes(&Kubectl::admin(rancher)).await;
     }

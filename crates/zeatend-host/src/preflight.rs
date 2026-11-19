@@ -253,11 +253,11 @@ pub enum Finding {
         /// The systemd unit that runs it.
         unit: &'static str,
     },
-    /// zeatend recorded the install.
+    /// zeatend, or the zeabur-installer it takes over from, recorded the install.
     #[serde(rename = "record.ok")]
     RecordOk {
-        /// The version of the zeatend that wrote the record.
-        zeatend_version: String,
+        /// The tool that wrote the record, such as `zeatend 0.1.0`.
+        writer: String,
     },
     /// No install record could be read.
     #[serde(rename = "record.missing")]
