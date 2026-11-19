@@ -21,7 +21,9 @@ message on `main` and follows the same form. Do not add an AI `Co-Authored-By` t
 ## Before you open a pull request
 
 Each job in `.github/workflows/ci.yml` runs `nix develop -c scripts/ci/<job>.sh`, so
-`nix develop -c scripts/ci/lint.sh` runs a job exactly as CI does. The jobs are `lint` and `test`.
+`nix develop -c scripts/ci/lint.sh` runs a job exactly as CI does. The jobs are `lint`, `test` and
+`cluster`. `cluster` installs K3s, RKE2 or KubeSolo on the host, so it runs on a fresh runner in the
+merge queue; run it yourself only on a disposable VM.
 Underneath:
 
 ```sh

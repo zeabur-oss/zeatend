@@ -59,6 +59,9 @@
               cargo-nextest
               # Release binaries record their dependency tree (scripts/release-build.sh).
               cargo-auditable
+
+              # The cluster tests (scripts/ci/cluster.sh)
+              kubectl
             ];
 
             env = {
