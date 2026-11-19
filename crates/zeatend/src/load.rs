@@ -36,8 +36,7 @@ pub(crate) fn document_or_defaults(path: &Path) -> Result<(Document, Source), In
 /// Reads a configuration file of either kind. A join configuration that holds its token must not
 /// be readable by others.
 pub(crate) fn document(path: &Path) -> Result<Document, InstallError> {
-    let text = fs::read_to_string(path)
-        .map_err(|e| InstallError::Message(format!("{}: {e}", path.display())))?;
+    let text = fs::read_to_string(path).map_err(InstallError::io(path))?;
     let document = Document::parse(&text)?;
     refuse_shared_token(path, &document)?;
     Ok(document)
@@ -49,15 +48,14 @@ pub(crate) fn refuse_shared_token(path: &Path, document: &Document) -> Result<()
         && join.token.is_some()
     {
         let mode = fs::metadata(path)
-            .map_err(|e| InstallError::Message(format!("{}: {e}", path.display())))?
+            .map_err(InstallError::io(path))?
             .permissions()
             .mode();
         if mode & 0o077 != 0 {
-            return Err(InstallError::Message(format!(
-                "{} holds a join token and others can read it (mode {:o}); chmod 0600 {0}",
-                path.display(),
-                mode & 0o777
-            )));
+            return Err(InstallError::SharedToken {
+                path: path.to_owned(),
+                mode: mode & 0o777,
+            });
         }
     }
     Ok(())

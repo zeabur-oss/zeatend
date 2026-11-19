@@ -6,9 +6,9 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use zeatend_host::kubectl::{self, Kubectl};
+use zeatend_host::kubectl::Kubectl;
 use zeatend_host::preflight::Node;
-use zeatend_host::{archive, download, facts, files, systemd};
+use zeatend_host::{HostError, archive, download, facts, files, systemd};
 use zeatend_plan::config::Config;
 use zeatend_plan::kubesolo::{
     ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
@@ -22,12 +22,10 @@ use crate::apply::{
 use crate::{InstallError, output, render};
 
 /// The `KubeSolo` release of a plan.
-fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
+const fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
     match &plan.release {
         Release::KubeSolo(solo) => Ok(solo),
-        Release::Cluster(_) => Err(InstallError::Message(
-            "the plan installs K3s or RKE2, not KubeSolo".to_owned(),
-        )),
+        Release::Cluster(_) => Err(InstallError::NotKubeSolo),
     }
 }
 
@@ -76,22 +74,13 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
     output::line(render::plan(&plan).trim_end());
     check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
 
-    install_kubesolo(&plan).await?;
+    let restarted = install_kubesolo(&plan).await?;
     let messages = crate::i18n::messages();
     output::step(&(messages.waiting_for_node)(&plan.node_name));
     let kubectl = kubectl();
     kubectl.wait_ready(Duration::from_mins(10)).await?;
-    kubectl::poll(
-        Duration::from_mins(10),
-        "the node to be Ready",
-        async || {
-            kubectl
-                .wait(&["node", "--all", "--for=condition=Ready", "--timeout=10s"])
-                .await
-                .map(|()| true)
-        },
-    )
-    .await?;
+    let name = plan.node_name.clone();
+    crate::join::wait_node_ready(&kubectl, &name, restarted.then_some(UNIT)).await?;
     for (namespace, deployment) in [
         ("kube-system", "coredns"),
         ("local-path-storage", "local-path-provisioner"),
@@ -108,7 +97,6 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
         Path::new(STATE_DIR),
         &Record::new(plan.distribution, plan.release.version()),
     )?;
-    let name = plan.node_name.clone();
     write_kubeconfig(&name)?;
 
     output::step(messages.done);
@@ -125,8 +113,9 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Downloads `KubeSolo` and kubectl, writes the files and starts or restarts `KubeSolo`.
-async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
+/// Downloads `KubeSolo` and kubectl, writes the files and starts or restarts `KubeSolo`. Returns
+/// whether it started or restarted the unit.
+async fn install_kubesolo(plan: &Plan) -> Result<bool, InstallError> {
     let solo = release(plan)?;
     output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
     let agent = download::agent();
@@ -140,7 +129,8 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         &mut output::Meter,
     )
     .await?;
-    fs::set_permissions(kubectl, Permissions::from_mode(0o755)).map_err(io(kubectl))?;
+    fs::set_permissions(kubectl, Permissions::from_mode(0o755))
+        .map_err(InstallError::io(kubectl))?;
 
     let outdated = binary_outdated(Path::new(BINARY), &solo.version).await;
     let changed =
@@ -170,7 +160,7 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         archive::unpack_tar_gz(&dir.join(&download.file), &unpacked)?;
         let source = unpacked.join("kubesolo");
         files::install(&source, Path::new(BINARY), 0o755)?;
-        fs::remove_dir_all(&unpacked).map_err(io(&unpacked))?;
+        fs::remove_dir_all(&unpacked).map_err(InstallError::io(&unpacked))?;
     }
     if changed {
         systemd::daemon_reload().await?;
@@ -181,9 +171,11 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
     } else if changed {
         output::note(&(crate::i18n::messages().restarting_unit)(UNIT));
         systemd::restart(UNIT).await?;
+    } else {
+        return Ok(false);
     }
     restarted(STATE_DIR)?;
-    Ok(())
+    Ok(true)
 }
 
 /// Whether the binary at `path` is missing or reports another release than `version`.
@@ -191,20 +183,19 @@ async fn binary_outdated(path: &Path, version: &str) -> bool {
     crate::apply::installed_release(path).await.as_deref() != Some(version)
 }
 
-fn io(path: &Path) -> impl Fn(std::io::Error) -> InstallError {
-    let path = path.display().to_string();
-    move |e| InstallError::Message(format!("{path}: {e}"))
-}
-
 /// Writes the kubeconfig for the person's computer, readable by root only.
 fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
     let path = Path::new(ADMIN_KUBECONFIG);
-    let text = fs::read_to_string(path).map_err(io(path))?;
-    let admin: Kubeconfig = serde_saphyr::from_str(&text)
-        .map_err(|e| InstallError::Message(format!("{ADMIN_KUBECONFIG}: {e}")))?;
+    let text = fs::read_to_string(path).map_err(InstallError::io(path))?;
+    let admin: Kubeconfig = serde_saphyr::from_str(&text).map_err(|e| HostError::Parse {
+        what: ADMIN_KUBECONFIG.to_owned(),
+        reason: e.to_string(),
+    })?;
     let config = zeatend_plan::kubesolo::kubeconfig(&admin, name)?;
-    let yaml =
-        serde_saphyr::to_string(&config).map_err(|e| InstallError::Message(e.to_string()))?;
+    let yaml = serde_saphyr::to_string(&config).map_err(|e| InstallError::Serialize {
+        what: KUBECONFIG,
+        reason: e.to_string(),
+    })?;
     files::write(Path::new(KUBECONFIG), 0o600, yaml.as_bytes())?;
     Ok(())
 }

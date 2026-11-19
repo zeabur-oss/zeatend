@@ -18,16 +18,16 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use zeatend_host::kubectl::Kubectl;
-use zeatend_host::preflight::{self, Check, Finding, Kept, Status};
-use zeatend_host::{facts, systemd};
+use zeatend_host::{facts, preflight, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
+use zeatend_plan::finding::{Check, Finding, Kept, Status};
 use zeatend_plan::kubesolo;
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::tuning::OS_IDLE_MIB;
 
 use crate::uninstall::{self, Node};
-use crate::{apply, i18n, join, load, output};
+use crate::{InstallError, apply, i18n, join, load, output};
 
 /// The exit code when the checks cannot run.
 const UNKNOWN: u8 = 3;
@@ -140,7 +140,9 @@ async fn cluster(node: Node) -> Vec<Finding> {
             }));
             found.extend(reserves(&nodes, node.distribution));
         }
-        Err(reason) => found.push(Finding::NodesUnknown { reason }),
+        Err(error) => found.push(Finding::NodesUnknown {
+            reason: error.to_string(),
+        }),
     }
     if let (Some(rancher), Role::Server) = (node.distribution.rancher(), node.role) {
         let path = format!(
@@ -172,21 +174,14 @@ async fn record(distribution: Distribution, state_dir: &str) -> Finding {
 }
 
 /// Every node with an admin kubeconfig; else this node, read with the kubelet's credentials.
-async fn read_nodes(kubectl: &Kubectl, admin: bool) -> Result<Vec<v1::Node>, String> {
+async fn read_nodes(kubectl: &Kubectl, admin: bool) -> Result<Vec<v1::Node>, InstallError> {
     if admin {
-        let list: List<v1::Node> = kubectl
-            .raw("/api/v1/nodes")
-            .await
-            .map_err(|e| e.to_string())?;
+        let list: List<v1::Node> = kubectl.raw("/api/v1/nodes").await?;
         return Ok(list.items);
     }
-    let name = facts::installed_node_name(Path::new("/"))
-        .ok_or_else(|| "the kubelet's certificate names no node".to_owned())?;
-    match kubectl.get("node", &name, None).await {
-        Ok(Some(node)) => Ok(vec![node]),
-        Ok(None) => Err(format!("the cluster has no node {name}")),
-        Err(e) => Err(e.to_string()),
-    }
+    let name = facts::installed_node_name(Path::new("/")).ok_or(InstallError::NoKubeletNode)?;
+    let node = kubectl.get("node", &name, None).await?;
+    Ok(vec![node.ok_or(InstallError::NoSuchNode(name))?])
 }
 
 /// The command line of the admin `kubectl` of `distribution`.

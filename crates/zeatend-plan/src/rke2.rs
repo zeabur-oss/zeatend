@@ -75,18 +75,21 @@ fn config(options: &Options) -> RancherConfig {
     config
 }
 
-/// The `etcd` user the cis profile runs etcd as. It must be a local user in /etc/passwd.
-pub const ETCD_USER: &[&str] = &[
+/// The command and its arguments that add the `etcd` user the cis profile runs etcd as. It must
+/// be a local user in /etc/passwd.
+pub const ETCD_USER: (&str, &[&str]) = (
     "useradd",
-    "-r",
-    "-c",
-    "etcd user",
-    "-s",
-    "/sbin/nologin",
-    "-M",
-    "etcd",
-    "-U",
-];
+    &[
+        "-r",
+        "-c",
+        "etcd user",
+        "-s",
+        "/sbin/nologin",
+        "-M",
+        "etcd",
+        "-U",
+    ],
+);
 
 #[cfg(test)]
 mod tests {

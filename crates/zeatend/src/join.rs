@@ -8,6 +8,7 @@ use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::{facts, files, network, preflight, systemd};
 use zeatend_plan::cluster::Rancher;
 use zeatend_plan::config::{self, JoinConfig, Role};
+use zeatend_plan::finding::Status;
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
 use zeatend_plan::record::Record;
 
@@ -21,14 +22,12 @@ fn token(config: &JoinConfig) -> Result<String, InstallError> {
         (Some(token), _) => Ok(token.trim().to_owned()),
         (None, Some(file)) => {
             let token = String::from_utf8(files::read_secret(Path::new(file))?)
-                .map_err(|_e| InstallError::Message(format!("{file}: not text")))?;
+                .map_err(|_e| InstallError::NotText(file.into()))?;
             let token = token.trim().to_owned();
             config::check_token(&token, config.join.role)?;
             Ok(token)
         }
-        (None, None) => Err(InstallError::Message(
-            "join: no token or tokenFile".to_owned(),
-        )),
+        (None, None) => Err(InstallError::NoToken),
     }
 }
 
@@ -99,8 +98,8 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
 pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
     let (plan, token) = make_plan(config).await?;
     output::line(render::join_plan(&plan).trim_end());
-    if let Some(blocker) = plan.blockers.first() {
-        return Err(InstallError::Message(blocker.text.clone()));
+    if let Some(blocker) = plan.findings.iter().find(|c| c.status == Status::Fail) {
+        return Err(InstallError::Blocked(blocker.finding.clone()));
     }
     apply::check_host(node(&plan), config.host.require_encrypted_disk).await?;
 

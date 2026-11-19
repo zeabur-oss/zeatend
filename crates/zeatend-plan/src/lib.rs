@@ -2,6 +2,7 @@
 
 pub mod cluster;
 pub mod config;
+pub mod finding;
 pub mod installer;
 pub mod join;
 pub mod k3s;

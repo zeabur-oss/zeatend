@@ -1,9 +1,10 @@
 //! The plan, written for people.
 
 use zeatend_plan::config::Role;
+use zeatend_plan::finding::{Check, Status};
 use zeatend_plan::join::{self, JoinPlan};
 use zeatend_plan::kubesolo;
-use zeatend_plan::plan::{Plan, Release, Warning};
+use zeatend_plan::plan::{Plan, Release};
 use zeatend_plan::record::Changes;
 
 use crate::i18n::en;
@@ -47,7 +48,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
     push(&mut s, "");
     s.push_str(&changes(plan.changes.as_ref(), unit));
     files(&mut s, &plan.host_file_paths, None);
-    warnings(&mut s, &plan.warnings, "warning");
+    findings(&mut s, &plan.findings);
     s
 }
 
@@ -128,8 +129,7 @@ pub(crate) fn join_plan(plan: &JoinPlan) -> String {
         None => push(&mut s, "Distance         the server did not answer"),
     }
     ports(&mut s, plan);
-    warnings(&mut s, &plan.blockers, "error");
-    warnings(&mut s, &plan.warnings, "warning");
+    findings(&mut s, &plan.findings);
     s
 }
 
@@ -145,9 +145,12 @@ fn files(s: &mut String, paths: &[String], extra: Option<&str>) {
     push(s, "");
 }
 
-fn warnings(s: &mut String, warnings: &[Warning], label: &str) {
-    for warning in warnings {
-        push(s, &format!("{label}: {}", warning.text));
+/// The failed findings as errors, then the others as warnings.
+fn findings(s: &mut String, findings: &[Check]) {
+    for (status, label) in [(Status::Fail, "error"), (Status::Warn, "warning")] {
+        for check in findings.iter().filter(|c| c.status == status) {
+            push(s, &format!("{label}: {}", en::finding(&check.finding)));
+        }
     }
 }
 

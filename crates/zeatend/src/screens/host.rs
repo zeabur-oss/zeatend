@@ -4,9 +4,10 @@ use std::fs;
 use std::net::IpAddr;
 use std::num::NonZero;
 
-use zeatend_host::preflight::{self, Check, Node};
+use zeatend_host::preflight::{self, Node};
 use zeatend_host::{HostError, facts, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
+use zeatend_plan::finding::Check;
 use zeatend_plan::plan::Facts;
 
 /// The distributions, in the order the Server screen lists them.

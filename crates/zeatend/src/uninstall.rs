@@ -413,10 +413,7 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         let installs =
             systemd::running_services(&format!("{}*.service", crate::unit::PREFIX)).await?;
         if let Some(unit) = installs.first() {
-            return Err(InstallError::Message(format!(
-                "nothing was removed: an install runs in {unit}. Wait for it to end, or stop it \
-                 with `systemctl stop {unit}`, and run uninstall again"
-            )));
+            return Err(InstallError::InstallRuns(unit.clone()));
         }
     }
     let root = Path::new("/");
@@ -454,12 +451,10 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
     }
     let mounts = fs::read_to_string("/proc/mounts").map_err(io("/proc/mounts"))?;
     if let Some((mount, path)) = volume_mounts(&mounts, &plan.volumes, delete_volumes).first() {
-        return Err(InstallError::Message(format!(
-            "nothing was removed: the volumes in {path} are on the file system mounted at \
-             {mount}. The uninstall unmounts it when it stops the node, and then cannot keep or \
-             remove the volumes on it. Unmount it, and run uninstall again: the volumes stay on \
-             that file system"
-        )));
+        return Err(InstallError::VolumesOnMount {
+            path,
+            mount: mount.clone(),
+        });
     }
     output::line(describe(&plan, &remove, &volumes, delete_volumes, &kept_configs).trim_end());
     if !yes {
@@ -513,22 +508,18 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
 fn confirm() -> Result<(), InstallError> {
     let stdin = std::io::stdin();
     if !stdin.is_terminal() {
-        return Err(InstallError::Message(
-            "nothing was removed: there is no terminal to ask on; run `zeatend uninstall --yes` \
-             to remove without the question"
-                .to_owned(),
-        ));
+        return Err(InstallError::NoTerminal);
     }
     output::err("Remove? Type yes to go on:");
     let mut answer = String::new();
     stdin
         .lock()
         .read_line(&mut answer)
-        .map_err(|e| InstallError::Message(format!("standard input: {e}")))?;
+        .map_err(InstallError::Stdin)?;
     if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
         Ok(())
     } else {
-        Err(InstallError::Message("nothing was removed".to_owned()))
+        Err(InstallError::NotConfirmed)
     }
 }
 
@@ -603,10 +594,7 @@ async fn kill_cgroup(cgroup: &Path) -> Result<(), InstallError> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Err(InstallError::Message(format!(
-        "{}: processes still run after SIGKILL; nothing was removed",
-        cgroup.display()
-    )))
+    Err(InstallError::ProcessesRemain(cgroup.to_owned()))
 }
 
 /// The process ids in the `cgroup.procs` files of a cgroup and the cgroups under it.
@@ -726,20 +714,15 @@ fn stash(root: &Path, volumes: &[Volume]) -> Result<(), InstallError> {
             continue;
         }
         if stash.symlink_metadata().is_ok() {
-            return Err(InstallError::Message(format!(
-                "{} and {} both exist; an earlier uninstall stopped with the volumes moved there. \
-                 Keep one of them and run uninstall again",
-                path.display(),
-                stash.display()
-            )));
+            return Err(InstallError::StashExists { path, stash });
         }
-        fs::rename(&path, &stash).map_err(|e| {
-            InstallError::Message(format!(
-                "moving the volumes {} out of the uninstall's way to {}: {e}. Nothing was removed",
-                path.display(),
-                stash.display()
-            ))
-        })?;
+        if let Err(source) = fs::rename(&path, &stash) {
+            return Err(InstallError::Stash {
+                path,
+                stash,
+                source,
+            });
+        }
     }
     Ok(())
 }
@@ -755,13 +738,13 @@ fn restore(root: &Path, volumes: &[Volume]) -> Result<(), InstallError> {
         if let Some(dir) = path.parent() {
             fs::create_dir_all(dir).map_err(io(dir))?;
         }
-        fs::rename(&stash, &path).map_err(|e| {
-            InstallError::Message(format!(
-                "moving the volumes back from {} to {}: {e}",
-                stash.display(),
-                path.display()
-            ))
-        })?;
+        if let Err(source) = fs::rename(&stash, &path) {
+            return Err(InstallError::Restore {
+                path,
+                stash,
+                source,
+            });
+        }
     }
     Ok(())
 }

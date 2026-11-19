@@ -65,10 +65,10 @@ async fn prepare(
     words: &Screens,
 ) -> Result<App, InstallError> {
     if !preflight::is_root() {
-        return Err(InstallError::Message(words.needs_root.to_owned()));
+        return Err(InstallError::ScreensNeedRoot(lang));
     }
     if !systemd::booted() {
-        return Err(InstallError::Message(words.needs_systemd.to_owned()));
+        return Err(InstallError::ScreensNeedSystemd(lang));
     }
     let running = systemd::running_services(&format!("{}*.service", unit::PREFIX)).await?;
     if let Some(unit) = running.first() {
@@ -80,7 +80,7 @@ async fn prepare(
             load::Source::Installer => zeatend_plan::installer::CONFIG_FILE.to_owned(),
             load::Source::File | load::Source::Defaults => config.display().to_string(),
         };
-        return Err(InstallError::Message((words.joins)(&path)));
+        return Err(InstallError::ScreensJoin { lang, path });
     };
     output::err(words.reading_host);
     let host = host::read(install.host.require_encrypted_disk).await?;
@@ -90,8 +90,7 @@ async fn prepare(
 
 /// Shows the screens until they close; returns them and how they closed.
 async fn show(mut app: App, config: &Path) -> Result<(App, Action), InstallError> {
-    let mut terminal =
-        ratatui::try_init().map_err(|e| InstallError::Message(format!("the terminal: {e}")))?;
+    let mut terminal = ratatui::try_init().map_err(InstallError::Terminal)?;
     let action = event_loop(&mut terminal, &mut app, config).await;
     ratatui::restore();
     Ok((app, action?))
@@ -123,7 +122,7 @@ async fn event_loop(
             .draw(|frame| {
                 draw::draw(frame, app);
             })
-            .map_err(|e| InstallError::Message(format!("the terminal: {e}")))?;
+            .map_err(InstallError::Terminal)?;
         tokio::select! {
             input = inputs.recv() => {
                 let Some(input) = input else {
@@ -194,7 +193,10 @@ fn follow(unit: String, tx: UnboundedSender<Option<String>>) {
 
 /// Writes the configuration to `path` and starts the install unit, which reports in `lang`.
 async fn install(path: &Path, config: &Config, lang: Lang) -> Result<String, InstallError> {
-    let yaml = serde_saphyr::to_string(config).map_err(|e| InstallError::Message(e.to_string()))?;
+    let yaml = serde_saphyr::to_string(config).map_err(|e| InstallError::Serialize {
+        what: "configuration",
+        reason: e.to_string(),
+    })?;
     files::write(path, 0o600, yaml.as_bytes())?;
     unit::start(path, Some(lang.language_env())).await
 }

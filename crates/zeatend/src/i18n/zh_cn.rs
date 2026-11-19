@@ -1,7 +1,7 @@
 //! Simplified Chinese, as written in mainland China.
 
-use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
+use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
@@ -222,6 +222,14 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Nodes => "节点",
         Topic::KubeletReserves => "kubelet 预留资源",
         Topic::SecretsEncryption => "Secret 加密",
+        // Plan findings stay in English until zeatend#32 words them.
+        Topic::Memory
+        | Topic::Release
+        | Topic::Server
+        | Topic::Firewall
+        | Topic::HighAvailability
+        | Topic::Storage
+        | Topic::JoinToken => super::en::topic(topic),
     }
 }
 
@@ -385,6 +393,19 @@ fn finding(finding: &Finding) -> String {
             "API 服务器以未加密形式存储 Secret，用 `sudo {} secrets-encrypt status` 查看状态",
             distribution.id()
         ),
+        // Plan findings stay in English until zeatend#32 words them.
+        Finding::MemoryLow { .. }
+        | Finding::ReleaseUnpinned { .. }
+        | Finding::ServerUnreachable { .. }
+        | Finding::ServerFar { .. }
+        | Finding::ServerTooFar { .. }
+        | Finding::SameRegion
+        | Finding::ServerPortsClosed { .. }
+        | Finding::JoinPorts { .. }
+        | Finding::UdpUnchecked { .. }
+        | Finding::ServersHa
+        | Finding::LocalStorage
+        | Finding::TokenUnpinned => super::en::finding(finding),
     }
 }
 

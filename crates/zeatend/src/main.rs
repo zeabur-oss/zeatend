@@ -24,6 +24,7 @@ use zeatend_host::HostError;
 use zeatend_host::progress::Event;
 use zeatend_plan::PlanError;
 use zeatend_plan::config::{Document, Role};
+use zeatend_plan::finding::Finding;
 
 /// Install K3s, RKE2 or `KubeSolo` on this Linux host, hardened to the CIS benchmark, from one
 /// configuration file. A file with a `join` section joins this host to an existing K3s or RKE2
@@ -127,13 +128,179 @@ enum InstallError {
     Plan(#[from] PlanError),
     #[error(transparent)]
     Host(#[from] HostError),
-    #[error("{0}")]
-    Message(String),
     /// The person stopped following the install unit, which goes on.
     #[error(
         "stopped following {0}; the install goes on. Run `sudo zeatend apply` to follow it again."
     )]
     Detached(String),
+    /// The install unit reported this error.
+    #[error("{0}")]
+    UnitFailed(String),
+    /// The install unit ended and reported no result.
+    #[error("{0} ended without a result; see `journalctl -u {0}`")]
+    UnitEnded(String),
+    /// A finding of the plan that stops `apply`.
+    #[error("{}", i18n::en::finding(.0))]
+    Blocked(Finding),
+    /// A host check failed.
+    #[error("{}", i18n::messages().host_not_ready)]
+    HostNotReady,
+    /// A plan of K3s or RKE2 where `KubeSolo` was expected.
+    #[error("the plan installs K3s or RKE2, not KubeSolo")]
+    NotKubeSolo,
+    /// A plan of `KubeSolo` where K3s or RKE2 was expected.
+    #[error("the plan installs KubeSolo, not K3s or RKE2")]
+    NotRancher,
+    /// The plan of K3s has no `install.sh`.
+    #[error("no install.sh for K3s in the plan")]
+    NoInstallScript,
+    /// A join configuration without a token.
+    #[error("join: no token or tokenFile")]
+    NoToken,
+    /// A configuration file that others can read holds a join token.
+    #[error("{} holds a join token and others can read it (mode {mode:o}); chmod 0600 {0}", .path.display())]
+    SharedToken {
+        /// The file.
+        path: PathBuf,
+        /// Its permission bits.
+        mode: u32,
+    },
+    /// A file that must be UTF-8 text is not.
+    #[error("{}: not text", .0.display())]
+    NotText(PathBuf),
+    /// A path that must be UTF-8 is not.
+    #[error("{}: not UTF-8", .0.display())]
+    NotUtf8(PathBuf),
+    /// A file that is not an install record.
+    #[error("{}: not an install record", .0.display())]
+    NotRecord(PathBuf),
+    /// Data that could not be written as JSON or YAML.
+    #[error("{what}: {reason}")]
+    Serialize {
+        /// What was written.
+        what: &'static str,
+        /// Why it failed.
+        reason: String,
+    },
+    /// The path of the running zeatend could not be read.
+    #[error("finding the zeatend binary: {0}")]
+    CurrentExe(#[source] std::io::Error),
+    /// The working directory could not be read.
+    #[error("the working directory: {0}")]
+    WorkingDir(#[source] std::io::Error),
+    /// The terminal failed.
+    #[error("the terminal: {0}")]
+    Terminal(#[source] std::io::Error),
+    /// Standard input could not be read.
+    #[error("standard input: {0}")]
+    Stdin(#[source] std::io::Error),
+    /// `node add` on a `KubeSolo` host.
+    #[error("KubeSolo runs one node; a node joins K3s or RKE2 only")]
+    KubeSoloTakesNoNodes,
+    /// `node add` on a host without an admin kubeconfig of K3s or RKE2.
+    #[error("no K3s or RKE2 admin kubeconfig here: run node add on a server of the cluster")]
+    NotAServer,
+    /// The host has no node name.
+    #[error("this host has no node name: is it a server?")]
+    NoNodeName,
+    /// The kubelet's certificate names no node.
+    #[error("the kubelet's certificate names no node")]
+    NoKubeletNode,
+    /// The cluster has no node of this name.
+    #[error("the cluster has no node {0}")]
+    NoSuchNode(String),
+    /// A node without an `InternalIP` address.
+    #[error("node {0} has no InternalIP; name the address with --address")]
+    NoInternalIp(String),
+    /// The screens need root.
+    #[error("{}", .0.messages().screens.needs_root)]
+    ScreensNeedRoot(i18n::Lang),
+    /// The screens need systemd.
+    #[error("{}", .0.messages().screens.needs_systemd)]
+    ScreensNeedSystemd(i18n::Lang),
+    /// The screens install the first node; this configuration file joins one.
+    #[error("{}", (.lang.messages().screens.joins)(.path))]
+    ScreensJoin {
+        /// The language of the screens.
+        lang: i18n::Lang,
+        /// The configuration file.
+        path: String,
+    },
+    /// An install unit runs, so `uninstall` stops.
+    #[error(
+        "nothing was removed: an install runs in {0}. Wait for it to end, or stop it with \
+         `systemctl stop {0}`, and run uninstall again"
+    )]
+    InstallRuns(String),
+    /// Volumes on a file system that the uninstall unmounts.
+    #[error(
+        "nothing was removed: the volumes in {path} are on the file system mounted at {mount}. \
+         The uninstall unmounts it when it stops the node, and then cannot keep or remove the \
+         volumes on it. Unmount it, and run uninstall again: the volumes stay on that file system"
+    )]
+    VolumesOnMount {
+        /// The volumes.
+        path: &'static str,
+        /// The mount point.
+        mount: String,
+    },
+    /// `uninstall` without `--yes` and without a terminal to ask on.
+    #[error(
+        "nothing was removed: there is no terminal to ask on; run `zeatend uninstall --yes` to \
+         remove without the question"
+    )]
+    NoTerminal,
+    /// The person did not confirm the uninstall.
+    #[error("nothing was removed")]
+    NotConfirmed,
+    /// Processes stay in a cgroup after `SIGKILL`.
+    #[error("{}: processes still run after SIGKILL; nothing was removed", .0.display())]
+    ProcessesRemain(PathBuf),
+    /// The volumes and their stash both exist.
+    #[error(
+        "{} and {} both exist; an earlier uninstall stopped with the volumes moved there. Keep \
+         one of them and run uninstall again",
+        .path.display(),
+        .stash.display()
+    )]
+    StashExists {
+        /// The volumes.
+        path: PathBuf,
+        /// Where they are moved.
+        stash: PathBuf,
+    },
+    /// The volumes could not be moved out of the uninstall's way.
+    #[error(
+        "moving the volumes {} out of the uninstall's way to {}: {source}. Nothing was removed",
+        .path.display(),
+        .stash.display()
+    )]
+    Stash {
+        /// The volumes.
+        path: PathBuf,
+        /// Where they were to go.
+        stash: PathBuf,
+        /// Why.
+        source: std::io::Error,
+    },
+    /// The volumes could not be moved back.
+    #[error("moving the volumes back from {} to {}: {source}", .stash.display(), .path.display())]
+    Restore {
+        /// Their place.
+        path: PathBuf,
+        /// Where they were.
+        stash: PathBuf,
+        /// Why.
+        source: std::io::Error,
+    },
+}
+
+impl InstallError {
+    /// The error of an I/O operation on `path`.
+    fn io(path: impl Into<PathBuf>) -> impl FnOnce(std::io::Error) -> Self {
+        let path = path.into();
+        move |source| HostError::Io { path, source }.into()
+    }
 }
 
 #[tokio::main]
@@ -233,8 +400,10 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
 
 /// Prints `value` as indented JSON.
 fn print_json(value: &impl serde::Serialize) -> Result<(), InstallError> {
-    let text =
-        serde_json::to_string_pretty(value).map_err(|e| InstallError::Message(e.to_string()))?;
+    let text = serde_json::to_string_pretty(value).map_err(|e| InstallError::Serialize {
+        what: "JSON",
+        reason: e.to_string(),
+    })?;
     output::stdout(&text);
     Ok(())
 }
