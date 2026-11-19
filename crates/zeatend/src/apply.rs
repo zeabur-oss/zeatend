@@ -8,8 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::preflight::{self, Status};
 use zeatend_host::{HostError, archive, cmd, download, facts, files, systemd};
-use zeatend_plan::cluster::{APPARMOR_PROFILE, HostFile, Rancher};
-use zeatend_plan::config::Config;
+use zeatend_plan::cluster::{self, APPARMOR_PROFILE, HostFile, Rancher};
+use zeatend_plan::config::{Component, Config};
 use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
@@ -95,6 +95,7 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     })
     .await?;
     kubectl.wait_ready(Duration::from_mins(10)).await?;
+    wait_removed(&kubectl, rancher, &config.disable).await?;
     files::set_modes(Path::new(rancher.layout().tls_dir), ".crt", 0o600)?;
     let name = plan.node_name.clone();
     if started.is_some() {
@@ -124,6 +125,41 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
         layout.kubectl,
         layout.admin_kubeconfig
     ));
+    Ok(())
+}
+
+/// Waits until the server removes the components in `disable`, so that a later `apply` that
+/// turns a component on again does not restart the server before the removal completes (see
+/// `cluster::left_to_remove`).
+async fn wait_removed(
+    kubectl: &Kubectl,
+    rancher: Rancher,
+    disable: &[Component],
+) -> Result<(), InstallError> {
+    if disable.is_empty() {
+        return Ok(());
+    }
+    kubectl::poll(
+        Duration::from_mins(10),
+        &format!(
+            "{} to remove the components that disable turns off",
+            rancher.title()
+        ),
+        async || {
+            let addons = kubectl
+                .raw("/apis/k3s.cattle.io/v1/namespaces/kube-system/addons")
+                .await;
+            let charts = kubectl
+                .raw("/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts")
+                .await;
+            addons.is_ok_and(|addons| {
+                charts.is_ok_and(|charts| {
+                    cluster::left_to_remove(rancher, disable, &addons, &charts).is_empty()
+                })
+            })
+        },
+    )
+    .await?;
     Ok(())
 }
 

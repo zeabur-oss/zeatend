@@ -248,6 +248,15 @@ impl Rancher {
     /// Both, in the order an interface lists them.
     pub const ALL: [Self; 2] = [Self::K3s, Self::Rke2];
 
+    /// The directory whose manifests the server's deploy controller applies.
+    #[must_use]
+    pub const fn manifests_dir(self) -> &'static str {
+        match self {
+            Self::K3s => crate::k3s::MANIFESTS_DIR,
+            Self::Rke2 => crate::rke2::MANIFESTS_DIR,
+        }
+    }
+
     /// Its name in configuration files.
     #[must_use]
     pub const fn id(self) -> &'static str {
@@ -436,10 +445,7 @@ impl Rancher {
     /// profile adds it, and zeatend adds it on K3s. Without this policy, a `ServiceLB` pod on a
     /// worker gets no outside requests. Each distribution labels the pods with its own prefix.
     fn servicelb_policy(self) -> HostFile {
-        let manifests = match self {
-            Self::K3s => crate::k3s::MANIFESTS_DIR,
-            Self::Rke2 => crate::rke2::MANIFESTS_DIR,
-        };
+        let manifests = self.manifests_dir();
         let policy = serde_json::json!({
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
@@ -644,6 +650,65 @@ pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[
     yaml_list(out, "disable", &items);
 }
 
+/// The objects that the server has not removed yet for the components in `disable`.
+///
+/// The result has `addon/<name>` and `helmchart/<name>` items. `addons` and `charts` are the
+/// API's lists of the Addons and the `HelmCharts` in `kube-system`.
+///
+/// The server keeps an Addon for each manifest, with the checksum of the manifest, and applies a
+/// manifest only when its checksum changes. For a component that `disable` turns off, the server
+/// deletes the manifest's `HelmCharts`, which uninstalls them, and then the Addon. When the
+/// server restarts before the removal completes and `disable` turns the component on again, the
+/// Addon gets the checksum again while the uninstall deletes the `HelmChart`. The server then
+/// does not apply the manifest again, and the component does not come back.
+#[must_use]
+pub fn left_to_remove(
+    rancher: Rancher,
+    disable: &[Component],
+    addons: &Value,
+    charts: &Value,
+) -> Vec<String> {
+    let manifests = rancher.manifests_dir();
+    let names: Vec<&str> = disable
+        .iter()
+        .filter_map(|c| match Distribution::from(rancher).turns_off(*c)? {
+            TurnOff::Disable(item) => Some(item),
+            TurnOff::NoIngressController => Some("rke2-traefik"),
+        })
+        .collect();
+    let items = |list: &'_ Value| -> Vec<Value> {
+        list.get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let text = |object: &Value, pointer: &str| -> String {
+        object
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let addons = items(addons).into_iter().filter(|addon| {
+        let source = text(addon, "/spec/source");
+        names.iter().any(|name| {
+            source == format!("{manifests}/{name}.yaml")
+                || source.starts_with(&format!("{manifests}/{name}/"))
+        })
+    });
+    let charts = items(charts).into_iter().filter(|chart| {
+        let owner = text(
+            chart,
+            "/metadata/annotations/objectset.rio.cattle.io~1owner-name",
+        );
+        names.contains(&owner.as_str())
+    });
+    addons
+        .map(|addon| format!("addon/{}", text(&addon, "/metadata/name")))
+        .chain(charts.map(|chart| format!("helmchart/{}", text(&chart, "/metadata/name"))))
+        .collect()
+}
+
 pub(crate) const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n\
                       # Put your own settings in config.yaml.d/90-local.yaml instead of editing this file.\n";
 
@@ -741,10 +806,7 @@ mod tests {
                 .into_iter()
                 .find(|f| f.path.ends_with("/zeatend-servicelb-policy.yaml"))
                 .unwrap();
-            assert!(file.path.starts_with(match rancher {
-                Rancher::K3s => crate::k3s::MANIFESTS_DIR,
-                Rancher::Rke2 => crate::rke2::MANIFESTS_DIR,
-            }));
+            assert!(file.path.starts_with(rancher.manifests_dir()));
             assert_eq!(file.mode, 0o600);
             let policy: Value = serde_saphyr::from_str(&file.content).unwrap();
             assert_eq!(policy["kind"], "NetworkPolicy");
@@ -915,5 +977,55 @@ mod tests {
         );
         assert!(disabled_components(Distribution::K3s, "disable: [servicelb]\n").is_err());
         assert!(disabled_components(Distribution::Rke2, "disable: [traefik]\n").is_err());
+    }
+
+    #[test]
+    fn left_to_remove_are_the_turned_off_manifests_addons_and_charts() {
+        let addon = |name: &str, source: &str| serde_json::json!({"metadata": {"name": name}, "spec": {"source": source}});
+        let chart = |name: &str, owner: &str| {
+            serde_json::json!({"metadata": {
+                "name": name,
+                "annotations": {"objectset.rio.cattle.io/owner-name": owner},
+            }})
+        };
+        let k3s = crate::k3s::MANIFESTS_DIR;
+        let addons = serde_json::json!({"items": [
+            addon("traefik", &format!("{k3s}/traefik.yaml")),
+            addon("metrics-apiservice", &format!("{k3s}/metrics-server/metrics-apiservice.yaml")),
+            addon("coredns", &format!("{k3s}/coredns.yaml")),
+            addon("local-storage", &format!("{k3s}/local-storage.yaml")),
+        ]});
+        let charts = serde_json::json!({"items": [
+            chart("traefik-crd", "traefik"),
+            chart("gateway-api-crd", "gateway-api-crd"),
+        ]});
+        let disable = [Component::Traefik, Component::MetricsServer];
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &disable, &addons, &charts),
+            [
+                "addon/traefik",
+                "addon/metrics-apiservice",
+                "helmchart/traefik-crd"
+            ]
+        );
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &[], &addons, &charts),
+            Vec::<String>::new()
+        );
+        let none = serde_json::json!({"items": []});
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &disable, &none, &charts),
+            ["helmchart/traefik-crd"]
+        );
+
+        let rke2 = crate::rke2::MANIFESTS_DIR;
+        let addons = serde_json::json!({"items": [
+            addon("rke2-traefik", &format!("{rke2}/rke2-traefik.yaml")),
+            addon("rke2-traefik-crd", &format!("{rke2}/rke2-traefik-crd.yaml")),
+        ]});
+        assert_eq!(
+            left_to_remove(Rancher::Rke2, &[Component::Traefik], &addons, &none),
+            ["addon/rke2-traefik"]
+        );
     }
 }
