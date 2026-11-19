@@ -253,18 +253,18 @@ fn finding(finding: &Finding) -> String {
         ),
         Finding::CryptNo { path } => format!(
             "{path} is not on an encrypted disk, so volumes and databases are stored \
-             unencrypted; most VPS plans can't encrypt it afterwards, so for sensitive data \
-             choose a plan whose provider encrypts disks"
+             unencrypted. Most VPS plans can't encrypt it afterwards, so for sensitive data \
+             choose a plan whose provider encrypts disks."
         ),
         Finding::CryptUnknown { path } => format!("could not tell whether {path} is encrypted"),
         Finding::DockerNone => "no Docker, and the iptables FORWARD policy is not DROP".to_owned(),
         Finding::DockerFound { found } => format!(
             "Docker is on this host ({}). It sets the iptables FORWARD policy to DROP, so Pods \
-             cannot reach the internet. Stop and remove Docker first",
+             cannot reach the internet. Stop and remove Docker first.",
             found.join(", ")
         ),
         Finding::ForwardDrop => "the iptables FORWARD policy is DROP, so Pods cannot reach the \
-                                 internet; find what sets it (Docker, ufw) and change it"
+                                 internet. Find what sets it (Docker, ufw) and change it."
             .to_owned(),
         Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
                                   with `sudo zeatend apply`"
@@ -282,11 +282,11 @@ fn finding(finding: &Finding) -> String {
         Finding::RecordOk { writer } => format!("{writer} wrote the install record"),
         Finding::RecordMissing { path } => format!(
             "no install record at {path}: zeatend did not install this node, or apply stopped \
-             before the end; run `sudo zeatend apply`"
+             before the end. Run `sudo zeatend apply`."
         ),
         Finding::RecordNewer { zeatend_version } => format!(
             "zeatend {zeatend_version} wrote the install record, and this is zeatend \
-             {ZEATEND_VERSION}; use zeatend {zeatend_version} or newer"
+             {ZEATEND_VERSION}. Use zeatend {zeatend_version} or newer."
         ),
         Finding::NodesReady { names } => format!("{} {} Ready", and_list(names), be(names.len())),
         Finding::NodesNotReady { names, command } => format!(
@@ -315,7 +315,7 @@ fn finding(finding: &Finding) -> String {
             format!(
                 "the kubelet keeps only {} from pods, less than the {needed_mib} MiB the OS needs \
                  at idle, so pods can take the memory the OS and the kubelet need (no \
-                 system-reserved or kube-reserved); {}",
+                 system-reserved or kube-reserved). {}.",
                 and_list(&kept),
                 reserves_fix(*distribution)
             )
@@ -346,7 +346,7 @@ const fn reserves_fix(distribution: Distribution) -> &'static str {
             "zeatend does not set them on KubeSolo yet (zeabur-oss/zeatend#4)"
         }
         Distribution::K3s | Distribution::Rke2 => {
-            "run `sudo zeatend apply` on each one to set them"
+            "Run `sudo zeatend apply` on each one to set them"
         }
     }
 }
@@ -515,7 +515,7 @@ mod tests {
             ),
             (
                 Finding::CryptNo { path: "/" },
-                "/ is not on an encrypted disk, so volumes and databases are stored unencrypted; most VPS plans can't encrypt it afterwards, so for sensitive data choose a plan whose provider encrypts disks",
+                "/ is not on an encrypted disk, so volumes and databases are stored unencrypted. Most VPS plans can't encrypt it afterwards, so for sensitive data choose a plan whose provider encrypts disks.",
             ),
             (
                 Finding::CryptUnknown { path: "/" },
@@ -529,11 +529,11 @@ mod tests {
                 Finding::DockerFound {
                     found: vec!["/usr/bin/docker".to_owned(), "docker.service".to_owned()],
                 },
-                "Docker is on this host (/usr/bin/docker, docker.service). It sets the iptables FORWARD policy to DROP, so Pods cannot reach the internet. Stop and remove Docker first",
+                "Docker is on this host (/usr/bin/docker, docker.service). It sets the iptables FORWARD policy to DROP, so Pods cannot reach the internet. Stop and remove Docker first.",
             ),
             (
                 Finding::ForwardDrop,
-                "the iptables FORWARD policy is DROP, so Pods cannot reach the internet; find what sets it (Docker, ufw) and change it",
+                "the iptables FORWARD policy is DROP, so Pods cannot reach the internet. Find what sets it (Docker, ufw) and change it.",
             ),
         ];
         for (f, text) in cases {
@@ -585,7 +585,7 @@ mod tests {
                     needed_mib: 350,
                     distribution: Distribution::KubeSolo,
                 },
-                "the kubelet keeps only 100 MiB on solo and 0 MiB on bare from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved); zeatend does not set them on KubeSolo yet (zeabur-oss/zeatend#4)",
+                "the kubelet keeps only 100 MiB on solo and 0 MiB on bare from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved). zeatend does not set them on KubeSolo yet (zeabur-oss/zeatend#4).",
             ),
             (
                 Finding::ReservesLow {
@@ -596,7 +596,7 @@ mod tests {
                     needed_mib: 350,
                     distribution: Distribution::K3s,
                 },
-                "the kubelet keeps only 100 MiB on vps-2 from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved); run `sudo zeatend apply` on each one to set them",
+                "the kubelet keeps only 100 MiB on vps-2 from pods, less than the 350 MiB the OS needs at idle, so pods can take the memory the OS and the kubelet need (no system-reserved or kube-reserved). Run `sudo zeatend apply` on each one to set them.",
             ),
             (
                 Finding::SecretsPlain {

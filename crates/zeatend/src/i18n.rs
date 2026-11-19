@@ -550,4 +550,39 @@ mod tests {
         assert_eq!(cn(&free), "80、443 和 10250 都没有程序占用");
         assert_eq!(cn(&crypt), "/ 和 /var/lib/rancher 都在 dm-crypt 设备上");
     }
+
+    #[test]
+    fn a_finding_of_two_sentences_ends_with_a_full_stop() {
+        let findings = [
+            Finding::CryptNo {
+                path: "/var/lib/rancher",
+            },
+            Finding::DockerFound {
+                found: vec!["docker.service".to_owned()],
+            },
+            Finding::ForwardDrop,
+            Finding::RecordMissing {
+                path: "/var/lib/zeatend".to_owned(),
+            },
+            Finding::RecordNewer {
+                zeatend_version: "9.9.9".to_owned(),
+            },
+            Finding::ReservesLow {
+                nodes: vec![zeatend_host::preflight::Kept {
+                    name: "edge-1".to_owned(),
+                    mib: 0,
+                }],
+                needed_mib: 512,
+                distribution: Distribution::K3s,
+            },
+        ];
+        for lang in Lang::ALL {
+            let finding = lang.messages().finding;
+            for f in &findings {
+                let text = finding(f);
+                let stop = if lang == Lang::En { ". " } else { "。" };
+                assert!(text.contains(stop) && text.ends_with(stop.trim()), "{text}");
+            }
+        }
+    }
 }

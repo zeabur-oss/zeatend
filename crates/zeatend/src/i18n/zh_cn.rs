@@ -232,17 +232,17 @@ fn finding(finding: &Finding) -> String {
         }
         Finding::CryptNo { path } => format!(
             "{path} 不在加密磁盘上，存储卷和数据库都会以未加密的形式保存。大多数 VPS \
-             套餐无法事后加密，要存放敏感数据，就选择服务商会加密磁盘的套餐"
+             套餐无法事后加密，要存放敏感数据，就选择服务商会加密磁盘的套餐。"
         ),
         Finding::CryptUnknown { path } => format!("无法判断 {path} 是否加密"),
         Finding::DockerNone => "没有 Docker，iptables 的 FORWARD 策略也不是 DROP".to_owned(),
         Finding::DockerFound { found } => format!(
             "这台主机上有 Docker（{}），Docker 会把 iptables 的 FORWARD 策略设为 DROP，Pod \
-             就连不上互联网。先停止并卸载 Docker",
+             就连不上互联网。先停止并卸载 Docker。",
             found.join("、")
         ),
         Finding::ForwardDrop => "iptables 的 FORWARD 策略是 DROP，Pod 连不上互联网。找出设置这项\
-                                 策略的程序（例如 Docker、ufw）再修改"
+                                 策略的程序（例如 Docker、ufw）再修改。"
             .to_owned(),
         Finding::NotInstalled => {
             "这台主机没有安装 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安装".to_owned()
@@ -259,11 +259,11 @@ fn finding(finding: &Finding) -> String {
         Finding::RecordOk { writer } => format!("安装记录由 {writer} 写入"),
         Finding::RecordMissing { path } => format!(
             "{path} 没有安装记录，这个节点不是 zeatend 安装的，或者 apply 没有运行完。运行 `sudo \
-             zeatend apply`"
+             zeatend apply`。"
         ),
         Finding::RecordNewer { zeatend_version } => format!(
             "安装记录由 zeatend {zeatend_version} 写入，这里的是 zeatend {ZEATEND_VERSION}。改用 \
-             zeatend {zeatend_version} 或更新的版本"
+             zeatend {zeatend_version} 或更新的版本。"
         ),
         Finding::NodesReady { names } => format!("{} {}已就绪", and_list(names), all(names)),
         Finding::NodesNotReady { names, command } => {
@@ -290,7 +290,7 @@ fn finding(finding: &Finding) -> String {
             format!(
                 "kubelet 不让 Pod 使用的内存：{}，少于系统空闲时需要的 {needed_mib} MiB，Pod \
                  可能占用系统和 kubelet 需要的内存（没有设置 system-reserved 或 \
-                 kube-reserved）。{}",
+                 kube-reserved）。{}。",
                 kept.join("、"),
                 reserves_fix(*distribution)
             )
