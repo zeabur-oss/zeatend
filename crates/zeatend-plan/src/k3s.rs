@@ -174,9 +174,17 @@ plugins:
           burst: 20000
 ";
 
+/// The port K3s's packaged metrics-server serves on (`--secure-port`).
+const METRICS_SERVER_PORT: u16 = 10250;
+
 /// What RKE2's `cis` profile creates in the system namespaces and K3s does not: a policy that
 /// lets in only the namespace's own pods, `CoreDNS` reachable from every pod, and default service
 /// accounts that mount no token. K3s applies the file on every start, as RKE2 re-creates its own.
+///
+/// The API server reaches metrics-server from the server's host, which is not a pod of
+/// `kube-system`. On another node, kube-router refuses that traffic, so `kubectl top` and the
+/// Horizontal Pod Autoscaler stop. metrics-server's port is open, as `CoreDNS`'s is: metrics-server
+/// asks the API server to authenticate and authorise each request.
 fn system_objects() -> String {
     let mut objects: Vec<Value> = ["kube-system", "kube-public", "default"]
         .into_iter()
@@ -197,6 +205,12 @@ fn system_objects() -> String {
             {"port": 53, "protocol": "TCP"},
             {"port": 53, "protocol": "UDP"},
         ]}]),
+    ));
+    objects.push(policy(
+        "default-network-metrics-server-policy",
+        "kube-system",
+        &json!({"matchLabels": {"k8s-app": "metrics-server"}}),
+        &json!([{"ports": [{"port": METRICS_SERVER_PORT, "protocol": "TCP"}]}]),
     ));
     objects.extend(
         ["kube-system", "kube-public", "default", "kube-node-lease"]
@@ -330,6 +344,16 @@ mod tests {
             "kube-dns"
         );
         assert!(dns["spec"]["ingress"][0].get("from").is_none());
+        let metrics = policy("kube-system", "default-network-metrics-server-policy").unwrap();
+        assert_eq!(
+            metrics["spec"]["podSelector"]["matchLabels"]["k8s-app"],
+            "metrics-server"
+        );
+        assert_eq!(
+            metrics["spec"]["ingress"],
+            json!([{"ports": [{"port": 10250, "protocol": "TCP"}]}]),
+            "the API server reaches it from another node's host"
+        );
         assert!(
             objects
                 .iter()

@@ -12,7 +12,6 @@ pub mod preflight;
 pub mod progress;
 pub mod random;
 pub mod systemd;
-pub mod token;
 
 use std::path::PathBuf;
 

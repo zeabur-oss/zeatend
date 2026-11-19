@@ -4,15 +4,6 @@
 
 use crate::HostError;
 
-/// `n` characters of `[a-z0-9]`, as a Kubernetes bootstrap token uses.
-///
-/// # Errors
-///
-/// When the operating system's random number generator fails.
-pub fn lower_alnum(n: usize) -> Result<String, HostError> {
-    from(b"abcdefghijklmnopqrstuvwxyz0123456789", n)
-}
-
 /// `n` lower-case hexadecimal digits.
 ///
 /// # Errors
@@ -48,19 +39,12 @@ mod tests {
 
     #[test]
     fn draws_only_from_the_alphabet() {
-        let token = lower_alnum(500).unwrap();
-        assert_eq!(token.len(), 500);
-        assert!(
-            token
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        );
         let hex = hex(6).unwrap();
         assert_eq!(hex.len(), 6);
         assert!(
             hex.bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         );
-        assert_ne!(lower_alnum(16).unwrap(), lower_alnum(16).unwrap());
+        assert_ne!(super::hex(16).unwrap(), super::hex(16).unwrap());
     }
 }

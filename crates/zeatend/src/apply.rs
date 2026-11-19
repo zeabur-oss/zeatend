@@ -226,7 +226,7 @@ pub(crate) async fn show_checks(node: preflight::Node, require_encrypted_disk: b
 }
 
 /// The binary of K3s or RKE2.
-fn release_binary(distribution: Rancher) -> PathBuf {
+pub(crate) fn release_binary(distribution: Rancher) -> PathBuf {
     match distribution {
         Rancher::K3s => PathBuf::from(k3s::BINARY),
         Rancher::Rke2 => Path::new(PREFIX).join("bin/rke2"),

@@ -375,16 +375,6 @@ impl Rancher {
         }
     }
 
-    /// The group the supervisor lets join as an agent with a bootstrap token (k3s
-    /// `NodeBootstrapTokenAuthGroup`).
-    #[must_use]
-    pub const fn bootstrap_group(self) -> &'static str {
-        match self {
-            Self::K3s => "system:bootstrappers:k3s:default-node-token",
-            Self::Rke2 => "system:bootstrappers:rke2:default-node-token",
-        }
-    }
-
     /// The UDP port pods on different nodes reach each other through, and what uses it.
     #[must_use]
     pub const fn vxlan(self) -> (u16, PortUse) {
