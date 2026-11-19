@@ -248,16 +248,8 @@ fn ports(distribution: Distribution, role: Role) -> Check {
     .into()
 }
 
-fn existing_or_var_lib(dir: &str) -> &str {
-    if Path::new(dir).exists() {
-        dir
-    } else {
-        "/var/lib"
-    }
-}
-
 async fn disk_space(data_dir: &str) -> Check {
-    let target = existing_or_var_lib(data_dir);
+    let target = existing_ancestor(data_dir);
     let kib = cmd::run("df", &["-Pk", target], None)
         .await
         .ok()
