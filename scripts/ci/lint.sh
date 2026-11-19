@@ -17,6 +17,8 @@ cargo_checks() {
   cargo lint
   RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
   cargo deny --locked check
+  bun install --frozen-lockfile
+  node_modules/.bin/zeabur-oss-levels
 }
 
 case "${1:-all}" in
