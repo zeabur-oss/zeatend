@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
 use crate::config::{Config, Role};
+use crate::finding::{Check, Finding};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::record::{Changes, Record};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -96,8 +97,8 @@ pub struct Plan {
     pub host_file_paths: Vec<String>,
     /// What `apply` changes against the install record; `None` on a first install.
     pub changes: Option<Changes>,
-    /// Things to read before applying.
-    pub warnings: Vec<Warning>,
+    /// What to read before applying.
+    pub findings: Vec<Check>,
 }
 
 /// The release a plan installs.
@@ -127,26 +128,6 @@ impl Release {
             Self::Cluster(cluster) => Kubernetes::parse(&cluster.version),
             Self::KubeSolo(solo) => Kubernetes::parse(&solo.kubernetes),
         }
-    }
-}
-
-/// Something to read before applying.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Warning {
-    /// A stable key, such as `memory.low`, for an interface that words it itself.
-    pub code: &'static str,
-    /// The values the text names, in order.
-    pub values: Vec<String>,
-    /// The warning in English.
-    pub text: String,
-}
-
-pub(crate) fn warning(code: &'static str, values: &[&str], text: String) -> Warning {
-    Warning {
-        code,
-        values: values.iter().map(|&v| v.to_owned()).collect(),
-        text,
     }
 }
 
@@ -228,12 +209,12 @@ impl From<pins::Asset> for Download {
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
     let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
-    let mut warnings = Vec::new();
+    let mut findings = Vec::new();
     let memory_tier = MemoryTier::of(facts.memory_mib);
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
-        memory(rancher, facts, &mut warnings)?;
-        let cluster = cluster_plan(rancher, config.version(), &facts.arch, &mut warnings)?;
+        memory(rancher, facts, &mut findings)?;
+        let cluster = cluster_plan(rancher, config.version(), &facts.arch, &mut findings)?;
         let mut files = rancher.server_files(&cluster::Options {
             tls_san: config.host.tls_san.clone(),
             tuning,
@@ -247,19 +228,11 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         let arch = facts.arch.as_str();
         let no_release = || PlanError::Arch(arch.to_owned());
         if facts.memory_mib < kubesolo::MIN_MEMORY_MIB {
-            warnings.push(warning(
-                "memory.low",
-                &[
-                    &facts.memory_mib.to_string(),
-                    &kubesolo::MIN_MEMORY_MIB.to_string(),
-                    "KubeSolo",
-                ],
-                format!(
-                    "This host has {} MiB of memory, and KubeSolo needs at least {} MiB.",
-                    facts.memory_mib,
-                    kubesolo::MIN_MEMORY_MIB
-                ),
-            ));
+            findings.push(Finding::MemoryLow {
+                have_mib: facts.memory_mib,
+                min_mib: kubesolo::MIN_MEMORY_MIB,
+                distribution: Distribution::KubeSolo,
+            });
         }
         let solo = KubeSoloPlan {
             version: KUBESOLO.version.to_owned(),
@@ -299,13 +272,13 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         host_files,
         changes,
-        warnings,
+        findings: findings.into_iter().map(Check::from).collect(),
     })
 }
 
 /// Stops a first install of K3s or RKE2 on a host with too little memory. A cluster that runs
 /// already is upgraded with a warning instead.
-fn memory(rancher: Rancher, facts: &Facts, warnings: &mut Vec<Warning>) -> Result<(), PlanError> {
+fn memory(rancher: Rancher, facts: &Facts, findings: &mut Vec<Finding>) -> Result<(), PlanError> {
     let (have, min) = (facts.memory_mib, rancher.min_memory_mib());
     if have >= min {
         return Ok(());
@@ -317,15 +290,11 @@ fn memory(rancher: Rancher, facts: &Facts, warnings: &mut Vec<Warning>) -> Resul
             have,
         });
     }
-    let title = rancher.title();
-    warnings.push(warning(
-        "memory.low",
-        &[&have.to_string(), &min.to_string(), title],
-        format!(
-            "This host has {have} MiB of memory, and {title} needs at least {min} MiB, so some \
-             pods may not start."
-        ),
-    ));
+    findings.push(Finding::MemoryLow {
+        have_mib: have,
+        min_mib: min,
+        distribution: rancher.into(),
+    });
     Ok(())
 }
 
@@ -335,21 +304,16 @@ pub(crate) fn cluster_plan(
     distribution: Rancher,
     version: Option<&str>,
     arch: &str,
-    warnings: &mut Vec<Warning>,
+    findings: &mut Vec<Finding>,
 ) -> Result<ClusterPlan, PlanError> {
     let unknown_arch = || PlanError::Arch(arch.to_owned());
     let pinned_version = distribution.pinned_version();
     let (version, pinned) = match version {
         Some(v) if v != pinned_version => {
-            let title = distribution.title();
-            warnings.push(warning(
-                "cluster.unsupported",
-                &[title, v],
-                format!(
-                    "{title} {v} is not supported by this zeatend release: its downloads are \
-                     checked only against the release's own checksum list."
-                ),
-            ));
+            findings.push(Finding::ReleaseUnpinned {
+                distribution,
+                version: v.to_owned(),
+            });
             (v.to_owned(), false)
         }
         Some(_) | None => (pinned_version.to_owned(), true),
@@ -419,6 +383,7 @@ pub(crate) fn cluster_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::finding::Topic;
     use crate::record::{self, Writer};
 
     fn config(yaml: &str) -> Config {
@@ -441,8 +406,8 @@ mod tests {
         }
     }
 
-    fn codes(plan: &Plan) -> Vec<&str> {
-        plan.warnings.iter().map(|w| w.code).collect()
+    fn topics(plan: &Plan) -> Vec<Topic> {
+        plan.findings.iter().map(|c| c.name).collect()
     }
 
     #[test]
@@ -497,7 +462,7 @@ mod tests {
                 .iter()
                 .all(|f| !f.content.contains("flannel-backend"))
         );
-        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        assert!(plan.findings.is_empty(), "{:?}", plan.findings);
         assert_eq!(plan.changes, None);
     }
 
@@ -517,7 +482,7 @@ mod tests {
             Some("sha256sum-arm64.txt")
         );
         assert!(cluster.downloads().skip(1).all(|d| d.sha256.is_none()));
-        assert_eq!(codes(&plan), ["cluster.unsupported"]);
+        assert_eq!(topics(&plan), [Topic::Release]);
     }
 
     #[test]
@@ -538,7 +503,14 @@ mod tests {
             ..facts()
         };
         let low = super::plan(&config("distribution: kubesolo\n"), &small).unwrap();
-        assert_eq!(codes(&low), ["memory.low"]);
+        assert_eq!(
+            low.findings[0].finding,
+            Finding::MemoryLow {
+                have_mib: 1024,
+                min_mib: kubesolo::MIN_MEMORY_MIB,
+                distribution: Distribution::KubeSolo,
+            }
+        );
     }
 
     #[test]
@@ -559,7 +531,7 @@ mod tests {
             ..small
         };
         let upgrade = plan(&config("{}"), &installed).unwrap();
-        assert_eq!(codes(&upgrade), ["memory.low"]);
+        assert_eq!(topics(&upgrade), [Topic::Memory]);
         assert!(upgrade.changes.is_some_and(|c| c.restart));
     }
 
@@ -589,7 +561,7 @@ mod tests {
         let plan = plan(&config("{}"), &two_gib).unwrap();
         assert_eq!(plan.memory_tier, MemoryTier::Small);
         assert_eq!(plan.tuning.gomemlimit_mib, Some(600));
-        assert!(plan.warnings.is_empty(), "{:?}", plan.warnings);
+        assert!(plan.findings.is_empty(), "{:?}", plan.findings);
         assert!(
             plan.host_file_paths
                 .contains(&crate::k3s::MEMORY_DROP_IN.to_owned())

@@ -10,7 +10,8 @@ use serde::Serialize;
 
 use crate::cluster::{self, HostFile, PortUse, Rancher};
 use crate::config::{JoinConfig, Role};
-use crate::plan::{ClusterPlan, Facts, Warning, cluster_plan, warning};
+use crate::finding::{Check, Finding};
+use crate::plan::{ClusterPlan, Facts, cluster_plan};
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, node_name};
@@ -159,47 +160,35 @@ pub struct JoinPlan {
     pub local_ports: Vec<Port>,
     /// The node's unit is running, so its ports are in use by it and `apply` doesn't check them.
     pub unit_running: bool,
-    /// Things to read before applying.
-    pub warnings: Vec<Warning>,
-    /// Things `apply` refuses to go on with.
-    pub blockers: Vec<Warning>,
+    /// What to read before applying; a failed one stops `apply`.
+    pub findings: Vec<Check>,
 }
 
-fn rtt_warning(rtt: Rtt, port: u16) -> Option<Warning> {
-    let median = ms(rtt.median_us);
-    match latency(rtt.median_us) {
+const fn rtt_finding(rtt: Rtt, port: u16) -> Option<Finding> {
+    let (median_us, samples) = (rtt.median_us, rtt.samples);
+    match latency(median_us) {
         Latency::Fine => None,
-        Latency::High => Some(warning(
-            "join.rtt.high",
-            &[&median, &ms(RTT_WARN_US)],
-            format!(
-                "The server is {median} ms away (median of {} TCP connects to port {port}); \
-                 within a region it is usually under {} ms.",
-                rtt.samples,
-                ms(RTT_WARN_US)
-            ),
-        )),
-        Latency::Critical => Some(warning(
-            "join.rtt.critical",
-            &[&median, &ms(RTT_CRITICAL_US)],
-            format!(
-                "The server is {median} ms away (median of {} TCP connects to port {port}). \
-                 Above {} ms the cluster will be slow and unstable.",
-                rtt.samples,
-                ms(RTT_CRITICAL_US)
-            ),
-        )),
+        Latency::High => Some(Finding::ServerFar {
+            median_us,
+            samples,
+            port,
+        }),
+        Latency::Critical => Some(Finding::ServerTooFar {
+            median_us,
+            samples,
+            port,
+        }),
     }
 }
 
-/// The server's ports with what was found, a warning for closed ones besides the join port (a
-/// blocker of its own), and the UDP port that cannot be checked.
+/// The server's ports with what was found, a finding for closed ones besides the join port (a
+/// finding of its own), and the UDP port that cannot be checked.
 fn ports(
     distribution: Rancher,
     role: Role,
     found: &[(u16, bool)],
     host: &str,
-    warnings: &mut Vec<Warning>,
+    findings: &mut Vec<Finding>,
 ) -> Vec<Port> {
     let mut ports: Vec<Port> = server_ports(distribution, role)
         .into_iter()
@@ -213,21 +202,16 @@ fn ports(
                 .map(|(_, open)| *open),
         })
         .collect();
-    let closed: Vec<String> = ports
+    let closed: Vec<u16> = ports
         .iter()
         .filter(|p| p.number != distribution.join_port() && p.open == Some(false))
-        .map(|p| p.number.to_string())
+        .map(|p| p.number)
         .collect();
     if !closed.is_empty() {
-        let list = closed.join(", ");
-        warnings.push(warning(
-            "join.port.closed",
-            &[&list, host],
-            format!(
-                "TCP {list} on {host} cannot be reached from this VM; check the firewall or \
-                 security group."
-            ),
-        ));
+        findings.push(Finding::ServerPortsClosed {
+            ports: closed,
+            host: host.to_owned(),
+        });
     }
     let (number, purpose) = distribution.vxlan();
     ports.push(Port {
@@ -239,104 +223,39 @@ fn ports(
     ports
 }
 
-fn same_region() -> Warning {
-    warning(
-        "join.sameRegion",
-        &[],
-        "Put every node at the same hosting provider and in the same region. Different \
-         availability zones in one region are fine. Between providers or regions, latency slows \
-         etcd, the Kubernetes API and storage, and can make the cluster unstable."
-            .to_owned(),
-    )
-}
-
 /// What to tell before a node joins, on the server: the same messages `plan` shows on the new VM,
 /// less what only the VM can find out.
 #[must_use]
-pub fn advice(distribution: Rancher, role: Role) -> Vec<Warning> {
-    let mut all = vec![same_region()];
+pub fn advice(distribution: Rancher, role: Role) -> Vec<Finding> {
+    let mut all = vec![Finding::SameRegion];
     all.extend(
-        standing_warnings(distribution, role, true)
+        standing_findings(distribution, role, true)
             .into_iter()
-            .filter(|w| w.code != "join.udp"),
+            .filter(|f| !matches!(f, Finding::UdpUnchecked { .. })),
     );
     all
 }
 
-/// The UDP port of Calico's VXLAN, which K3s clusters from earlier zeatend versions run.
-const CALICO_VXLAN_PORT: &str = "4789";
-const CALICO_VXLAN: &str = "Calico VXLAN";
-
 /// What every join is told: the ports, UDP, high availability for servers, where volumes live on
 /// K3s, and an unpinned token.
-fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Warning> {
-    let mut warnings = Vec::new();
-    let (udp, _) = distribution.vxlan();
-    let udp = udp.to_string();
-    let network = match distribution {
-        Rancher::K3s => "flannel VXLAN",
-        Rancher::Rke2 => "Canal VXLAN",
-    };
-    warnings.push(match distribution {
-        // A cluster that an earlier zeatend installed with Calico keeps it, and the worker cannot
-        // tell which network the cluster runs, so the warning names both ports.
-        Rancher::K3s => warning(
-            "join.ports",
-            &[&udp, network, CALICO_VXLAN_PORT, CALICO_VXLAN],
-            format!(
-                "Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP {udp} \
-                 ({network}) between all nodes. Keep UDP {udp} closed to the internet. A cluster \
-                 that an earlier zeatend installed with Calico uses UDP {CALICO_VXLAN_PORT} \
-                 ({CALICO_VXLAN}) instead."
-            ),
-        ),
-        Rancher::Rke2 => warning(
-            "join.ports",
-            &[&udp, network],
-            format!(
-                "Allow these between the nodes: TCP 9345 and 6443 to the servers, TCP 10250 and \
-                 9099 and UDP {udp} ({network}) between all nodes, and TCP 2379 to 2381 between \
-                 servers. Keep UDP {udp} closed to the internet."
-            ),
-        ),
-    });
-    warnings.push(warning(
-        "join.udp",
-        &[&udp],
-        format!(
-            "UDP {udp} cannot be checked from here. If it is blocked, pods on different nodes \
-             cannot reach each other."
-        ),
-    ));
+fn standing_findings(distribution: Rancher, role: Role, token_pinned: bool) -> Vec<Finding> {
+    let mut findings = vec![
+        Finding::JoinPorts { distribution },
+        Finding::UdpUnchecked {
+            port: distribution.vxlan().0,
+        },
+    ];
     if role == Role::Server {
-        warnings.push(warning(
-            "join.servers.ha",
-            &[],
-            "The control plane survives losing a server only with three or more servers: etcd \
-             needs a majority. With two, losing either one stops the cluster, so add a third."
-                .to_owned(),
-        ));
+        findings.push(Finding::ServersHa);
     }
     // RKE2 has no storage class until the Zeabur catalog installs one.
     if distribution == Rancher::K3s {
-        warnings.push(warning(
-            "join.storage.local",
-            &[],
-            "Volumes on the default local-path storage class stay on the node that created them: \
-             a pod using one runs only on that node, and the data goes with the node."
-                .to_owned(),
-        ));
+        findings.push(Finding::LocalStorage);
     }
     if !token_pinned {
-        warnings.push(warning(
-            "join.token.unpinned",
-            &[],
-            "The token has no CA hash (K10<hash>::…), so this VM trusts whichever server answers \
-             at that address. Use the token with its CA hash, as the server's token file holds it."
-                .to_owned(),
-        ));
+        findings.push(Finding::TokenUnpinned);
     }
-    warnings
+    findings
 }
 
 /// Computes the plan of a joining node.
@@ -355,13 +274,12 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &join.node_names,
     )?;
     let distribution = config.rancher()?;
-    let mut warnings = Vec::new();
-    let mut blockers = Vec::new();
+    let mut findings = Vec::new();
     let cluster = cluster_plan(
         distribution,
         config.version(),
         &facts.facts.arch,
-        &mut warnings,
+        &mut findings,
     )?;
 
     upgrade::check_release(
@@ -401,24 +319,20 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     host_files.extend(distribution.node_ip_file(&facts.facts.node_ips)?);
     host_files.extend(facts.facts.apparmor_profile());
 
-    warnings.push(same_region());
+    findings.push(Finding::SameRegion);
 
     let (host, port) = crate::config::server_address(&join.server, distribution.join_port())?;
     let rtt = rtt(&facts.rtt_us);
     match rtt {
-        None => blockers.push(warning(
-            "join.server.unreachable",
-            &[&join.server],
-            format!(
-                "Cannot connect to {}. Check the address and that TCP {port} is open from this VM.",
-                join.server
-            ),
-        )),
-        Some(rtt) => warnings.extend(rtt_warning(rtt, port)),
+        None => findings.push(Finding::ServerUnreachable {
+            server: join.server.clone(),
+            port,
+        }),
+        Some(rtt) => findings.extend(rtt_finding(rtt, port)),
     }
 
-    let ports = ports(distribution, join.role, &facts.ports, &host, &mut warnings);
-    warnings.extend(standing_warnings(
+    let ports = ports(distribution, join.role, &facts.ports, &host, &mut findings);
+    findings.extend(standing_findings(
         distribution,
         join.role,
         facts.token_pinned,
@@ -446,8 +360,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
             })
             .collect(),
         unit_running: facts.unit_running,
-        warnings,
-        blockers,
+        findings: findings.into_iter().map(Check::from).collect(),
     })
 }
 
@@ -455,6 +368,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
 mod tests {
     use super::*;
     use crate::config::{Document, JoinConfig};
+    use crate::finding::Status;
 
     fn config(extra: &str) -> JoinConfig {
         let yaml = format!(
@@ -488,8 +402,8 @@ mod tests {
         }
     }
 
-    fn codes(plan: &JoinPlan) -> Vec<&str> {
-        plan.warnings.iter().map(|w| w.code).collect()
+    fn findings(plan: &JoinPlan) -> Vec<&Finding> {
+        plan.findings.iter().map(|c| &c.finding).collect()
     }
 
     #[test]
@@ -527,17 +441,20 @@ mod tests {
             [80, 443, 10250]
         );
         assert_eq!(
-            codes(&p),
+            findings(&p),
             [
-                "join.sameRegion",
-                "join.port.closed",
-                "join.ports",
-                "join.udp"
+                &Finding::SameRegion,
+                &Finding::ServerPortsClosed {
+                    ports: vec![10250],
+                    host: "10.0.0.5".to_owned()
+                },
+                &Finding::JoinPorts {
+                    distribution: Rancher::Rke2
+                },
+                &Finding::UdpUnchecked { port: 8472 },
             ]
         );
-        assert_eq!(p.blockers.len(), 0);
-        let closed = &p.warnings[1];
-        assert_eq!(closed.values, ["10250", "10.0.0.5"]);
+        assert!(p.findings.iter().all(|c| c.status == Status::Warn));
         let udp = p.ports.iter().find(|p| p.protocol == "udp").unwrap();
         assert_eq!(udp.open, None);
     }
@@ -573,36 +490,50 @@ mod tests {
     fn far_servers_are_warned_about() {
         let c = config("");
         let p = plan(&c, &facts(&[70_000; 5])).unwrap();
-        assert!(codes(&p).contains(&"join.rtt.critical"));
-        let critical = p
-            .warnings
-            .iter()
-            .find(|w| w.code == "join.rtt.critical")
-            .unwrap();
-        assert_eq!(critical.values, ["70.0", "50.0"]);
+        assert!(findings(&p).contains(&&Finding::ServerTooFar {
+            median_us: 70_000,
+            samples: 5,
+            port: 9345
+        }));
 
         let mut f = facts(&[20_000; 5]);
         f.token_pinned = false;
         let p = plan(&c, &f).unwrap();
-        assert!(codes(&p).contains(&"join.rtt.high"));
-        assert!(codes(&p).contains(&"join.token.unpinned"));
+        assert!(findings(&p).contains(&&Finding::ServerFar {
+            median_us: 20_000,
+            samples: 5,
+            port: 9345
+        }));
+        assert!(findings(&p).contains(&&Finding::TokenUnpinned));
 
         let p = plan(&c, &facts(&[])).unwrap();
-        assert_eq!(p.blockers[0].code, "join.server.unreachable");
+        let failed: Vec<&Finding> = p
+            .findings
+            .iter()
+            .filter(|c| c.status == Status::Fail)
+            .map(|c| &c.finding)
+            .collect();
+        assert_eq!(
+            failed,
+            [&Finding::ServerUnreachable {
+                server: "https://10.0.0.5:9345".to_owned(),
+                port: 9345
+            }]
+        );
     }
 
     #[test]
     fn the_advice_before_a_join_matches_the_plan() {
-        let codes = |role| {
-            advice(Rancher::Rke2, role)
-                .iter()
-                .map(|w| w.code)
-                .collect::<Vec<_>>()
+        let ports = Finding::JoinPorts {
+            distribution: Rancher::Rke2,
         };
-        assert_eq!(codes(Role::Worker), ["join.sameRegion", "join.ports"]);
         assert_eq!(
-            codes(Role::Server),
-            ["join.sameRegion", "join.ports", "join.servers.ha"]
+            advice(Rancher::Rke2, Role::Worker),
+            [Finding::SameRegion, ports.clone()]
+        );
+        assert_eq!(
+            advice(Rancher::Rke2, Role::Server),
+            [Finding::SameRegion, ports, Finding::ServersHa]
         );
     }
 
@@ -611,7 +542,7 @@ mod tests {
         let c = config("  role: server\nhost: {tlsSan: [k8s.example.com]}\n");
         let p = plan(&c, &facts(&[500; 5])).unwrap();
         assert_eq!(p.unit, "rke2-server");
-        assert!(codes(&p).contains(&"join.servers.ha"));
+        assert!(findings(&p).contains(&&Finding::ServersHa));
         let config = p
             .host_files
             .iter()

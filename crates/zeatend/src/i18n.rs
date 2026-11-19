@@ -12,8 +12,8 @@ mod zh_tw;
 use std::sync::LazyLock;
 
 use unicode_width::UnicodeWidthStr as _;
-use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::Distribution;
+use zeatend_plan::finding::{Finding, Status, Topic};
 
 /// A language zeatend has messages for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -447,8 +447,8 @@ fn zh_list(items: &[String], and: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use zeatend_host::preflight::BusyPort;
     use zeatend_plan::cluster::PortUse;
+    use zeatend_plan::finding::BusyPort;
 
     use super::*;
 
@@ -622,7 +622,7 @@ mod tests {
                 zeatend_version: "9.9.9".to_owned(),
             },
             Finding::ReservesLow {
-                nodes: vec![zeatend_host::preflight::Kept {
+                nodes: vec![zeatend_plan::finding::Kept {
                     name: "edge-1".to_owned(),
                     mib: 0,
                 }],

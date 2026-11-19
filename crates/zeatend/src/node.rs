@@ -35,12 +35,11 @@ fn server_distribution() -> Result<Rancher, InstallError> {
         .find(|d| Path::new(d.layout().admin_kubeconfig).exists())
         .ok_or_else(|| {
             let kubesolo = Path::new(zeatend_plan::kubesolo::CONFIG_FILE).exists();
-            InstallError::Message(if kubesolo {
-                "KubeSolo runs one node; a node joins K3s or RKE2 only".to_owned()
+            if kubesolo {
+                InstallError::KubeSoloTakesNoNodes
             } else {
-                "no K3s or RKE2 admin kubeconfig here: run node add on a server of the cluster"
-                    .to_owned()
-            })
+                InstallError::NotAServer
+            }
         })
 }
 
@@ -56,18 +55,15 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     let address = if let Some(address) = &options.address {
         address.clone()
     } else {
-        let name = facts::read().await?.node_name.ok_or_else(|| {
-            InstallError::Message("this host has no node name: is it a server?".to_owned())
-        })?;
+        let name = facts::read()
+            .await?
+            .node_name
+            .ok_or(InstallError::NoNodeName)?;
         nodes
             .iter()
             .find(|n| n.metadata.name.as_ref() == Some(&name))
             .and_then(internal_ip)
-            .ok_or_else(|| {
-                InstallError::Message(format!(
-                    "node {name} has no InternalIP; name the address with --address"
-                ))
-            })?
+            .ok_or_else(|| InstallError::NoInternalIp(name.clone()))?
     };
     let token = match options.role {
         Role::Worker => {
@@ -89,9 +85,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         }
         Role::Server => {
             let text = String::from_utf8(files::read_secret(Path::new(layout.server_token_file))?)
-                .map_err(|_e| {
-                    InstallError::Message(format!("{}: not text", layout.server_token_file))
-                })?;
+                .map_err(|_e| InstallError::NotText(layout.server_token_file.into()))?;
             Token::Server(text.trim().to_owned())
         }
     };
@@ -100,8 +94,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     let disable = match options.role {
         Role::Server => {
             let path = format!("{}/config.yaml", layout.config_dir);
-            let config = std::fs::read_to_string(&path)
-                .map_err(|e| InstallError::Message(format!("{path}: {e}")))?;
+            let config = std::fs::read_to_string(&path).map_err(InstallError::io(&path))?;
             cluster::disabled_components(distribution.into(), &config)?
         }
         Role::Worker => Vec::new(),
@@ -211,7 +204,10 @@ fn instructions(i: &Instructions<'_>) -> String {
     push(&mut text, "");
     push(&mut text, "Before you start");
     for advice in join::advice(i.distribution, i.role) {
-        push(&mut text, &format!("  - {}", advice.text));
+        push(
+            &mut text,
+            &format!("  - {}", crate::i18n::en::finding(&advice)),
+        );
     }
     push(&mut text, "");
     push(

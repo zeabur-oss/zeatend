@@ -32,7 +32,7 @@ pub(crate) fn document() -> Result<Option<Document>, InstallError> {
             Ok(Some(document))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(InstallError::Message(format!("{CONFIG_FILE}: {e}"))),
+        Err(e) => Err(InstallError::io(CONFIG_FILE)(e)),
     }
 }
 

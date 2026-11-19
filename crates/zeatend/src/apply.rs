@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use k8s_openapi::apimachinery::pkg::version::Info;
 use zeatend_host::kubectl::{self, Kubectl};
-use zeatend_host::preflight::{self, Status};
-use zeatend_host::{HostError, archive, cmd, download, facts, files, systemd};
+use zeatend_host::{HostError, archive, cmd, download, facts, files, preflight, systemd};
 use zeatend_plan::cluster::{
     self, APPARMOR_PROFILE, Addon, HelmChart, HostFile, ObjectList, Rancher,
 };
 use zeatend_plan::config::{Component, Config};
+use zeatend_plan::finding::Status;
 use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
@@ -45,12 +45,10 @@ pub(crate) fn restarted(state_dir: &str) -> Result<(), InstallError> {
 }
 
 /// The K3s or RKE2 of a plan; a `KubeSolo` plan is an error.
-fn cluster(plan: &Plan) -> Result<&ClusterPlan, InstallError> {
+const fn cluster(plan: &Plan) -> Result<&ClusterPlan, InstallError> {
     match &plan.release {
         Release::Cluster(cluster) => Ok(cluster),
-        Release::KubeSolo(_) => Err(InstallError::Message(
-            "the plan installs KubeSolo, not K3s or RKE2".to_owned(),
-        )),
+        Release::KubeSolo(_) => Err(InstallError::NotRancher),
     }
 }
 
@@ -58,7 +56,7 @@ fn rancher(config: &Config) -> Result<Rancher, InstallError> {
     config
         .distribution
         .rancher()
-        .ok_or_else(|| InstallError::Message("the configuration installs KubeSolo".to_owned()))
+        .ok_or(InstallError::NotRancher)
 }
 
 pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
@@ -240,13 +238,15 @@ pub(crate) fn read_record(state_dir: &Path) -> Result<Option<Record>, InstallErr
         .ok()
         .and_then(|data| Record::from_data(&data))
         .map(Some)
-        .ok_or_else(|| InstallError::Message(format!("{}: not an install record", path.display())))
+        .ok_or(InstallError::NotRecord(path))
 }
 
 /// Records what was installed in `state_dir`, where the next `plan` reads it.
 pub(crate) fn write_record(state_dir: &Path, record: &Record) -> Result<(), InstallError> {
-    let json = serde_json::to_string_pretty(record)
-        .map_err(|e| InstallError::Message(format!("install record: {e}")))?;
+    let json = serde_json::to_string_pretty(record).map_err(|e| InstallError::Serialize {
+        what: "install record",
+        reason: e.to_string(),
+    })?;
     files::write(
         &state_dir.join(RECORD_FILE),
         0o644,
@@ -269,9 +269,7 @@ pub(crate) async fn check_host(
     require_encrypted_disk: bool,
 ) -> Result<(), InstallError> {
     if show_checks(node, require_encrypted_disk).await {
-        return Err(InstallError::Message(
-            i18n::messages().host_not_ready.to_owned(),
-        ));
+        return Err(InstallError::HostNotReady);
     }
     Ok(())
 }
@@ -345,9 +343,10 @@ async fn install_release(
     match distribution {
         Rancher::K3s => {
             files::install(&release, &binary, 0o755)?;
-            let script = cluster.install_script.as_ref().ok_or_else(|| {
-                InstallError::Message("no install.sh for K3s in the plan".to_owned())
-            })?;
+            let script = cluster
+                .install_script
+                .as_ref()
+                .ok_or(InstallError::NoInstallScript)?;
             let role = if server { "server" } else { "agent" };
             let script = dir.join(&script.file);
             cmd::run_with(
@@ -430,9 +429,7 @@ pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool
     load_apparmor_profile(install.files.iter()).await?;
     match distribution {
         Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
-            let (program, args) = ETCD_USER
-                .split_first()
-                .ok_or_else(|| InstallError::Message("ETCD_USER".to_owned()))?;
+            let (program, args) = ETCD_USER;
             cmd::run(program, args, None).await?;
         }
         Rancher::K3s if install.server => {
@@ -487,10 +484,7 @@ async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallE
         )
         .await?;
         if cluster.checksums.as_ref() == Some(d) {
-            list = Some(
-                fs::read_to_string(&dest)
-                    .map_err(|e| InstallError::Message(format!("{}: {e}", dest.display())))?,
-            );
+            list = Some(fs::read_to_string(&dest).map_err(InstallError::io(&dest))?);
         } else if let (None, Some(list)) = (&d.sha256, &list) {
             download::check_against_list(list, &dest, &actual)?;
         }

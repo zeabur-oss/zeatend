@@ -1,7 +1,8 @@
 //! English.
 
-use zeatend_host::preflight::{Finding, Status, Topic};
-use zeatend_plan::cluster::{Distribution, PortUse};
+use zeatend_plan::cluster::{Distribution, PortUse, Rancher};
+use zeatend_plan::finding::{Finding, Status, Topic};
+use zeatend_plan::join::{RTT_CRITICAL_US, RTT_WARN_US, ms};
 use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib};
@@ -220,7 +221,7 @@ const fn status(status: Status) -> &'static str {
     }
 }
 
-const fn topic(topic: Topic) -> &'static str {
+pub(super) const fn topic(topic: Topic) -> &'static str {
     match topic {
         Topic::Root => "root",
         Topic::Systemd => "systemd",
@@ -238,6 +239,13 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Nodes => "nodes",
         Topic::KubeletReserves => "kubelet reserves",
         Topic::SecretsEncryption => "Secrets encryption",
+        Topic::Memory => "memory",
+        Topic::Release => "release",
+        Topic::Server => "server",
+        Topic::Firewall => "firewall",
+        Topic::HighAvailability => "high availability",
+        Topic::Storage => "storage",
+        Topic::JoinToken => "join token",
     }
 }
 
@@ -254,7 +262,7 @@ pub(crate) fn and_list(items: &[String]) -> String {
     clippy::too_many_lines,
     reason = "one arm for each finding, so a finding without words does not compile"
 )]
-fn finding(finding: &Finding) -> String {
+pub(crate) fn finding(finding: &Finding) -> String {
     match finding {
         Finding::RootOk => "running as root".to_owned(),
         Finding::RootNo => "run apply as root (sudo)".to_owned(),
@@ -414,6 +422,103 @@ fn finding(finding: &Finding) -> String {
              the state",
             distribution.id()
         ),
+        Finding::MemoryLow {
+            have_mib,
+            min_mib,
+            distribution: Distribution::KubeSolo,
+        } => format!(
+            "This host has {have_mib} MiB of memory, and KubeSolo needs at least {min_mib} MiB."
+        ),
+        Finding::MemoryLow {
+            have_mib,
+            min_mib,
+            distribution,
+        } => format!(
+            "This host has {have_mib} MiB of memory, and {} needs at least {min_mib} MiB, so \
+             some pods may not start.",
+            distribution.title()
+        ),
+        Finding::ReleaseUnpinned {
+            distribution,
+            version,
+        } => format!(
+            "{} {version} is not supported by this zeatend release: its downloads are checked \
+             only against the release's own checksum list.",
+            distribution.title()
+        ),
+        Finding::ServerUnreachable { server, port } => format!(
+            "Cannot connect to {server}. Check the address and that TCP {port} is open from this \
+             VM."
+        ),
+        Finding::ServerFar {
+            median_us,
+            samples,
+            port,
+        } => format!(
+            "The server is {} ms away (median of {samples} TCP connects to port {port}); within a \
+             region it is usually under {} ms.",
+            ms(*median_us),
+            ms(RTT_WARN_US)
+        ),
+        Finding::ServerTooFar {
+            median_us,
+            samples,
+            port,
+        } => format!(
+            "The server is {} ms away (median of {samples} TCP connects to port {port}). Above {} \
+             ms the cluster will be slow and unstable.",
+            ms(*median_us),
+            ms(RTT_CRITICAL_US)
+        ),
+        Finding::SameRegion => "Put every node at the same hosting provider and in the same \
+                                region. Different availability zones in one region are fine. \
+                                Between providers or regions, latency slows etcd, the Kubernetes \
+                                API and storage, and can make the cluster unstable."
+            .to_owned(),
+        Finding::ServerPortsClosed { ports, host } => {
+            let numbers: Vec<String> = ports.iter().map(u16::to_string).collect();
+            format!(
+                "TCP {} on {host} cannot be reached from this VM; check the firewall or security \
+                 group.",
+                numbers.join(", ")
+            )
+        }
+        Finding::JoinPorts { distribution } => join_ports(*distribution),
+        Finding::UdpUnchecked { port } => format!(
+            "UDP {port} cannot be checked from here. If it is blocked, pods on different nodes \
+             cannot reach each other."
+        ),
+        Finding::ServersHa => "The control plane survives losing a server only with three or \
+                               more servers: etcd needs a majority. With two, losing either one \
+                               stops the cluster, so add a third."
+            .to_owned(),
+        Finding::LocalStorage => "Volumes on the default local-path storage class stay on the \
+                                  node that created them: a pod using one runs only on that \
+                                  node, and the data goes with the node."
+            .to_owned(),
+        Finding::TokenUnpinned => "The token has no CA hash (K10<hash>::…), so this VM trusts \
+                                   whichever server answers at that address. Use the token with \
+                                   its CA hash, as the server's token file holds it."
+            .to_owned(),
+    }
+}
+
+/// The ports to allow between the nodes of `distribution`. A K3s cluster that an earlier zeatend
+/// installed with Calico keeps it, and a worker cannot tell which network the cluster runs, so
+/// the K3s text names both ports.
+fn join_ports(distribution: Rancher) -> String {
+    let (udp, _) = distribution.vxlan();
+    match distribution {
+        Rancher::K3s => format!(
+            "Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP {udp} \
+             (flannel VXLAN) between all nodes. Keep UDP {udp} closed to the internet. A cluster \
+             that an earlier zeatend installed with Calico uses UDP 4789 (Calico VXLAN) instead."
+        ),
+        Rancher::Rke2 => format!(
+            "Allow these between the nodes: TCP 9345 and 6443 to the servers, TCP 10250 and 9099 \
+             and UDP {udp} (Canal VXLAN) between all nodes, and TCP 2379 to 2381 between servers. \
+             Keep UDP {udp} closed to the internet."
+        ),
     }
 }
 
@@ -465,6 +570,100 @@ mod tests {
     use super::*;
 
     #[test]
+    fn plan_findings_in_english() {
+        let cases = [
+            (
+                Finding::MemoryLow {
+                    have_mib: 1024,
+                    min_mib: 1536,
+                    distribution: Distribution::KubeSolo,
+                },
+                "This host has 1024 MiB of memory, and KubeSolo needs at least 1536 MiB.",
+            ),
+            (
+                Finding::MemoryLow {
+                    have_mib: 1800,
+                    min_mib: 1900,
+                    distribution: Distribution::K3s,
+                },
+                "This host has 1800 MiB of memory, and K3s needs at least 1900 MiB, so some pods may not start.",
+            ),
+            (
+                Finding::ReleaseUnpinned {
+                    distribution: Rancher::Rke2,
+                    version: "v1.37.1+rke2r1".to_owned(),
+                },
+                "RKE2 v1.37.1+rke2r1 is not supported by this zeatend release: its downloads are checked only against the release's own checksum list.",
+            ),
+            (
+                Finding::ServerUnreachable {
+                    server: "https://10.0.0.5:9345".to_owned(),
+                    port: 9345,
+                },
+                "Cannot connect to https://10.0.0.5:9345. Check the address and that TCP 9345 is open from this VM.",
+            ),
+            (
+                Finding::ServerFar {
+                    median_us: 20_000,
+                    samples: 5,
+                    port: 9345,
+                },
+                "The server is 20.0 ms away (median of 5 TCP connects to port 9345); within a region it is usually under 10.0 ms.",
+            ),
+            (
+                Finding::ServerTooFar {
+                    median_us: 70_000,
+                    samples: 5,
+                    port: 6443,
+                },
+                "The server is 70.0 ms away (median of 5 TCP connects to port 6443). Above 50.0 ms the cluster will be slow and unstable.",
+            ),
+            (
+                Finding::ServerPortsClosed {
+                    ports: vec![6443, 10250],
+                    host: "10.0.0.5".to_owned(),
+                },
+                "TCP 6443, 10250 on 10.0.0.5 cannot be reached from this VM; check the firewall or security group.",
+            ),
+            (
+                Finding::JoinPorts {
+                    distribution: Rancher::K3s,
+                },
+                "Allow these between the nodes: TCP 6443 to the server, TCP 10250 and UDP 8472 (flannel VXLAN) between all nodes. Keep UDP 8472 closed to the internet. A cluster that an earlier zeatend installed with Calico uses UDP 4789 (Calico VXLAN) instead.",
+            ),
+            (
+                Finding::JoinPorts {
+                    distribution: Rancher::Rke2,
+                },
+                "Allow these between the nodes: TCP 9345 and 6443 to the servers, TCP 10250 and 9099 and UDP 8472 (Canal VXLAN) between all nodes, and TCP 2379 to 2381 between servers. Keep UDP 8472 closed to the internet.",
+            ),
+            (
+                Finding::UdpUnchecked { port: 8472 },
+                "UDP 8472 cannot be checked from here. If it is blocked, pods on different nodes cannot reach each other.",
+            ),
+            (
+                Finding::SameRegion,
+                "Put every node at the same hosting provider and in the same region. Different availability zones in one region are fine. Between providers or regions, latency slows etcd, the Kubernetes API and storage, and can make the cluster unstable.",
+            ),
+            (
+                Finding::ServersHa,
+                "The control plane survives losing a server only with three or more servers: etcd needs a majority. With two, losing either one stops the cluster, so add a third.",
+            ),
+            (
+                Finding::LocalStorage,
+                "Volumes on the default local-path storage class stay on the node that created them: a pod using one runs only on that node, and the data goes with the node.",
+            ),
+            (
+                Finding::TokenUnpinned,
+                "The token has no CA hash (K10<hash>::…), so this VM trusts whichever server answers at that address. Use the token with its CA hash, as the server's token file holds it.",
+            ),
+        ];
+        for (f, text) in cases {
+            assert_eq!(finding(&f), text, "{f:?}");
+        }
+    }
+
+    #[test]
     fn preflight_findings_of_the_host_in_english() {
         let cases = [
             (Finding::RootOk, "running as root"),
@@ -502,7 +701,7 @@ mod tests {
 
     #[test]
     fn preflight_findings_with_paths_and_ports_in_english() {
-        use zeatend_host::preflight::{BusyPort, Leftover};
+        use zeatend_plan::finding::{BusyPort, Leftover};
         let cases = [
             (Finding::OthersNone, "none found"),
             (
@@ -626,7 +825,7 @@ mod tests {
 
     #[test]
     fn doctor_findings_say_what_to_run() {
-        use zeatend_host::preflight::Kept;
+        use zeatend_plan::finding::Kept;
 
         let nodes = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
         let cases = [
@@ -683,7 +882,7 @@ mod tests {
             ),
             (
                 Finding::SecretsPlain {
-                    distribution: zeatend_plan::cluster::Rancher::Rke2,
+                    distribution: Rancher::Rke2,
                 },
                 "the API server stores Secrets unencrypted; `sudo rke2 secrets-encrypt status` shows the state",
             ),

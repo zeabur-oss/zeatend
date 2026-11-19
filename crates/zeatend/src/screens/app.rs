@@ -3,10 +3,10 @@
 use std::net::IpAddr;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use zeatend_host::preflight::Status;
 use zeatend_host::progress::Event;
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::Config;
+use zeatend_plan::finding::Status;
 use zeatend_plan::{node_name, plan};
 
 use super::host::{DISTRIBUTIONS, Host};

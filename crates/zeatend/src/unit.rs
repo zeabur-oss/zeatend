@@ -72,16 +72,14 @@ pub(crate) async fn start(config: &Path, language: Option<&str>) -> Result<Strin
         .map_or(0, |d| d.as_secs());
     // `journalctl --unit` shows every run of a unit name, so no two installs share one.
     let unit = format!("{PREFIX}{secs}-{}.service", random::hex(6)?);
-    let zeatend = std::env::current_exe()
-        .map_err(|e| InstallError::Message(format!("finding the zeatend binary: {e}")))?;
+    let zeatend = std::env::current_exe().map_err(InstallError::CurrentExe)?;
     // Relative paths in the configuration, such as `tokenFile`, stay relative to this directory.
-    let dir = std::env::current_dir()
-        .map_err(|e| InstallError::Message(format!("the working directory: {e}")))?;
+    let dir = std::env::current_dir().map_err(InstallError::WorkingDir)?;
     let config = dir.join(config);
     let utf8 = |path: &Path| {
         path.to_str()
             .map(str::to_owned)
-            .ok_or_else(|| InstallError::Message(format!("{}: not UTF-8", path.display())))
+            .ok_or_else(|| InstallError::NotUtf8(path.to_owned()))
     };
     let (zeatend, config, dir) = (utf8(&zeatend)?, utf8(&config)?, utf8(&dir)?);
     let mut env: Vec<String> = PASSED_ENV
@@ -113,11 +111,11 @@ async fn follow(unit: &str) -> Result<(), InstallError> {
         _ = tokio::signal::ctrl_c() => return Err(InstallError::Detached(unit.to_owned())),
     };
     match (last, followed) {
-        (Some(Event::Failed { error }), _) => Err(InstallError::Message(error)),
+        (Some(Event::Failed { error }), _) => Err(InstallError::UnitFailed(error)),
         (Some(_), _) => Ok(()),
-        (None, Followed::Stopped | Followed::Ended) => Err(InstallError::Message(format!(
-            "{unit} ended without a result; see `journalctl -u {unit}`"
-        ))),
+        (None, Followed::Stopped | Followed::Ended) => {
+            Err(InstallError::UnitEnded(unit.to_owned()))
+        }
     }
 }
 

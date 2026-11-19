@@ -7,7 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
-use zeatend_host::preflight::{Check, Status};
+use zeatend_plan::finding::{Check, Status};
 
 use super::app::{App, Choices, End, FieldKind, Progress};
 use super::host::{DISTRIBUTIONS, is_private};

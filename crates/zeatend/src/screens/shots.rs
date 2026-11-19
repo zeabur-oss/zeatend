@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use zeatend_host::preflight::{Check, Finding};
 use zeatend_host::progress::Event;
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::{Component, Config};
+use zeatend_plan::finding::{Check, Finding};
 use zeatend_plan::plan::Facts;
 
 use super::app::{Action, App, Choices};
