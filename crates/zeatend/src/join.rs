@@ -12,6 +12,7 @@ use zeatend_plan::finding::Status;
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
 use zeatend_plan::precondition::Preconditions;
 use zeatend_plan::record::Record;
+use zeatend_plan::token::JoinToken;
 
 use crate::apply::{self, ClusterInstall};
 use crate::{InstallError, output, render};
@@ -59,7 +60,7 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
         facts,
         rtt_us,
         ports,
-        token_pinned: config::token_pins_ca(token),
+        token_pinned: JoinToken::parse(token).is_ok_and(|t| t.pins_ca()),
         unit_running: systemd::is_active(unit).await,
     })
 }
