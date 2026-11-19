@@ -9,4 +9,6 @@ UI. A Rust workspace in `crates/`: the binary `zeatend` (`crates/zeatend`), the 
   `scripts/ci/<job>.sh`.
 - Commits are Conventional Commits signed off with `git commit -s`. No AI trailer
   (`Co-Authored-By`) in commits or pull requests.
-- Text in the repository is English.
+- Text in the repository is English, except `README.zh-TW.md`, `README.zh-CN.md` and the
+  繁體中文 and 简体中文 catalogues in `crates/zeatend/src/i18n/`. A change to `README.md` changes
+  the two translations in the same pull request.
