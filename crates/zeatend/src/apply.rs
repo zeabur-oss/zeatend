@@ -1,5 +1,5 @@
-//! `plan` and `apply` on the first server of a K3s or RKE2 cluster. Each step checks what is
-//! already there, so `apply` runs again safely.
+//! `plan` and `apply` on the first server of a cluster: K3s, RKE2 or `KubeSolo`. Each step checks
+//! what is already there, so `apply` runs again safely.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,24 +43,17 @@ pub(crate) fn restarted(state_dir: &str) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// The K3s or RKE2 of a plan; a `KubeSolo` plan is an error.
-const fn cluster(plan: &Plan) -> Result<&ClusterPlan, InstallError> {
-    match &plan.release {
-        Release::Cluster(cluster) => Ok(cluster),
-        Release::KubeSolo(_) => Err(InstallError::NotRancher),
+/// The admin `kubectl` of a first server.
+pub(crate) fn admin_kubectl(distribution: Distribution) -> Kubectl {
+    if distribution.rancher().is_some() {
+        Kubectl::admin(distribution)
+    } else {
+        crate::kubesolo::kubectl()
     }
 }
 
-fn rancher(config: &Config) -> Result<Rancher, InstallError> {
-    config
-        .distribution
-        .rancher()
-        .ok_or(InstallError::NotRancher)
-}
-
 pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
-    let rancher = rancher(config)?;
-    let plan = make_plan(config, rancher).await?;
+    let plan = install_plan(config).await?;
     if json {
         return crate::print_json(&plan);
     }
@@ -77,14 +70,13 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
     Ok(())
 }
 
-/// Installs K3s or RKE2. With `reviewed`, the preconditions of a reviewed plan, it stops unless
-/// the plan made now still meets them.
+/// Installs the first node: K3s, RKE2 or `KubeSolo`. With `reviewed`, the preconditions of a
+/// reviewed plan, it stops unless the plan made now still meets them.
 pub(crate) async fn run(
     config: &Config,
     reviewed: Option<&Preconditions>,
 ) -> Result<(), InstallError> {
-    let rancher = rancher(config)?;
-    let plan = make_plan(config, rancher).await?;
+    let plan = install_plan(config).await?;
     output::line(render::plan(&plan).trim_end());
     check_reviewed(reviewed, &plan.preconditions)?;
     check_host(
@@ -93,11 +85,23 @@ pub(crate) async fn run(
         config.host.require_encrypted_disk,
     )
     .await?;
+    match &plan.release {
+        Release::Cluster(cluster) => run_cluster(config, &plan, cluster).await,
+        Release::KubeSolo(solo) => crate::kubesolo::run(config, &plan, solo).await,
+    }
+}
 
+/// Installs the first server of K3s or RKE2 and waits until it is ready.
+async fn run_cluster(
+    config: &Config,
+    plan: &Plan,
+    cluster: &ClusterPlan,
+) -> Result<(), InstallError> {
+    let rancher = cluster.distribution;
     let layout = config.distribution.layout();
     let kubectl = Kubectl::admin(config.distribution);
     let install = ClusterInstall {
-        cluster: cluster(&plan)?,
+        cluster,
         files: &plan.host_files,
         server: true,
         changed: false,
@@ -190,30 +194,40 @@ pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> 
     Kubernetes::parse(&version.git_version)
 }
 
-/// The plan, with the install record and the running Kubernetes version read from the host.
-async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
+/// The plan of the first node, K3s, RKE2 or `KubeSolo`, with the install record and the running
+/// Kubernetes version read from the host.
+pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
     let layout = config.distribution.layout();
     let mut facts = facts::read().await?;
-    facts.record = crate::installer::read_record(rancher.into()).await?;
+    facts.record = crate::installer::read_record(config.distribution).await?;
     if facts.record.is_some() {
-        facts.kubernetes = running_kubernetes(&Kubectl::admin(rancher.distribution())).await;
+        facts.kubernetes = running_kubernetes(&admin_kubectl(config.distribution)).await;
     }
     let mut plan = plan::plan(config, &facts)?;
-    if plan.changes.is_some() {
-        let mut pending = pending(&ClusterInstall {
-            cluster: cluster(&plan)?,
-            files: &plan.host_files,
-            server: true,
-            changed: false,
-        })
-        .await?;
-        if let Some(changes) = &mut plan.changes {
-            // A new release is shown as such, not as its binary.
-            if changes.version.is_some() {
-                pending.retain(|path| path != layout.binary);
+    if let Some(changes) = &plan.changes {
+        let (pending, outdated) = match &plan.release {
+            Release::Cluster(cluster) => {
+                let mut pending = pending(&ClusterInstall {
+                    cluster,
+                    files: &plan.host_files,
+                    server: true,
+                    changed: false,
+                })
+                .await?;
+                // A new release is shown as such, not as its binary.
+                if changes.version.is_some() {
+                    pending.retain(|path| path != layout.binary);
+                }
+                (pending, false)
             }
+            Release::KubeSolo(solo) => (
+                changed_files(plan.host_files.iter()),
+                binary_outdated(Path::new(layout.binary), &solo.version).await,
+            ),
+        };
+        if let Some(changes) = &mut plan.changes {
             changes.set_host_files(pending);
-            changes.restart |= restart_owed(layout.state_dir);
+            changes.restart |= outdated || restart_owed(layout.state_dir);
         }
     }
     plan.preconditions = preconditions(
@@ -223,15 +237,10 @@ async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallErr
         &Record::new(plan.distribution, plan.release.version()),
     )
     .await?;
-    Ok(plan)
-}
-
-/// The plan of the first node, K3s, RKE2 or `KubeSolo`, as `plan` shows it.
-pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
-    match config.distribution.rancher() {
-        Some(rancher) => make_plan(config, rancher).await,
-        None => crate::kubesolo::make_plan(config).await,
+    if let Release::KubeSolo(_) = plan.release {
+        crate::kubesolo::add_kubeconfig(&mut plan)?;
     }
+    Ok(plan)
 }
 
 /// What a plan that writes `files`, installs the release over `binary` and writes `record` finds
@@ -392,6 +401,11 @@ pub(crate) async fn show_checks(
     checks.iter().any(|c| c.status == Status::Fail)
 }
 
+/// Whether the binary at `path` is missing or reports another release than `version`.
+pub(crate) async fn binary_outdated(path: &Path, version: &str) -> bool {
+    installed_release(path).await.as_deref() != Some(version)
+}
+
 /// The release tag that the binary at `path` reports, such as `v1.36.5+k3s1`; `None` when it is
 /// missing or reports none.
 pub(crate) async fn installed_release(path: &Path) -> Option<String> {
@@ -413,15 +427,8 @@ async fn release_pending(cluster: &ClusterPlan, unit: &str) -> Option<String> {
     }
 }
 
-/// Installs the release when another version or no unit is there.
-async fn install_release(
-    cluster: &ClusterPlan,
-    server: bool,
-    unit: &str,
-) -> Result<(), InstallError> {
-    if release_pending(cluster, unit).await.is_none() {
-        return Ok(());
-    }
+/// Installs the release: the binary and, for K3s, the unit `install.sh` writes.
+async fn install_release(cluster: &ClusterPlan, server: bool) -> Result<(), InstallError> {
     let distribution = cluster.distribution;
     let layout = distribution.distribution().layout();
     let binary = Path::new(layout.binary);
@@ -493,58 +500,95 @@ async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallErr
 pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool, InstallError> {
     let cluster = install.cluster;
     let distribution = cluster.distribution;
-    let layout = distribution.distribution().layout();
     let unit = install.unit();
     output::step(&format!(
         "{} {} ({unit})",
         distribution.distribution().title(),
         cluster.version
     ));
-    let changed =
-        install.changed || restart_owed(layout.state_dir) || !pending(install).await?.is_empty();
-    if changed {
-        owe_restart(layout.state_dir)?;
-    }
-    for file in install.files {
-        files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
-    }
-    if changed {
-        // A unit drop-in, such as the one with `GOMEMLIMIT`, takes effect after a reload.
-        systemd::daemon_reload().await?;
-    }
-    cmd::run(
-        "sysctl",
-        &[
-            "--quiet",
-            &format!("--load={}", distribution.paths().sysctl_file),
-        ],
-        None,
-    )
-    .await?;
-    load_apparmor_profile(install.files.iter()).await?;
-    match distribution {
-        Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
-            let (program, args) = ETCD_USER;
-            cmd::run(program, args, None).await?;
-        }
-        Rancher::K3s if install.server => {
-            files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
-        }
-        Rancher::K3s | Rancher::Rke2 => {}
-    }
-    install_release(cluster, install.server, unit).await?;
+    let release = release_pending(cluster, unit).await.is_some();
+    let converge = Converge {
+        unit,
+        state_dir: distribution.distribution().layout().state_dir,
+        files: install.files,
+        changed: install.changed || release,
+    };
+    converge
+        .run(async || {
+            cmd::run(
+                "sysctl",
+                &[
+                    "--quiet",
+                    &format!("--load={}", distribution.paths().sysctl_file),
+                ],
+                None,
+            )
+            .await?;
+            match distribution {
+                Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
+                    let (program, args) = ETCD_USER;
+                    cmd::run(program, args, None).await?;
+                }
+                Rancher::K3s if install.server => {
+                    files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
+                }
+                Rancher::K3s | Rancher::Rke2 => {}
+            }
+            if release {
+                install_release(cluster, install.server).await?;
+            }
+            Ok(())
+        })
+        .await
+}
 
-    if !systemd::is_active(unit).await {
-        output::note(&(i18n::messages().starting_unit)(unit));
-        systemd::enable_now(unit).await?;
-    } else if changed {
-        output::note(&(i18n::messages().restarting_unit)(unit));
-        systemd::restart(unit).await?;
-    } else {
-        return Ok(false);
+/// What [`Converge::run`] writes and starts.
+pub(crate) struct Converge<'a> {
+    pub(crate) unit: &'static str,
+    /// Where it records that a restart is owed.
+    pub(crate) state_dir: &'static str,
+    pub(crate) files: &'a [HostFile],
+    /// The release or something the caller wrote already needs a restart.
+    pub(crate) changed: bool,
+}
+
+impl Converge<'_> {
+    /// Writes the files, runs `install`, the distribution's own steps and its release, then starts
+    /// the unit, or restarts it when something changed. Returns whether it started or restarted
+    /// the unit.
+    pub(crate) async fn run(
+        &self,
+        install: impl AsyncFnOnce() -> Result<(), InstallError>,
+    ) -> Result<bool, InstallError> {
+        let changed = self.changed
+            || restart_owed(self.state_dir)
+            || !changed_files(self.files.iter()).is_empty();
+        if changed {
+            owe_restart(self.state_dir)?;
+        }
+        for file in self.files {
+            files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
+        }
+        if changed {
+            // A unit or a drop-in, such as the one with `GOMEMLIMIT`, takes effect after a reload.
+            systemd::daemon_reload().await?;
+        }
+        load_apparmor_profile(self.files.iter()).await?;
+        install().await?;
+
+        let unit = self.unit;
+        if !systemd::is_active(unit).await {
+            output::note(&(i18n::messages().starting_unit)(unit));
+            systemd::enable_now(unit).await?;
+        } else if changed {
+            output::note(&(i18n::messages().restarting_unit)(unit));
+            systemd::restart(unit).await?;
+        } else {
+            return Ok(false);
+        }
+        restarted(self.state_dir)?;
+        Ok(true)
     }
-    restarted(layout.state_dir)?;
-    Ok(true)
 }
 
 /// Loads the `AppArmor` profile among `files`, so containerd finds it loaded and keeps it.
@@ -592,6 +636,12 @@ mod tests {
     use zeatend_plan::precondition::Stale;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_missing_binary_is_outdated() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(binary_outdated(&dir.path().join("kubesolo"), "v1.0.0").await);
+    }
 
     #[test]
     fn the_record_is_the_one_that_last_applied() {
