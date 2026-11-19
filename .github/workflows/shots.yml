@@ -1,0 +1,58 @@
+name: Screenshots
+
+# Draws the pictures of the screens in docs/screens again for each release: when zeabur-oss-bot
+# pushes release/next, the release pull request's branch, this runs next to its CI and commits the
+# pictures that changed onto release/next, so the release carries them (CONTRIBUTING.md). It
+# pushes as the organization's GitHub App (`ZEABUR_OSS_BOT_CLIENT_ID`,
+# `ZEABUR_OSS_BOT_PRIVATE_KEY`), because a push made with GITHUB_TOKEN does not start CI again.
+
+on:
+  push:
+    branches: [release/next]
+    # Its own commit changes only docs; that needs no second run.
+    paths-ignore: [docs/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  shots:
+    if: github.ref == 'refs/heads/release/next'
+    runs-on: instabox-medium
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: DeterminateSystems/determinate-nix-action@16f94ba7aae399b9f9077c254b6719ec6de7e3e3 # v3.24.2
+      # No build cache: a cache restored into a run that pushes to the release branch could poison it.
+      - run: nix develop --command cargo nextest run -p zeatend --locked --run-ignored only draw_the_pictures_in_docs
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: ${{ vars.ZEABUR_OSS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.ZEABUR_OSS_BOT_PRIVATE_KEY }}
+          permission-contents: write
+      # The commit's author must match its sign-off (the DCO check). A plain push fails when
+      # release/next moved meanwhile; the next run draws the pictures again.
+      - env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APP_SLUG: ${{ steps.app.outputs.app-slug }}
+        run: |
+          git add docs/screens
+          if git diff --cached --quiet; then
+            echo "No picture changed."
+            exit 0
+          fi
+          id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git -c user.name="${APP_SLUG}[bot]" -c user.email="${id}+${APP_SLUG}[bot]@users.noreply.github.com" \
+            commit --quiet --signoff -m "docs: draw the pictures of the screens again"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:refs/heads/release/next
