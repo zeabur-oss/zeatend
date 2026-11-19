@@ -42,14 +42,11 @@ const PASSED_ENV: [&str; 14] = [
 pub(crate) async fn apply(config: &Path) -> Result<(), InstallError> {
     let running = systemd::running_services(&format!("{PREFIX}*.service")).await?;
     let unit = if let Some(unit) = running.into_iter().next() {
-        output::note(&format!("An install runs in {unit}; following it."));
+        output::note(&(crate::i18n::messages().following_unit)(&unit));
         unit
     } else {
         let unit = start(config, None).await?;
-        output::note(&format!(
-            "The install runs in {unit}. If this session ends, run `sudo zeatend apply` to follow \
-             it again."
-        ));
+        output::note(&(crate::i18n::messages().started_unit)(&unit));
         unit
     };
     follow(&unit).await

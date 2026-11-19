@@ -92,13 +92,18 @@ fn install_lines(lang: Lang, done: bool) -> Vec<Event> {
     if done {
         events.extend([
             Event::DownloadEnd,
-            step("Waiting for node edge-1 to be Ready"),
-            step("Done"),
+            step(&(lang.messages().waiting_for_node)("edge-1")),
+            step(lang.messages().done),
             Event::Line {
-                text: "K3s v1.37.2+k3s1 runs on edge-1. See the nodes with:\n  sudo \
-                       /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes \
-                       -o wide"
-                    .to_owned(),
+                text: (lang.messages().ready)(&crate::i18n::Ready {
+                    cluster: "K3s v1.37.2+k3s1",
+                    node: "edge-1",
+                    kubectl: "sudo /usr/local/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml",
+                    kubeconfig: "/etc/rancher/k3s/k3s.yaml",
+                    host: Some("k8s.example.com"),
+                    rewrite: Some(("https://127.0.0.1:6443", "https://k8s.example.com:6443")),
+                    add_nodes: true,
+                }),
             },
             Event::Done,
         ]);
@@ -341,7 +346,19 @@ fn ctrl_c_leaves_a_running_install_and_closes_an_ended_one() {
     assert_eq!(press(&mut app, KeyCode::Enter), Some(Action::Close));
     assert_eq!(
         app.progress.result.first().map(String::as_str),
-        Some("K3s v1.37.2+k3s1 runs on edge-1. See the nodes with:")
+        Some("K3s v1.37.2+k3s1 runs on edge-1.")
     );
     assert_eq!(app.progress.elapsed, 125);
+}
+
+#[test]
+fn a_result_too_long_for_the_box_says_the_terminal_gets_all_of_it() {
+    for lang in Lang::ALL {
+        let app = scenario("done", lang, None);
+        let more = lang.messages().screens.result_more;
+        assert!(screen_text(&app, 80, 24).contains(more), "{lang:?}");
+        let tall = screen_text(&app, 120, 36);
+        assert!(!tall.contains(more), "{tall}");
+        assert!(tall.contains("sudo zeatend node add"), "{tall}");
+    }
 }

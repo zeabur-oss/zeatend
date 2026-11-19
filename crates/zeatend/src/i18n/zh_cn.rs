@@ -4,13 +4,23 @@ use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::record::ZEATEND_VERSION;
 
-use super::{Key, Messages, Screen, Screens, gib, zh_list};
+use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在检查主机",
     apply_stops: "修复失败的项目之前，apply 不会继续运行。",
     host_not_ready: "主机还没准备好，修复失败的项目后再运行一次 apply",
     doctor_needs_root: "用 root 身份运行 doctor（加上 sudo），检查需要读取集群的文件和凭据",
+    no_config_installer,
+    no_config_defaults,
+    following_unit,
+    started_unit,
+    starting_unit,
+    restarting_unit,
+    waiting_for_node,
+    done: DONE,
+    ready,
+    joined,
     status,
     topic,
     finding,
@@ -101,6 +111,7 @@ const SCREENS: Screens = Screens {
     },
     log_title: "日志",
     result_title: "接下来",
+    result_more: "按 Enter 关闭界面后，终端会打印出完整内容。",
 
     language_title: "语言",
     language_hint: "选了马上切换。",
@@ -115,6 +126,75 @@ const SCREENS: Screens = Screens {
                     再运行 sudo zeatend apply --foreground",
     joins: |path| format!("{path} 会让这台主机加入集群，请运行 sudo zeatend apply"),
 };
+
+const DONE: &str = "完成";
+
+fn no_config_installer(config: &str, installer: &str) -> String {
+    format!("找不到配置文件 {config}，改用 zeabur-installer 写在 {installer} 的发行版和主机设置。")
+}
+
+fn no_config_defaults(config: &str) -> String {
+    format!("找不到配置文件 {config}，改用默认值：在这台主机上安装 K3s。")
+}
+
+fn following_unit(unit: &str) -> String {
+    format!("{unit} 已经在安装，接着显示它的进度。")
+}
+
+fn started_unit(unit: &str) -> String {
+    format!("安装在 {unit} 里运行。这个会话结束后，运行 `sudo zeatend apply` 就能再看到进度。")
+}
+
+fn starting_unit(unit: &str) -> String {
+    format!("正在启动 {unit}，第一次启动要几分钟")
+}
+
+fn restarting_unit(unit: &str) -> String {
+    format!("正在重启 {unit}，应用新的配置")
+}
+
+fn waiting_for_node(node: &str) -> String {
+    format!("等待节点 {node} 就绪")
+}
+
+fn ready(r: &Ready<'_>) -> String {
+    let host = r.host.unwrap_or("<服务器地址>");
+    let node = r.node;
+    let sed = r.rewrite.map_or_else(String::new, |(from, to)| {
+        format!("  sed -i.bak 's#{from}#{to}#' ~/.kube/{node}.yaml\n")
+    });
+    let mut text = format!(
+        "{} 已经在 {node} 上运行。\n\n在这台服务器上列出节点：\n  {} get nodes -o wide\n\n\
+         在你自己的电脑上使用这个集群：\n  \
+         ssh <用户名>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         拿到这个文件的人就是集群管理员，要像 SSH 密钥一样保管好。",
+        r.cluster, r.kubectl, r.kubeconfig
+    );
+    if r.rewrite.is_none() {
+        text.push_str(
+            "如果你的电脑要用其他地址连到服务器，改掉文件里的 `server:`，并把这个地址加进 \
+             host.tlsSan。",
+        );
+    }
+    if r.add_nodes {
+        text.push_str(
+            "\n\n要加入节点，在这台服务器上运行 `sudo zeatend node add`，它会打印出新主机要运行的命令。",
+        );
+    }
+    text
+}
+
+fn joined(j: &Joined<'_>) -> String {
+    let role = if j.server {
+        "服务器"
+    } else {
+        "工作节点"
+    };
+    format!(
+        "{} 已经作为{role}加入集群。在服务器上列出节点：\n  {} get nodes -o wide",
+        j.node, j.kubectl
+    )
+}
 
 const fn status(status: Status) -> &'static str {
     match status {

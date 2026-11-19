@@ -4,13 +4,23 @@ use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::record::ZEATEND_VERSION;
 
-use super::{Key, Messages, Screen, Screens, gib, zh_list};
+use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在檢查主機",
     apply_stops: "修好失敗的項目之前，apply 不會繼續執行。",
     host_not_ready: "主機還沒準備好，修好失敗的項目後再執行一次 apply",
     doctor_needs_root: "用 root 身分執行 doctor（加上 sudo），檢查需要讀取叢集的檔案和憑證",
+    no_config_installer,
+    no_config_defaults,
+    following_unit,
+    started_unit,
+    starting_unit,
+    restarting_unit,
+    waiting_for_node,
+    done: DONE,
+    ready,
+    joined,
     status,
     topic,
     finding,
@@ -101,6 +111,7 @@ const SCREENS: Screens = Screens {
     },
     log_title: "紀錄",
     result_title: "接下來",
+    result_more: "按 Enter 關閉畫面後，終端機會印出完整內容。",
 
     language_title: "語言",
     language_hint: "選了馬上切換。",
@@ -115,6 +126,75 @@ const SCREENS: Screens = Screens {
                     再執行 sudo zeatend apply --foreground",
     joins: |path| format!("{path} 會讓這台主機加入叢集，請執行 sudo zeatend apply"),
 };
+
+const DONE: &str = "完成";
+
+fn no_config_installer(config: &str, installer: &str) -> String {
+    format!("找不到設定檔 {config}，改用 zeabur-installer 寫在 {installer} 的發行版和主機設定。")
+}
+
+fn no_config_defaults(config: &str) -> String {
+    format!("找不到設定檔 {config}，改用預設值：在這台主機上安裝 K3s。")
+}
+
+fn following_unit(unit: &str) -> String {
+    format!("{unit} 已經在安裝，接著顯示它的進度。")
+}
+
+fn started_unit(unit: &str) -> String {
+    format!("安裝在 {unit} 裡執行。這個工作階段結束後，執行 `sudo zeatend apply` 就能再看到進度。")
+}
+
+fn starting_unit(unit: &str) -> String {
+    format!("正在啟動 {unit}，第一次啟動要花幾分鐘")
+}
+
+fn restarting_unit(unit: &str) -> String {
+    format!("正在重新啟動 {unit}，套用新的設定")
+}
+
+fn waiting_for_node(node: &str) -> String {
+    format!("等待節點 {node} 就緒")
+}
+
+fn ready(r: &Ready<'_>) -> String {
+    let host = r.host.unwrap_or("<伺服器位址>");
+    let node = r.node;
+    let sed = r.rewrite.map_or_else(String::new, |(from, to)| {
+        format!("  sed -i.bak 's#{from}#{to}#' ~/.kube/{node}.yaml\n")
+    });
+    let mut text = format!(
+        "{} 已經在 {node} 上執行。\n\n在這台伺服器上列出節點：\n  {} get nodes -o wide\n\n\
+         在你自己的電腦上使用這個叢集：\n  \
+         ssh <使用者>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         拿到這個檔案的人就是叢集管理員，要像 SSH 金鑰一樣保管好。",
+        r.cluster, r.kubectl, r.kubeconfig
+    );
+    if r.rewrite.is_none() {
+        text.push_str(
+            "如果你的電腦要用其他位址連到伺服器，改掉檔案裡的 `server:`，並把這個位址加進 \
+             host.tlsSan。",
+        );
+    }
+    if r.add_nodes {
+        text.push_str(
+            "\n\n要加入節點，在這台伺服器上執行 `sudo zeatend node add`，它會印出新主機要執行的指令。",
+        );
+    }
+    text
+}
+
+fn joined(j: &Joined<'_>) -> String {
+    let role = if j.server {
+        "伺服器"
+    } else {
+        "工作節點"
+    };
+    format!(
+        "{} 已經以{role}的身分加入叢集。在伺服器上列出節點：\n  {} get nodes -o wide",
+        j.node, j.kubectl
+    )
+}
 
 const fn status(status: Status) -> &'static str {
     match status {

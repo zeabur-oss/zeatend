@@ -77,6 +77,8 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
     check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
 
     install_kubesolo(&plan).await?;
+    let messages = crate::i18n::messages();
+    output::step(&(messages.waiting_for_node)(&plan.node_name));
     let kubectl = kubectl();
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     kubectl::poll(
@@ -103,22 +105,18 @@ pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
     let name = plan.node_name.clone();
     write_kubeconfig(&name)?;
 
-    output::step("Done");
-    output::line(&done_text(&name, &facts::addresses().await));
+    output::step(messages.done);
+    let host = crate::apply::reachable_host(&config.host.tls_san).await;
+    output::line(&(messages.ready)(&crate::i18n::Ready {
+        cluster: &format!("KubeSolo {}", plan.release.version()),
+        node: &name,
+        kubectl: &format!("sudo {KUBECTL} --kubeconfig {ADMIN_KUBECONFIG}"),
+        kubeconfig: KUBECONFIG,
+        host: host.as_deref(),
+        rewrite: None,
+        add_nodes: false,
+    }));
     Ok(())
-}
-
-/// What to run on the person's own computer.
-fn done_text(name: &str, addresses: &[String]) -> String {
-    let host = addresses.first().map_or("<this server>", String::as_str);
-    format!(
-        "This server runs KubeSolo. On your own computer:\n\
-         \n  ssh <you>@{host} sudo cat {KUBECONFIG} > ~/.kube/{name}.yaml\n  \
-         KUBECONFIG=~/.kube/{name}.yaml kubectl get nodes\n\n\
-         Whoever has this file is cluster admin; keep it like an SSH key. If your computer \
-         reaches the server at another address, change `server:` in the file and add the \
-         address to host.tlsSan."
-    )
 }
 
 async fn wait_available(
@@ -198,12 +196,10 @@ async fn install_kubesolo(plan: &Plan) -> Result<(), InstallError> {
         systemd::daemon_reload().await?;
     }
     if !systemd::is_active(UNIT).await {
-        output::note(&format!(
-            "starting {UNIT}; the first start takes a few minutes"
-        ));
+        output::note(&(crate::i18n::messages().starting_unit)(UNIT));
         systemd::enable_now(UNIT).await?;
     } else if changed {
-        output::note(&format!("restarting {UNIT} for the new configuration"));
+        output::note(&(crate::i18n::messages().restarting_unit)(UNIT));
         systemd::restart(UNIT).await?;
     }
     restarted(STATE_DIR)?;
@@ -236,17 +232,6 @@ fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn done_text_names_the_address_and_the_kubeconfig() {
-        let text = done_text("solo", &["203.0.113.7".to_owned()]);
-        assert!(
-            text.contains(&format!("ssh <you>@203.0.113.7 sudo cat {KUBECONFIG}")),
-            "{text}"
-        );
-        assert!(text.contains("~/.kube/solo.yaml"), "{text}");
-        assert!(done_text("solo", &[]).contains("<this server>"));
-    }
 
     #[tokio::test]
     async fn a_missing_binary_is_outdated() {

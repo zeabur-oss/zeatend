@@ -164,6 +164,27 @@ pub(crate) struct Messages {
     pub(crate) host_not_ready: &'static str,
     /// `doctor` without root, which cannot read the cluster's files.
     pub(crate) doctor_needs_root: &'static str,
+    /// `apply` found no configuration file and takes the settings zeabur-installer wrote: the
+    /// path of the configuration and of zeabur-installer's file.
+    pub(crate) no_config_installer: fn(&str, &str) -> String,
+    /// `apply` found no configuration file at the path and installs the defaults.
+    pub(crate) no_config_defaults: fn(&str) -> String,
+    /// `apply` follows the install that already runs in the unit.
+    pub(crate) following_unit: fn(&str) -> String,
+    /// `apply` started the install in the unit.
+    pub(crate) started_unit: fn(&str) -> String,
+    /// The unit of the cluster starts for the first time.
+    pub(crate) starting_unit: fn(&str) -> String,
+    /// The unit of the cluster restarts for a new configuration.
+    pub(crate) restarting_unit: fn(&str) -> String,
+    /// The step that waits until the node is Ready.
+    pub(crate) waiting_for_node: fn(&str) -> String,
+    /// The last step of an install.
+    pub(crate) done: &'static str,
+    /// What to do with a cluster once its server runs.
+    pub(crate) ready: fn(&Ready<'_>) -> String,
+    /// What to do once a node joined a cluster.
+    pub(crate) joined: fn(&Joined<'_>) -> String,
     /// How a check came out, four cells wide.
     pub(crate) status: fn(Status) -> &'static str,
     /// What a check looked at.
@@ -172,6 +193,37 @@ pub(crate) struct Messages {
     pub(crate) finding: fn(&Finding) -> String,
     /// The install screens.
     pub(crate) screens: &'static Screens,
+}
+
+/// A cluster that runs, for [`Messages::ready`].
+#[derive(Debug)]
+pub(crate) struct Ready<'a> {
+    /// The distribution and its version, such as `K3s v1.37.2+k3s1`.
+    pub(crate) cluster: &'a str,
+    /// The node's name.
+    pub(crate) node: &'a str,
+    /// The command that runs kubectl as cluster admin on the server, without its arguments.
+    pub(crate) kubectl: &'a str,
+    /// The kubeconfig the person copies to their own computer.
+    pub(crate) kubeconfig: &'a str,
+    /// The address the person's computer reaches the server at, when one is known.
+    pub(crate) host: Option<&'a str>,
+    /// The `server:` URL in the kubeconfig and the URL to put in its place, when the file names
+    /// the server by an address only the server itself reaches.
+    pub(crate) rewrite: Option<(&'a str, &'a str)>,
+    /// Whether `zeatend node add` adds nodes to the cluster.
+    pub(crate) add_nodes: bool,
+}
+
+/// A node that joined a cluster, for [`Messages::joined`].
+#[derive(Debug)]
+pub(crate) struct Joined<'a> {
+    /// The node's name.
+    pub(crate) node: &'a str,
+    /// Whether the node is a server, not a worker.
+    pub(crate) server: bool,
+    /// The command that runs kubectl as cluster admin on a server, without its arguments.
+    pub(crate) kubectl: &'a str,
 }
 
 /// The words of the install screens.
@@ -279,6 +331,8 @@ pub(crate) struct Screens {
     pub(crate) log_title: &'static str,
     /// The title of the box with what to run next.
     pub(crate) result_title: &'static str,
+    /// Under the result when it does not fit: the screens print all of it when they close.
+    pub(crate) result_more: &'static str,
 
     /// The title of the language picker.
     pub(crate) language_title: &'static str,
@@ -583,6 +637,44 @@ mod tests {
                 let stop = if lang == Lang::En { ". " } else { "。" };
                 assert!(text.contains(stop) && text.ends_with(stop.trim()), "{text}");
             }
+        }
+    }
+
+    #[test]
+    fn the_ready_text_gives_each_command_with_the_address_of_the_server() {
+        let k3s = Ready {
+            cluster: "K3s v1.37.2+k3s1",
+            node: "edge-1",
+            kubectl: "sudo kubectl --kubeconfig /k3s.yaml",
+            kubeconfig: "/k3s.yaml",
+            host: Some("203.0.113.7"),
+            rewrite: Some(("https://127.0.0.1:6443", "https://203.0.113.7:6443")),
+            add_nodes: true,
+        };
+        let solo = Ready {
+            host: None,
+            rewrite: None,
+            add_nodes: false,
+            ..k3s
+        };
+        for lang in Lang::ALL {
+            let ready = lang.messages().ready;
+            let text = ready(&k3s);
+            for command in [
+                "\n  sudo kubectl --kubeconfig /k3s.yaml get nodes -o wide\n",
+                "@203.0.113.7 sudo cat /k3s.yaml > ~/.kube/edge-1.yaml\n  sed -i.bak \
+                 's#https://127.0.0.1:6443#https://203.0.113.7:6443#' ~/.kube/edge-1.yaml\n  \
+                 KUBECONFIG=~/.kube/edge-1.yaml kubectl get nodes\n",
+                "`sudo zeatend node add`",
+            ] {
+                assert!(text.contains(command), "{text}");
+            }
+            let text = ready(&solo);
+            assert!(text.contains("host.tlsSan"), "{text}");
+            assert!(
+                !text.contains("sed ") && !text.contains("node add"),
+                "{text}"
+            );
         }
     }
 }

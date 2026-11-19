@@ -201,15 +201,12 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     if !matches!(*command, Command::Plan { json: true }) {
         match source {
             load::Source::File => {}
-            load::Source::Installer => output::note(&format!(
-                "No configuration at {}; using the distribution and host settings of {}, which \
-                 zeabur-installer wrote.",
-                config.display(),
-                zeatend_plan::installer::CONFIG_FILE
+            load::Source::Installer => output::note(&(i18n::messages().no_config_installer)(
+                &config.display().to_string(),
+                zeatend_plan::installer::CONFIG_FILE,
             )),
-            load::Source::Defaults => output::note(&format!(
-                "No configuration at {}; using the defaults: K3s on this host.",
-                config.display()
+            load::Source::Defaults => output::note(&(i18n::messages().no_config_defaults)(
+                &config.display().to_string(),
             )),
         }
     }

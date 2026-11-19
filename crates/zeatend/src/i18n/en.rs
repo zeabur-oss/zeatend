@@ -4,7 +4,7 @@ use zeatend_host::preflight::{Finding, Status, Topic};
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::record::ZEATEND_VERSION;
 
-use super::{Key, Messages, Screen, Screens, gib};
+use super::{Joined, Key, Messages, Ready, Screen, Screens, gib};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "Checking the host",
@@ -12,6 +12,16 @@ pub(super) const MESSAGES: Messages = Messages {
     host_not_ready: "the host is not ready; fix what failed and run apply again",
     doctor_needs_root: "run doctor as root (sudo): the checks read the cluster's files and \
                         credentials",
+    no_config_installer,
+    no_config_defaults,
+    following_unit,
+    started_unit,
+    starting_unit,
+    restarting_unit,
+    waiting_for_node,
+    done: DONE,
+    ready,
+    joined,
     status,
     topic,
     finding,
@@ -114,6 +124,7 @@ const SCREENS: Screens = Screens {
     },
     log_title: "Log",
     result_title: "Next",
+    result_more: "Enter closes the screens and prints all of it in the terminal.",
 
     language_title: "Language",
     language_hint: "Changes right away.",
@@ -128,6 +139,78 @@ const SCREENS: Screens = Screens {
                     /etc/zeatend/config.yaml and run sudo zeatend apply --foreground",
     joins: |path| format!("{path} joins this host to a cluster. Run sudo zeatend apply"),
 };
+
+const DONE: &str = "Done";
+
+fn no_config_installer(config: &str, installer: &str) -> String {
+    format!(
+        "No configuration at {config}; using the distribution and host settings of {installer}, \
+         which zeabur-installer wrote."
+    )
+}
+
+fn no_config_defaults(config: &str) -> String {
+    format!("No configuration at {config}; using the defaults: K3s on this host.")
+}
+
+fn following_unit(unit: &str) -> String {
+    format!("An install runs in {unit}; following it.")
+}
+
+fn started_unit(unit: &str) -> String {
+    format!(
+        "The install runs in {unit}. If this session ends, run `sudo zeatend apply` to follow it \
+         again."
+    )
+}
+
+fn starting_unit(unit: &str) -> String {
+    format!("starting {unit}; the first start takes a few minutes")
+}
+
+fn restarting_unit(unit: &str) -> String {
+    format!("restarting {unit} for the new configuration")
+}
+
+fn waiting_for_node(node: &str) -> String {
+    format!("Waiting for node {node} to be Ready")
+}
+
+fn ready(r: &Ready<'_>) -> String {
+    let host = r.host.unwrap_or("<this server>");
+    let node = r.node;
+    let sed = r.rewrite.map_or_else(String::new, |(from, to)| {
+        format!("  sed -i.bak 's#{from}#{to}#' ~/.kube/{node}.yaml\n")
+    });
+    let mut text = format!(
+        "{} runs on {node}.\n\nList the nodes on this server:\n  {} get nodes -o wide\n\n\
+         Use the cluster from your own computer:\n  \
+         ssh <you>@{host} sudo cat {} > ~/.kube/{node}.yaml\n{sed}  KUBECONFIG=~/.kube/{node}.yaml kubectl get nodes\n\n\
+         Whoever has this file is cluster admin; keep it like an SSH key.",
+        r.cluster, r.kubectl, r.kubeconfig
+    );
+    if r.rewrite.is_none() {
+        text.push_str(
+            " If your computer reaches the server at another address, change `server:` in the \
+             file and add the address to host.tlsSan.",
+        );
+    }
+    if r.add_nodes {
+        text.push_str(
+            "\n\nTo add a node, run `sudo zeatend node add` on this server. It prints the \
+             commands to run on the new host.",
+        );
+    }
+    text
+}
+
+fn joined(j: &Joined<'_>) -> String {
+    let role = if j.server { "server" } else { "worker" };
+    format!(
+        "{} joined the cluster as a {role}. List the nodes on a server:\n  {} get nodes -o wide",
+        j.node, j.kubectl
+    )
+}
 
 const fn status(status: Status) -> &'static str {
     match status {
