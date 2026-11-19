@@ -9,6 +9,13 @@ rust-version = "1.99"
 license = "Apache-2.0"
 publish = false
 
+[workspace.metadata.levels]
+# A crate depends (normal and build dependencies) only on workspace crates of a lower level,
+# checked by zeabur-oss-levels.
+zeatend-plan = 0
+zeatend-host = 1
+zeatend = 2
+
 [workspace.dependencies]
 zeatend-host = { path = "crates/zeatend-host" }
 zeatend-plan = { path = "crates/zeatend-plan" }

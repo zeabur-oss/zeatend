@@ -43,13 +43,8 @@ jobs:
         run: |
           crate=$(cargo metadata --locked --no-deps --format-version 1 |
             jq -r '.packages[] | select(.name == "zeatend") | .version')
-          [[ "$VERSION" == "v$crate" ]] ||
-            { echo "::error::$VERSION is not v$crate, the crate's version"; exit 1; }
-          bun x zeabur-oss-release notes CHANGELOG.md "$VERSION" >/dev/null
-          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            git merge-base --is-ancestor HEAD origin/main ||
-              { echo "::error::$VERSION is not on main"; exit 1; }
-          fi
+          bun x zeabur-oss-release check-tag "$VERSION" --changelog CHANGELOG.md --version "$crate" \
+            ${{ github.event_name != 'push' && '--rehearsal' || '' }}
 
   build:
     name: build (${{ matrix.arch }})
@@ -97,22 +92,14 @@ jobs:
           pattern: zeatend-*
           path: assets
           merge-multiple: true
-      - name: Sign the checksums
+      - name: Stop if the release is published
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view "$VERSION" --json isDraft --jq '.isDraft' | grep -qx false; then
-            echo "::error::release $VERSION is already published"; exit 1
-          fi
-          bun x zeabur-oss-release checksums assets
-      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        run: bun x zeabur-oss-release unpublished "$VERSION"
+      - uses: zeabur-oss/.github/actions/release-draft@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
         with:
-          subject-checksums: assets/SHA256SUMS
-      # The draft is created with its files, never before: a published release takes no more files.
-      - name: Create the draft release with the assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: bun x zeabur-oss-release draft CHANGELOG.md "$VERSION" assets --name "Zeabur Zeatend"
+          version: ${{ env.VERSION }}
+          name: Zeabur Zeatend
 
   verify:
     name: verify (${{ matrix.arch }})
@@ -130,20 +117,11 @@ jobs:
       contents: write
       attestations: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: zeabur-oss/.github/actions/release-verify@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
         with:
-          persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
-      - name: Install the packages
-        run: bun install --frozen-lockfile
-      - name: Download the draft's assets and run zeatend as a user gets it
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_SOURCE_REPOSITORY: ${{ github.repository }}
-          RELEASE_SOURCE_REF: refs/tags/${{ env.VERSION }}
+          version: ${{ env.VERSION }}
+      - name: Run zeatend as a user gets it
         run: |
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir downloaded
-          bun x zeabur-oss-release verify-assets downloaded
           mkdir unpacked
           tar -xzf "downloaded/zeatend-$VERSION-linux-${{ matrix.arch }}.tar.gz" -C unpacked
           # Outside the dev shell: the archive must run on a plain host.
