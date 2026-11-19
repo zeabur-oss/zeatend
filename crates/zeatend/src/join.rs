@@ -10,6 +10,7 @@ use zeatend_plan::cluster::Rancher;
 use zeatend_plan::config::{self, JoinConfig, Role};
 use zeatend_plan::finding::Status;
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
+use zeatend_plan::precondition::Preconditions;
 use zeatend_plan::record::Record;
 
 use crate::apply::{self, ClusterInstall};
@@ -66,7 +67,16 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
 async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallError> {
     let token = token(config)?;
     let facts = read_facts(config, &token).await?;
-    Ok((join::plan(config, &facts)?, token))
+    let mut plan = join::plan(config, &facts)?;
+    let distribution = plan.cluster.distribution;
+    plan.preconditions = apply::preconditions(
+        &plan.host_files,
+        &apply::release_binary(distribution),
+        plan.facts.record.as_ref(),
+        &Record::new(distribution.into(), &plan.cluster.version),
+    )
+    .await?;
+    Ok((plan, token))
 }
 
 /// What the plan installs, for the preflight checks.
@@ -95,9 +105,15 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
     Ok(())
 }
 
-pub(crate) async fn apply(config: &JoinConfig) -> Result<(), InstallError> {
+/// Joins this node. With `reviewed`, the preconditions of a reviewed plan, it stops unless the
+/// plan made now still meets them.
+pub(crate) async fn apply(
+    config: &JoinConfig,
+    reviewed: Option<&Preconditions>,
+) -> Result<(), InstallError> {
     let (plan, token) = make_plan(config).await?;
     output::line(render::join_plan(&plan).trim_end());
+    apply::check_reviewed(reviewed, &plan.preconditions)?;
     if let Some(blocker) = plan.findings.iter().find(|c| c.status == Status::Fail) {
         return Err(InstallError::Blocked(blocker.finding.clone()));
     }

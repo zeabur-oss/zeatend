@@ -16,8 +16,8 @@ use crate::unit;
 /// What the event loop does after a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
-    /// Write this configuration and start the install.
-    Install(Box<Config>),
+    /// Write this configuration and start the install of the plan the Review screen showed.
+    Install(Box<Config>, Review),
     /// Close the screens before the install starts.
     Quit,
     /// Close the screens while the install goes on.
@@ -110,6 +110,16 @@ pub(crate) struct Review {
     pub(crate) release: String,
     /// The node's name.
     pub(crate) node_name: String,
+}
+
+impl Review {
+    /// What the Review screen shows of `plan`, made from `config`.
+    pub(crate) fn of(config: &Config, plan: &plan::Plan) -> Self {
+        Self {
+            release: format!("{} {}", config.distribution.title(), plan.release.version()),
+            node_name: plan.node_name.clone(),
+        }
+    }
 }
 
 /// The choices of the first three screens.
@@ -242,10 +252,7 @@ impl Choices {
         let config = self.config();
         config.check().map_err(|e| e.to_string())?;
         let plan = plan::plan(&config, &self.host.facts).map_err(|e| e.to_string())?;
-        Ok(Review {
-            release: format!("{} {}", config.distribution.title(), plan.release.version()),
-            node_name: plan.node_name,
-        })
+        Ok(Review::of(&config, &plan))
     }
 }
 
@@ -527,8 +534,10 @@ impl App {
         let choices = self.choices.as_ref()?;
         match code {
             KeyCode::Esc => self.screen = Screen::Access,
-            KeyCode::Enter if matches!(choices.review, Some(Ok(_))) => {
-                return Some(Action::Install(Box::new(choices.config())));
+            KeyCode::Enter => {
+                if let Some(Ok(review)) = &choices.review {
+                    return Some(Action::Install(Box::new(choices.config()), review.clone()));
+                }
             }
             _ => {}
         }

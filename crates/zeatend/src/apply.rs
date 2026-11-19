@@ -15,6 +15,7 @@ use zeatend_plan::config::{Component, Config};
 use zeatend_plan::finding::Status;
 use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
+use zeatend_plan::precondition::{Change, Preconditions, RecordState};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
 use zeatend_plan::upgrade::{Kubernetes, release_tag};
@@ -77,10 +78,16 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
     Ok(())
 }
 
-pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
+/// Installs K3s or RKE2. With `reviewed`, the preconditions of a reviewed plan, it stops unless
+/// the plan made now still meets them.
+pub(crate) async fn run(
+    config: &Config,
+    reviewed: Option<&Preconditions>,
+) -> Result<(), InstallError> {
     let rancher = rancher(config)?;
     let plan = make_plan(config, rancher).await?;
     output::line(render::plan(&plan).trim_end());
+    check_reviewed(reviewed, &plan.preconditions)?;
     check_host(
         preflight::Node::Server(rancher),
         config.host.require_encrypted_disk,
@@ -219,7 +226,105 @@ async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallErr
             changes.restart |= restart_owed(STATE_DIR);
         }
     }
+    plan.preconditions = preconditions(
+        &plan.host_files,
+        &release_binary(rancher),
+        plan.facts.record.as_ref(),
+        &Record::new(plan.distribution, plan.release.version()),
+    )
+    .await?;
     Ok(plan)
+}
+
+/// The plan of the first node, K3s, RKE2 or `KubeSolo`, as `plan` shows it.
+pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
+    match config.distribution.rancher() {
+        Some(rancher) => make_plan(config, rancher).await,
+        None => crate::kubesolo::make_plan(config).await,
+    }
+}
+
+/// What a plan that writes `files`, installs the release over `binary` and writes `record` finds
+/// on the host now and leaves there.
+pub(crate) async fn preconditions(
+    files: &[HostFile],
+    binary: &Path,
+    found_record: Option<&Record>,
+    record: &Record,
+) -> Result<Preconditions, InstallError> {
+    let mut found = std::collections::BTreeMap::new();
+    for file in files {
+        let change = Change {
+            found: file_sha256(Path::new(&file.path))?,
+            leaves: Some(download::sha256(file.content.as_bytes())),
+        };
+        found.insert(file.path.clone(), change);
+    }
+    Ok(Preconditions {
+        files: found,
+        release: Change {
+            found: installed_release(binary).await,
+            leaves: record.version.clone(),
+        },
+        record: Change {
+            found: found_record.map(RecordState::from),
+            leaves: Some(record.into()),
+        },
+        generated: std::collections::BTreeMap::new(),
+    })
+}
+
+/// The SHA-256 of the file at `path`; `None` when it is missing.
+pub(crate) fn file_sha256(path: &Path) -> Result<Option<String>, InstallError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(download::sha256(&bytes))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(HostError::Io {
+            path: path.to_owned(),
+            source,
+        }
+        .into()),
+    }
+}
+
+/// The part of a plan file that `apply --plan` reads.
+#[derive(serde::Deserialize)]
+struct Reviewed {
+    preconditions: Preconditions,
+}
+
+/// The preconditions in a file that `plan --json` printed.
+///
+/// # Errors
+///
+/// When the file cannot be read or is not such a plan.
+pub(crate) fn read_reviewed(path: &Path) -> Result<Preconditions, InstallError> {
+    let text = fs::read(path).map_err(InstallError::io(path))?;
+    parse_reviewed(path, &text)
+}
+
+/// The preconditions in `text`, the content of the plan file at `path`.
+///
+/// # Errors
+///
+/// When it is not a plan that `plan --json` printed.
+pub(crate) fn parse_reviewed(path: &Path, text: &[u8]) -> Result<Preconditions, InstallError> {
+    serde_json::from_slice::<Reviewed>(text)
+        .map(|reviewed| reviewed.preconditions)
+        .map_err(|e| InstallError::NotPlan {
+            path: path.to_owned(),
+            reason: e.to_string(),
+        })
+}
+
+/// Stops when `reviewed` is given and `now`, from the plan made now, does not meet it.
+pub(crate) fn check_reviewed(
+    reviewed: Option<&Preconditions>,
+    now: &Preconditions,
+) -> Result<(), InstallError> {
+    reviewed.map_or(Ok(()), |reviewed| {
+        reviewed.check(now).map_err(InstallError::Stale)
+    })
 }
 
 /// The install record in `state_dir`, when there is one.
@@ -494,6 +599,8 @@ async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallE
 
 #[cfg(test)]
 mod tests {
+    use zeatend_plan::precondition::Stale;
+
     use super::*;
 
     #[test]
@@ -520,6 +627,56 @@ mod tests {
         restarted(state).unwrap();
         assert!(!restart_owed(state));
         restarted(state).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_reviewed_plan_applies_until_a_file_it_writes_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.yaml");
+        fs::write(&path, "old").unwrap();
+        let files = [HostFile {
+            path: path.display().to_string(),
+            mode: 0o600,
+            content: "new".to_owned(),
+        }];
+        let binary = dir.path().join("k3s");
+        let record = Record::new(Rancher::K3s.into(), "v1.37.2+k3s1");
+        let facts = plan::Facts {
+            arch: "amd64".to_owned(),
+            hostname: "vps-1".to_owned(),
+            node_name: None,
+            host_hex: "a1b2c3".to_owned(),
+            memory_mib: 8192,
+            node_ips: Vec::new(),
+            record: None,
+            kubernetes: None,
+            apparmor_restricts_unconfined: false,
+            k3s_own_network: false,
+            installer_webhook: false,
+        };
+        let mut plan = plan::plan(&Config::parse("{}").unwrap(), &facts).unwrap();
+        plan.preconditions = preconditions(&files, &binary, None, &record).await.unwrap();
+        let plan_file = dir.path().join("plan.json");
+        fs::write(&plan_file, serde_json::to_string_pretty(&plan).unwrap()).unwrap();
+        let reviewed = read_reviewed(&plan_file).unwrap();
+        assert_eq!(reviewed, plan.preconditions);
+
+        let now = preconditions(&files, &binary, None, &record).await.unwrap();
+        check_reviewed(Some(&reviewed), &now).unwrap();
+
+        fs::write(&path, "edited").unwrap();
+        let now = preconditions(&files, &binary, None, &record).await.unwrap();
+        assert!(matches!(
+            check_reviewed(Some(&reviewed), &now),
+            Err(InstallError::Stale(Stale::File(changed))) if changed == files[0].path
+        ));
+        check_reviewed(None, &now).unwrap();
+
+        fs::write(&plan_file, "{}").unwrap();
+        assert!(matches!(
+            read_reviewed(&plan_file),
+            Err(InstallError::NotPlan { .. })
+        ));
     }
 
     #[test]

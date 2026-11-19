@@ -10,6 +10,7 @@ pub mod kubesolo;
 pub mod node_name;
 pub mod pins;
 pub mod plan;
+pub mod precondition;
 pub mod record;
 pub mod rke2;
 pub mod tuning;

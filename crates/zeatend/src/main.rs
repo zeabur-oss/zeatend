@@ -25,6 +25,7 @@ use zeatend_host::progress::Event;
 use zeatend_plan::PlanError;
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::Finding;
+use zeatend_plan::precondition::Stale;
 
 /// Install K3s, RKE2 or `KubeSolo` on this Linux host, hardened to the CIS benchmark, from one
 /// configuration file. A file with a `join` section joins this host to an existing K3s or RKE2
@@ -44,7 +45,7 @@ struct Cli {
 enum Command {
     /// Show what `apply` would install and run its host checks, without changing anything.
     Plan {
-        /// Print the plan as JSON, without the host checks.
+        /// Print the plan as JSON, without the host checks. `apply --plan` takes this output.
         #[arg(long)]
         json: bool,
     },
@@ -60,6 +61,11 @@ enum Command {
         /// Print the progress as JSON lines on stdout.
         #[arg(long)]
         json: bool,
+        /// Apply the plan in this file, which `plan --json` printed. Nothing changes when the host
+        /// or the configuration changed since then: a file the plan writes, the installed release
+        /// or the install record.
+        #[arg(long, value_name = "FILE")]
+        plan: Option<PathBuf>,
     },
     /// Remove K3s, RKE2 or KubeSolo and zeatend's files from this host. Volumes stay. Safe to run
     /// again.
@@ -174,6 +180,20 @@ enum InstallError {
     /// A file that is not an install record.
     #[error("{}: not an install record", .0.display())]
     NotRecord(PathBuf),
+    /// A file that is not a plan from `plan --json`.
+    #[error("{}", (i18n::messages().not_plan)(&.path.display().to_string(), .reason))]
+    NotPlan {
+        /// The file.
+        path: PathBuf,
+        /// Why it is not one.
+        reason: String,
+    },
+    /// The reviewed plan no longer holds.
+    #[error("{}", (i18n::messages().stale)(.0))]
+    Stale(Stale),
+    /// The plan made when the install starts is not the one the Review screen showed.
+    #[error("{}", .0.messages().screens.review_changed)]
+    ReviewChanged(i18n::Lang),
     /// Data that could not be written as JSON or YAML.
     #[error("{what}: {reason}")]
     Serialize {
@@ -358,12 +378,25 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
         .await;
     }
     if let Command::Apply {
-        foreground: false, ..
-    } = *command
+        foreground: false,
+        plan,
+        ..
+    } = command
         && zeatend_host::systemd::booted()
     {
-        return unit::apply(config).await;
+        return unit::apply(config, plan.as_deref()).await;
     }
+    let reviewed = match command {
+        Command::Apply {
+            plan: Some(path), ..
+        } => Some(apply::read_reviewed(path)?),
+        Command::Apply { plan: None, .. }
+        | Command::Plan { .. }
+        | Command::Uninstall { .. }
+        | Command::Doctor
+        | Command::Node { .. } => None,
+    };
+    let reviewed = reviewed.as_ref();
     let (document, source) = load::document_or_defaults(config)?;
     if !matches!(*command, Command::Plan { json: true }) {
         match source {
@@ -379,7 +412,7 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     }
     match (command, document) {
         (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json).await,
-        (Command::Apply { .. }, Document::Join(config)) => join::apply(&config).await,
+        (Command::Apply { .. }, Document::Join(config)) => join::apply(&config, reviewed).await,
         (Command::Plan { json }, Document::Install(config)) => {
             if config.distribution.rancher().is_some() {
                 apply::show_plan(&config, *json).await
@@ -389,9 +422,9 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
         }
         (Command::Apply { .. }, Document::Install(config)) => {
             if config.distribution.rancher().is_some() {
-                apply::run(&config).await
+                apply::run(&config, reviewed).await
             } else {
-                kubesolo::apply(&config).await
+                kubesolo::apply(&config, reviewed).await
             }
         }
         (Command::Uninstall { .. } | Command::Doctor | Command::Node { .. }, _) => Ok(()),
@@ -422,20 +455,32 @@ mod tests {
             cli.command.unwrap(),
             Command::Apply {
                 foreground: false,
-                json: false
+                json: false,
+                plan: None
             }
         ));
         assert_eq!(cli.config, PathBuf::from("/tmp/c.yaml"));
-        let cli =
-            Cli::try_parse_from(unit::command("/usr/local/bin/zeatend", "/etc/z.yaml")).unwrap();
+        let cli = Cli::try_parse_from(unit::command(
+            "/usr/local/bin/zeatend",
+            "/etc/z.yaml",
+            Some("/run/zeatend/p.json"),
+        ))
+        .unwrap();
         assert!(matches!(
             cli.command.unwrap(),
             Command::Apply {
                 foreground: true,
-                json: true
-            }
+                json: true,
+                plan: Some(plan)
+            } if plan == Path::new("/run/zeatend/p.json")
         ));
         assert_eq!(cli.config, PathBuf::from("/etc/z.yaml"));
+        let cli = Cli::try_parse_from(unit::command("/usr/local/bin/zeatend", "/etc/z.yaml", None))
+            .unwrap();
+        assert!(matches!(
+            cli.command.unwrap(),
+            Command::Apply { plan: None, .. }
+        ));
 
         let cli =
             Cli::try_parse_from(["zeatend", "uninstall", "--yes", "--delete-volumes"]).unwrap();

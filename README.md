@@ -47,7 +47,9 @@ cluster that zeabur-installer installed, `disable` starts as the list the instal
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to
-  run again.
+  run again. `apply --plan <file>` applies the plan that `plan --json` wrote to the file, and
+  changes nothing when a file it writes, the installed release or the install record changed
+  since.
 - `zeatend uninstall` removes K3s, RKE2 or KubeSolo and the files zeatend wrote. It shows what it
   removes and keeps, and asks first (`--yes` skips the question). Volumes stay unless you add
   `--delete-volumes`.

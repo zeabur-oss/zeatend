@@ -12,6 +12,7 @@ use crate::cluster::{self, HostFile, PortUse, Rancher};
 use crate::config::{JoinConfig, Role};
 use crate::finding::{Check, Finding};
 use crate::plan::{ClusterPlan, Facts, cluster_plan};
+use crate::precondition::Preconditions;
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, node_name};
@@ -162,6 +163,9 @@ pub struct JoinPlan {
     pub unit_running: bool,
     /// What to read before applying; a failed one stops `apply`.
     pub findings: Vec<Check>,
+    /// What the plan found on the host and what it writes; `apply` fills it. The token file is
+    /// not among the files.
+    pub preconditions: Preconditions,
 }
 
 const fn rtt_finding(rtt: Rtt, port: u16) -> Option<Finding> {
@@ -361,6 +365,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
             .collect(),
         unit_running: facts.unit_running,
         findings: findings.into_iter().map(Check::from).collect(),
+        preconditions: Preconditions::default(),
     })
 }
 

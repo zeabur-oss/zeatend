@@ -3,6 +3,7 @@
 use zeatend_plan::cluster::{Distribution, PortUse, Rancher};
 use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::join::{RTT_CRITICAL_US, RTT_WARN_US, ms};
+use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib};
@@ -11,6 +12,12 @@ pub(super) const MESSAGES: Messages = Messages {
     checking_host: "Checking the host",
     apply_stops: "apply stops until what failed is fixed.",
     host_not_ready: "the host is not ready; fix what failed and run apply again",
+    not_plan: |path, reason| {
+        format!(
+            "nothing was changed: {path} is not a plan that `zeatend plan --json` printed ({reason})"
+        )
+    },
+    stale,
     doctor_needs_root: "run doctor as root (sudo): the checks read the cluster's files and \
                         credentials",
     no_config_installer,
@@ -139,6 +146,8 @@ const SCREENS: Screens = Screens {
     needs_systemd: "this host does not run systemd, which the screens need. Write \
                     /etc/zeatend/config.yaml and run sudo zeatend apply --foreground",
     joins: |path| format!("{path} joins this host to a cluster. Run sudo zeatend apply"),
+    review_changed: "this host changed after the Review screen, so the install did not start. \
+                     Open zeatend again to see the new plan.",
 };
 
 const DONE: &str = "Done";
@@ -211,6 +220,22 @@ fn joined(j: &Joined<'_>) -> String {
         "{} joined the cluster as a {role}. List the nodes on a server:\n  {} get nodes -o wide",
         j.node, j.kubectl
     )
+}
+
+fn stale(stale: &Stale) -> String {
+    let why = match stale {
+        Stale::Writes => "the plan in the file is not what apply would do now: the configuration, \
+                          this host or zeatend changed"
+            .to_owned(),
+        Stale::File(path) => format!("{path} changed after the plan was made"),
+        Stale::Release { reviewed, now } => format!(
+            "the installed release was {} when the plan was made and is {} now",
+            reviewed.as_deref().unwrap_or("none"),
+            now.as_deref().unwrap_or("none")
+        ),
+        Stale::Record => "the install record changed after the plan was made".to_owned(),
+    };
+    format!("nothing was changed: {why}. Run `zeatend plan --json` again and review the new plan.")
 }
 
 const fn status(status: Status) -> &'static str {

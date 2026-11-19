@@ -28,9 +28,9 @@ use zeatend_host::progress::Event;
 use zeatend_host::{files, journal, preflight, systemd};
 use zeatend_plan::config::{Config, Document};
 
-use self::app::{Action, App, Choices, End};
+use self::app::{Action, App, Choices, End, Review};
 use crate::i18n::{self, Lang, Screens};
-use crate::{InstallError, load, output, unit};
+use crate::{InstallError, apply, load, output, unit};
 
 /// Opens the screens, and prints the result when they close.
 pub(crate) async fn run(config: &Path) -> ExitCode {
@@ -133,8 +133,8 @@ async fn event_loop(
                 };
                 match app.on_key(key) {
                     None => {}
-                    Some(Action::Install(choices)) => {
-                        match install(config, &choices, app.lang).await {
+                    Some(Action::Install(choices, review)) => {
+                        match install(config, &choices, &review, app.lang).await {
                             Ok(unit) => {
                                 app.start(&unit);
                                 follow(unit, line_tx.clone());
@@ -191,14 +191,28 @@ fn follow(unit: String, tx: UnboundedSender<Option<String>>) {
     });
 }
 
-/// Writes the configuration to `path` and starts the install unit, which reports in `lang`.
-async fn install(path: &Path, config: &Config, lang: Lang) -> Result<String, InstallError> {
+/// Writes the configuration to `path` and starts the install unit, which reports in `lang` and
+/// applies the plan made now. It stops when that plan is not the one `review` showed.
+async fn install(
+    path: &Path,
+    config: &Config,
+    review: &Review,
+    lang: Lang,
+) -> Result<String, InstallError> {
+    let plan = apply::install_plan(config).await?;
+    if Review::of(config, &plan) != *review {
+        return Err(InstallError::ReviewChanged(lang));
+    }
+    let json = serde_json::to_string_pretty(&plan).map_err(|e| InstallError::Serialize {
+        what: "plan",
+        reason: e.to_string(),
+    })?;
     let yaml = serde_saphyr::to_string(config).map_err(|e| InstallError::Serialize {
         what: "configuration",
         reason: e.to_string(),
     })?;
     files::write(path, 0o600, yaml.as_bytes())?;
-    unit::start(path, Some(lang.language_env())).await
+    unit::start(path, Some(json.as_bytes()), Some(lang.language_env())).await
 }
 
 /// Seconds since the Unix epoch.
@@ -227,6 +241,6 @@ fn finish(app: &App, action: &Action) -> ExitCode {
             output::err(&format!("error: {error}"));
             ExitCode::FAILURE
         }
-        (Action::Quit | Action::Install(_) | Action::Close, _) => ExitCode::from(130),
+        (Action::Quit | Action::Install(..) | Action::Close, _) => ExitCode::from(130),
     }
 }
