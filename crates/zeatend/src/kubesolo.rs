@@ -14,12 +14,12 @@ use zeatend_plan::kubesolo::{
     ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
 };
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
-use zeatend_plan::precondition::Preconditions;
+use zeatend_plan::precondition::{Change, Preconditions};
 use zeatend_plan::record::Record;
 
 use crate::apply::{
-    changed_files, check_host, check_reviewed, owe_restart, preconditions, restart_owed, restarted,
-    show_checks, write_record,
+    changed_files, check_host, check_reviewed, file_sha256, owe_restart, preconditions,
+    restart_owed, restarted, show_checks, write_record,
 };
 use crate::{InstallError, output, render};
 
@@ -52,6 +52,14 @@ pub(crate) async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
         &Record::new(plan.distribution, plan.release.version()),
     )
     .await?;
+    let kubeconfig = kubeconfig_yaml(&plan.node_name)?;
+    plan.preconditions.generated.insert(
+        KUBECONFIG.to_owned(),
+        Change {
+            found: file_sha256(Path::new(KUBECONFIG))?,
+            leaves: kubeconfig.map(|yaml| download::sha256(yaml.as_bytes())),
+        },
+    );
     Ok(plan)
 }
 
@@ -112,7 +120,10 @@ pub(crate) async fn apply(
         Path::new(STATE_DIR),
         &Record::new(plan.distribution, plan.release.version()),
     )?;
-    write_kubeconfig(&name)?;
+    let yaml = kubeconfig_yaml(&name)?.ok_or_else(|| {
+        InstallError::io(Path::new(ADMIN_KUBECONFIG))(std::io::ErrorKind::NotFound.into())
+    })?;
+    files::write(Path::new(KUBECONFIG), 0o600, yaml.as_bytes())?;
 
     output::step(messages.done);
     let host = crate::apply::reachable_host(&config.host.tls_san).await;
@@ -198,10 +209,15 @@ async fn binary_outdated(path: &Path, version: &str) -> bool {
     crate::apply::installed_release(path).await.as_deref() != Some(version)
 }
 
-/// Writes the kubeconfig for the person's computer, readable by root only.
-fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
+/// The kubeconfig `apply` writes to [`KUBECONFIG`] from the admin kubeconfig; `None` before
+/// `KubeSolo` made that.
+fn kubeconfig_yaml(name: &str) -> Result<Option<String>, InstallError> {
     let path = Path::new(ADMIN_KUBECONFIG);
-    let text = fs::read_to_string(path).map_err(InstallError::io(path))?;
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(InstallError::io(path)(e)),
+    };
     let admin: Kubeconfig = serde_saphyr::from_str(&text).map_err(|e| HostError::Parse {
         what: ADMIN_KUBECONFIG.to_owned(),
         reason: e.to_string(),
@@ -211,8 +227,7 @@ fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
         what: KUBECONFIG,
         reason: e.to_string(),
     })?;
-    files::write(Path::new(KUBECONFIG), 0o600, yaml.as_bytes())?;
-    Ok(())
+    Ok(Some(yaml))
 }
 
 #[cfg(test)]

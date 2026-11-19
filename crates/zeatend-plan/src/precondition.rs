@@ -60,6 +60,10 @@ pub struct Preconditions {
     pub release: Change<Option<String>>,
     /// The install record.
     pub record: Change<Option<RecordState>>,
+    /// The SHA-256 of each file `apply` makes from what the cluster made, such as `KubeSolo`'s
+    /// kubeconfig, by path. `leaves` is what `apply` writes from the cluster as it is now; `None`
+    /// before the cluster made it.
+    pub generated: BTreeMap<String, Change<Option<String>>>,
 }
 
 /// Why a reviewed plan no longer applies.
@@ -95,6 +99,7 @@ impl Preconditions {
                 .collect::<Vec<_>>()
         };
         if leaves(self) != leaves(now)
+            || !self.generated.keys().eq(now.generated.keys())
             || self.release.leaves != now.release.leaves
             || self.record.leaves != now.record.leaves
         {
@@ -106,6 +111,17 @@ impl Preconditions {
                 .is_none_or(|found| !file.holds(&found.found))
         });
         if let Some((path, _)) = changed {
+            return Err(Stale::File(path.clone()));
+        }
+        // What the cluster makes, such as a client certificate, can change between the plan and
+        // `apply`. A generated file holds when it is as the plan found it or as `apply` writes it
+        // now.
+        let edited = self.generated.iter().find(|(path, file)| {
+            now.generated.get(*path).is_none_or(|found| {
+                found.found != file.found && (found.leaves.is_none() || found.found != found.leaves)
+            })
+        });
+        if let Some((path, _)) = edited {
             return Err(Stale::File(path.clone()));
         }
         if !self.release.holds(&now.release.found) {
@@ -155,8 +171,17 @@ mod tests {
                     version: Some("v1.37.2+k3s1".to_owned()),
                 }),
             },
+            generated: BTreeMap::from([(
+                KUBECONFIG.to_owned(),
+                Change {
+                    found: None,
+                    leaves: None,
+                },
+            )]),
         }
     }
+
+    const KUBECONFIG: &str = "/etc/zeatend/kubeconfig.yaml";
 
     /// `reviewed` as a plan made after its `apply` finished finds the host.
     fn applied(reviewed: &Preconditions) -> Preconditions {
@@ -166,6 +191,10 @@ mod tests {
         }
         now.release.found.clone_from(&now.release.leaves);
         now.record.found.clone_from(&now.record.leaves);
+        for file in now.generated.values_mut() {
+            file.found = Some("kubeconfig".to_owned());
+            file.leaves = Some("kubeconfig".to_owned());
+        }
         now
     }
 
@@ -198,6 +227,32 @@ mod tests {
             file.found = Some("edited".to_owned());
         }
         assert_eq!(reviewed.check(&now), Err(Stale::File(path.to_owned())));
+    }
+
+    #[test]
+    fn a_generated_file_changed_by_hand_stops_apply() {
+        // On a new host the cluster has not made it yet, so a plan cannot say what `apply` writes.
+        for reviewed in [reviewed(), applied(&reviewed())] {
+            let mut now = reviewed.clone();
+            if let Some(file) = now.generated.get_mut(KUBECONFIG) {
+                file.found = Some("edited".to_owned());
+            }
+            assert_eq!(
+                reviewed.check(&now),
+                Err(Stale::File(KUBECONFIG.to_owned()))
+            );
+        }
+    }
+
+    #[test]
+    fn a_generated_file_apply_rewrote_from_a_new_cluster_applies() {
+        let reviewed = applied(&reviewed());
+        let mut now = reviewed.clone();
+        if let Some(file) = now.generated.get_mut(KUBECONFIG) {
+            file.found = Some("renewed".to_owned());
+            file.leaves = Some("renewed".to_owned());
+        }
+        assert_eq!(reviewed.check(&now), Ok(()));
     }
 
     #[test]

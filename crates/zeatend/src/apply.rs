@@ -270,11 +270,12 @@ pub(crate) async fn preconditions(
             found: found_record.map(RecordState::from),
             leaves: Some(record.into()),
         },
+        generated: std::collections::BTreeMap::new(),
     })
 }
 
 /// The SHA-256 of the file at `path`; `None` when it is missing.
-fn file_sha256(path: &Path) -> Result<Option<String>, InstallError> {
+pub(crate) fn file_sha256(path: &Path) -> Result<Option<String>, InstallError> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(download::sha256(&bytes))),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
