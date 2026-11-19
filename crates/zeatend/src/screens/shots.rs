@@ -32,7 +32,6 @@ fn facts() -> Facts {
         kubernetes: None,
         apparmor_restricts_unconfined: false,
         k3s_own_network: false,
-        disabled_components: Vec::new(),
         installer_webhook: false,
     }
 }

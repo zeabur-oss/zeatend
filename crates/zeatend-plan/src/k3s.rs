@@ -18,7 +18,10 @@
 
 use serde_json::{Value, json};
 
-use crate::cluster::{AUDIT_POLICY, HEADER, HostFile, Options, Rancher, disable_list, yaml_list};
+use crate::cluster::{
+    AUDIT_POLICY, Distribution, HEADER, HostFile, Options, Rancher, turn_off, yaml_list,
+};
+use crate::config::Component;
 use crate::plan::MANAGER;
 use crate::tuning::HostTuning;
 
@@ -60,7 +63,7 @@ pub fn host_files(options: &Options) -> Vec<HostFile> {
         HostFile {
             path: format!("{MANIFESTS_DIR}/zeabur-cis.yaml"),
             mode: 0o600,
-            content: system_objects(),
+            content: system_objects(&options.disable),
         },
     ]
     .into_iter()
@@ -134,8 +137,7 @@ fn config(options: &Options) -> String {
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     // ServiceLB stays and gives an ingress ports 80 and 443.
-    let off: Vec<&str> = options.off.iter().map(|c| c.name()).collect();
-    disable_list(&mut out, &off, &options.disable);
+    turn_off(&mut out, Distribution::K3s, &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -176,14 +178,15 @@ plugins:
 const METRICS_SERVER_PORT: u16 = 10250;
 
 /// What RKE2's `cis` profile creates in the system namespaces and K3s does not: a policy that
-/// lets in only the namespace's own pods, `CoreDNS` reachable from every pod, and default service
-/// accounts that mount no token. K3s applies the file on every start, as RKE2 re-creates its own.
+/// lets in only the namespace's own pods, `CoreDNS` reachable from every pod, Traefik's entry
+/// points reachable unless `disable` turns Traefik off, and default service accounts that mount no
+/// token. K3s applies the file on every start, as RKE2 re-creates its own.
 ///
 /// The API server reaches metrics-server from the server's host, which is not a pod of
 /// `kube-system`. On another node, kube-router refuses that traffic, so `kubectl top` and the
 /// Horizontal Pod Autoscaler stop. metrics-server's port is open, as `CoreDNS`'s is: metrics-server
 /// asks the API server to authenticate and authorise each request.
-fn system_objects() -> String {
+fn system_objects(disable: &[Component]) -> String {
     let mut objects: Vec<Value> = ["kube-system", "kube-public", "default"]
         .into_iter()
         .map(|namespace| {
@@ -210,6 +213,18 @@ fn system_objects() -> String {
         &json!({"matchLabels": {"k8s-app": "metrics-server"}}),
         &json!([{"ports": [{"port": METRICS_SERVER_PORT, "protocol": "TCP"}]}]),
     ));
+    if !disable.contains(&Component::Traefik) {
+        // As RKE2's `default-network-traefik-policy`.
+        objects.push(policy(
+            "default-network-traefik-policy",
+            "kube-system",
+            &json!({"matchLabels": {"app.kubernetes.io/name": "traefik"}}),
+            &json!([{"ports": [
+                {"port": "web", "protocol": "TCP"},
+                {"port": "websecure", "protocol": "TCP"},
+            ]}]),
+        ));
+    }
     objects.extend(
         ["kube-system", "kube-public", "default", "kube-node-lease"]
             .into_iter()
@@ -259,7 +274,6 @@ mod tests {
             tls_san: vec!["k8s.example.com".to_owned()],
             tuning: tuning(MemoryTier::Small),
             own_network: false,
-            off: Vec::new(),
             disable: Vec::new(),
         }
     }
@@ -408,29 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn components_an_earlier_install_turned_off_stay_off() {
-        let earlier = "disable:\n  - traefik\n  - local-storage\n  - metrics-server\n";
-        let kept = crate::cluster::disabled_components(earlier);
-        assert_eq!(kept, ["traefik", "local-storage", "metrics-server"]);
-        assert_eq!(
-            crate::cluster::disabled_components("disable: traefik, servicelb\n"),
-            ["traefik", "servicelb"]
-        );
-        assert_eq!(
-            crate::cluster::disabled_components("not: [yaml"),
-            Vec::<String>::new()
-        );
-        let config = config_of(&host_files(&Options {
-            disable: kept,
-            ..options()
-        }));
-        assert_eq!(
-            config["disable"],
-            json!(["traefik", "local-storage", "metrics-server"])
-        );
-    }
-
-    #[test]
     fn the_server_gets_its_reserves_and_gomemlimit_by_tier() {
         for (tier, kube, soft, limit) in [
             (
@@ -479,16 +470,21 @@ mod tests {
     }
 
     #[test]
-    fn the_configuration_turns_off_the_components_it_names() {
-        use crate::config::Component;
-        let config = config_of(&host_files(&Options {
-            off: vec![Component::Traefik, Component::MetricsServer],
-            disable: vec!["metrics-server".to_owned(), "servicelb".to_owned()],
+    fn disable_turns_off_the_components_and_traefiks_policy() {
+        let traefik_policy = |files: &[HostFile]| {
+            files
+                .iter()
+                .any(|f| f.content.contains("default-network-traefik-policy"))
+        };
+        assert!(traefik_policy(&host_files(&options())));
+        let files = host_files(&Options {
+            disable: Component::ALL.to_vec(),
             ..options()
-        }));
+        });
         assert_eq!(
-            config["disable"],
-            json!(["traefik", "metrics-server", "servicelb"])
+            config_of(&files)["disable"],
+            json!(["traefik", "metrics-server", "local-storage"])
         );
+        assert!(!traefik_policy(&files));
     }
 }

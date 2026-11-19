@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::PlanError;
 use crate::config::Component;
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -47,6 +48,19 @@ impl Distribution {
             Self::KubeSolo => "KubeSolo",
             Self::K3s => Rancher::K3s.title(),
             Self::Rke2 => Rancher::Rke2.title(),
+        }
+    }
+
+    /// How the distribution turns `component` off; `None` when it does not package it.
+    #[must_use]
+    pub const fn turns_off(self, component: Component) -> Option<TurnOff> {
+        match (self, component) {
+            (Self::K3s, Component::Traefik) => Some(TurnOff::Disable("traefik")),
+            (Self::K3s, Component::MetricsServer) => Some(TurnOff::Disable("metrics-server")),
+            (Self::K3s, Component::LocalStorage) => Some(TurnOff::Disable("local-storage")),
+            (Self::Rke2, Component::Traefik) => Some(TurnOff::NoIngressController),
+            (Self::Rke2, Component::MetricsServer) => Some(TurnOff::Disable("rke2-metrics-server")),
+            (Self::Rke2, Component::LocalStorage) | (Self::KubeSolo, _) => None,
         }
     }
 
@@ -543,6 +557,15 @@ pub struct HostFile {
     pub content: String,
 }
 
+/// How K3s or RKE2 turns a packaged component off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnOff {
+    /// An item of the `disable` list.
+    Disable(&'static str),
+    /// `ingress-controller: none`: RKE2 deploys no ingress controller.
+    NoIngressController,
+}
+
 /// Server settings from the configuration and the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
@@ -554,23 +577,25 @@ pub struct Options {
     /// zeatend keeps.
     pub own_network: bool,
     /// Packaged components that the configuration turns off.
-    pub off: Vec<Component>,
-    /// Packaged components that an earlier install turned off, which zeatend keeps off. See
-    /// [`disabled_components`].
-    pub disable: Vec<String>,
+    pub disable: Vec<Component>,
 }
 
-/// The packaged components that the K3s or RKE2 configuration `config` turns off. RKE2's
-/// `ingress-controller: none` comes back as `traefik`.
+/// The packaged components that the K3s or RKE2 configuration `config` of an earlier install
+/// turns off, for zeatend's `disable`.
 ///
-/// zeabur-installer turns off K3s's `local-storage` and the packaged metrics-server, as its own
-/// run in their place; turning them on again would give two of each.
-#[must_use]
-pub fn disabled_components(config: &str) -> Vec<String> {
-    let Ok(value) = serde_saphyr::from_str::<Value>(config) else {
-        return Vec::new();
-    };
-    let mut items: Vec<String> = match value.get("disable") {
+/// zeabur-installer turns off Traefik, metrics-server and K3s's `local-storage`, as the Zeabur
+/// catalog installs its own; turning them on again would give two of each.
+///
+/// # Errors
+///
+/// When the configuration does not parse, or turns off a component zeatend cannot name.
+pub fn disabled_components(
+    distribution: Distribution,
+    config: &str,
+) -> Result<Vec<Component>, PlanError> {
+    let value: Value =
+        serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
+    let items: Vec<String> = match value.get("disable") {
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(Value::as_str)
@@ -579,32 +604,43 @@ pub fn disabled_components(config: &str) -> Vec<String> {
         Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
         _ => Vec::new(),
     };
-    let no_ingress = match value.get("ingress-controller") {
-        Some(Value::String(controller)) => controller == "none",
-        Some(Value::Array(controllers)) => controllers.iter().any(|c| c.as_str() == Some("none")),
-        _ => false,
-    };
-    let traefik = Component::Traefik.name();
-    if no_ingress && !items.iter().any(|item| item == traefik) {
-        items.push(traefik.to_owned());
+    let mut off = Vec::new();
+    for item in items.iter().filter(|item| !item.is_empty()) {
+        let component = Component::ALL
+            .into_iter()
+            .find(|c| {
+                matches!(distribution.turns_off(*c), Some(TurnOff::Disable(name)) if name == item)
+            })
+            .ok_or_else(|| PlanError::Config(format!("disable: zeatend cannot keep {item} off")))?;
+        off.push(component);
     }
-    items
+    let none = |v: &Value| v.as_str() == Some("none");
+    if value
+        .get("ingress-controller")
+        .is_some_and(|v| none(v) || v.as_array().is_some_and(|a| a.iter().any(none)))
+    {
+        off.extend(
+            Component::ALL
+                .into_iter()
+                .filter(|c| distribution.turns_off(*c) == Some(TurnOff::NoIngressController)),
+        );
+    }
+    Ok(Component::ALL
+        .into_iter()
+        .filter(|c| off.contains(c))
+        .collect())
 }
 
-/// The `disable` list: `always`, then the components an earlier install turned off.
-pub(crate) fn disable_list(out: &mut String, always: &[&str], kept: &[String]) {
-    let mut items: Vec<String> = always.iter().map(|&item| item.to_owned()).collect();
-    let earlier: Vec<String> = kept
-        .iter()
-        .filter(|item| !item.is_empty() && !items.contains(item))
-        .cloned()
-        .collect();
-    if !earlier.is_empty() {
-        out.push_str("# Kept off from the earlier install, which runs its own: ");
-        out.push_str(&earlier.join(", "));
-        out.push('\n');
+/// The settings that turn off the components in `disable`.
+pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[Component]) {
+    let mut items = Vec::new();
+    for component in disable {
+        match distribution.turns_off(*component) {
+            Some(TurnOff::Disable(item)) => items.push(item.to_owned()),
+            Some(TurnOff::NoIngressController) => out.push_str("ingress-controller: none\n"),
+            None => {}
+        }
     }
-    items.extend(earlier);
     yaml_list(out, "disable", &items);
 }
 
@@ -698,7 +734,6 @@ mod tests {
                 tls_san: Vec::new(),
                 tuning,
                 own_network: false,
-                off: Vec::new(),
                 disable: Vec::new(),
             };
             let file = rancher
@@ -834,5 +869,51 @@ mod tests {
                 "{rule}"
             );
         }
+    }
+
+    #[test]
+    fn an_earlier_install_reads_back_as_the_components_it_turned_off() {
+        use crate::config::Component;
+        for distribution in [Distribution::K3s, Distribution::Rke2] {
+            let packaged: Vec<Component> = Component::ALL
+                .into_iter()
+                .filter(|c| distribution.turns_off(*c).is_some())
+                .collect();
+            let mut config = String::new();
+            turn_off(&mut config, distribution, &packaged);
+            assert_eq!(
+                disabled_components(distribution, &config).unwrap(),
+                packaged,
+                "{distribution:?}"
+            );
+        }
+        // What zeabur-installer v0.2.0 writes.
+        assert_eq!(
+            disabled_components(
+                Distribution::K3s,
+                "disable: traefik, local-storage, metrics-server\n"
+            )
+            .unwrap(),
+            Component::ALL
+        );
+        assert_eq!(
+            disabled_components(
+                Distribution::Rke2,
+                "ingress-controller: none\ndisable:\n  - rke2-metrics-server\n"
+            )
+            .unwrap(),
+            [Component::Traefik, Component::MetricsServer]
+        );
+        assert_eq!(
+            disabled_components(
+                Distribution::K3s,
+                "{}
+"
+            )
+            .unwrap(),
+            []
+        );
+        assert!(disabled_components(Distribution::K3s, "disable: [servicelb]\n").is_err());
+        assert!(disabled_components(Distribution::Rke2, "disable: [traefik]\n").is_err());
     }
 }

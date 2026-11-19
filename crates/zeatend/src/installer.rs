@@ -14,12 +14,23 @@ use zeatend_plan::upgrade::release_tag;
 use crate::{InstallError, apply};
 
 /// zeatend's configuration from the installer's configuration file; `None` when there is none.
-/// A join token in it must not be readable by others, as in zeatend's own file.
+/// A join token in it must not be readable by others, as in zeatend's own file. On K3s and RKE2,
+/// `disable` holds the packaged components that the installed cluster turns off.
 pub(crate) fn document() -> Result<Option<Document>, InstallError> {
     match fs::read_to_string(CONFIG_FILE) {
         Ok(text) => {
-            let document = installer::document(&text)?;
+            let mut document = installer::document(&text)?;
             crate::load::refuse_shared_token(Path::new(CONFIG_FILE), &document)?;
+            let distribution = match &document {
+                Document::Install(config) => config.distribution,
+                Document::Join(config) => config.distribution,
+            };
+            if let Some(rancher) = distribution.rancher()
+                && let Ok(config) =
+                    fs::read_to_string(format!("{}/config.yaml", rancher.layout().config_dir))
+            {
+                document = installer::keep_disabled(document, &config)?;
+            }
             Ok(Some(document))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),

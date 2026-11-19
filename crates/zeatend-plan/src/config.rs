@@ -48,7 +48,10 @@ pub enum Component {
 }
 
 impl Component {
-    /// The name in the configuration and in K3s's `disable` list.
+    /// Every component, in the order the configuration lists them.
+    pub const ALL: [Self; 3] = [Self::Traefik, Self::MetricsServer, Self::LocalStorage];
+
+    /// The name in the configuration.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -61,15 +64,16 @@ impl Component {
 
 /// Each component in `disable` must be one that `distribution` packages.
 fn check_disable(distribution: Distribution, disable: &[Component]) -> Result<(), PlanError> {
-    match distribution {
-        Distribution::KubeSolo if !disable.is_empty() => Err(PlanError::Config(
-            "disable: KubeSolo packages none of these components; remove disable".to_owned(),
-        )),
-        Distribution::Rke2 if disable.contains(&Component::LocalStorage) => Err(PlanError::Config(
-            "disable: local-storage is K3s's; RKE2 packages no storage class".to_owned(),
-        )),
-        Distribution::KubeSolo | Distribution::K3s | Distribution::Rke2 => Ok(()),
-    }
+    disable
+        .iter()
+        .find(|c| distribution.turns_off(**c).is_none())
+        .map_or(Ok(()), |component| {
+            Err(PlanError::Config(format!(
+                "disable: {} packages no {}; remove it",
+                distribution.title(),
+                component.name()
+            )))
+        })
 }
 
 /// Host settings.

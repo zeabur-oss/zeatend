@@ -11,10 +11,9 @@
 //! overrides it cleanly.
 
 use crate::cluster::{
-    AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, disable_list,
-    yaml_list,
+    AUDIT_POLICY, Distribution, HEADER, HostFile, Options, Rancher, control_plane_requests,
+    turn_off, yaml_list,
 };
-use crate::config::Component;
 use crate::tuning::HostTuning;
 
 /// Where the tarball installs.
@@ -71,26 +70,7 @@ fn config(options: &Options) -> String {
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     out.push_str(&control_plane_requests());
-    // RKE2 takes Traefik off with `ingress-controller`, not with `disable`.
-    let traefik = Component::Traefik.name();
-    if options.off.contains(&Component::Traefik) || options.disable.iter().any(|i| i == traefik) {
-        out.push_str("ingress-controller: none\n");
-    }
-    let off: Vec<&str> = options
-        .off
-        .iter()
-        .filter_map(|c| match c {
-            Component::MetricsServer => Some("rke2-metrics-server"),
-            Component::Traefik | Component::LocalStorage => None,
-        })
-        .collect();
-    let kept: Vec<String> = options
-        .disable
-        .iter()
-        .filter(|i| *i != traefik)
-        .cloned()
-        .collect();
-    disable_list(&mut out, &off, &kept);
+    turn_off(&mut out, Distribution::Rke2, &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -123,29 +103,8 @@ mod tests {
             tls_san,
             tuning: tuning(),
             own_network: false,
-            off: Vec::new(),
             disable: Vec::new(),
         }
-    }
-
-    #[test]
-    fn components_an_earlier_install_turned_off_stay_off() {
-        let config = |disable: Vec<String>| -> serde_json::Value {
-            let files = host_files(&Options {
-                disable,
-                ..options(Vec::new())
-            });
-            let file = files
-                .iter()
-                .find(|f| f.path == "/etc/rancher/rke2/config.yaml")
-                .unwrap();
-            serde_saphyr::from_str(&file.content).unwrap()
-        };
-        assert!(config(Vec::new()).get("disable").is_none());
-        assert_eq!(
-            config(vec!["rke2-metrics-server".to_owned()])["disable"],
-            serde_json::json!(["rke2-metrics-server"])
-        );
     }
 
     #[test]
@@ -240,26 +199,23 @@ mod tests {
     }
 
     #[test]
-    fn the_configuration_turns_off_the_components_it_names() {
-        let config = |off: Vec<Component>, disable: Vec<String>| -> serde_json::Value {
-            serde_saphyr::from_str(&config(&Options {
-                off,
-                disable,
-                ..options(Vec::new())
-            }))
-            .unwrap()
-        };
-        let off = config(
-            vec![Component::Traefik, Component::MetricsServer],
-            Vec::new(),
+    fn disable_turns_off_the_ingress_controller_and_metrics_server() {
+        let parsed: serde_json::Value = serde_saphyr::from_str(&config(&Options {
+            disable: vec![
+                crate::config::Component::Traefik,
+                crate::config::Component::MetricsServer,
+            ],
+            ..options(Vec::new())
+        }))
+        .unwrap();
+        assert_eq!(parsed["ingress-controller"], "none");
+        assert_eq!(
+            parsed["disable"],
+            serde_json::json!(["rke2-metrics-server"])
         );
-        assert_eq!(off["ingress-controller"], "none");
-        assert_eq!(off["disable"], serde_json::json!(["rke2-metrics-server"]));
-        // An earlier install with `ingress-controller: none` keeps it.
-        let kept = crate::cluster::disabled_components("ingress-controller: none\n");
-        assert_eq!(kept, ["traefik"]);
-        let earlier = config(Vec::new(), kept);
-        assert_eq!(earlier["ingress-controller"], "none");
-        assert!(earlier.get("disable").is_none());
+        let plain: serde_json::Value =
+            serde_saphyr::from_str(&config(&options(Vec::new()))).unwrap();
+        assert!(plain.get("ingress-controller").is_none());
+        assert!(plain.get("disable").is_none());
     }
 }

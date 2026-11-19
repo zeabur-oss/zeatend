@@ -6,7 +6,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use zeatend_host::preflight::Status;
 use zeatend_host::progress::Event;
 use zeatend_plan::cluster::Distribution;
-use zeatend_plan::config::{Component, Config};
+use zeatend_plan::config::Config;
 use zeatend_plan::{node_name, plan};
 
 use super::host::{DISTRIBUTIONS, Host};
@@ -220,11 +220,9 @@ impl Choices {
         if self.distribution != Distribution::Rke2 {
             config.rke2_version = None;
         }
-        match self.distribution {
-            Distribution::KubeSolo => config.disable.clear(),
-            Distribution::Rke2 => config.disable.retain(|c| *c != Component::LocalStorage),
-            Distribution::K3s => {}
-        }
+        config
+            .disable
+            .retain(|c| self.distribution.turns_off(*c).is_some());
         let address = self.value(FieldKind::Address);
         let extra = [
             (!self.host.addresses.iter().any(|a| a == address)).then_some(address),
