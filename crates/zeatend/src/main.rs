@@ -151,12 +151,6 @@ enum InstallError {
     /// A host check failed.
     #[error("{}", i18n::messages().host_not_ready)]
     HostNotReady,
-    /// A plan of K3s or RKE2 where `KubeSolo` was expected.
-    #[error("the plan installs K3s or RKE2, not KubeSolo")]
-    NotKubeSolo,
-    /// A plan of `KubeSolo` where K3s or RKE2 was expected.
-    #[error("the plan installs KubeSolo, not K3s or RKE2")]
-    NotRancher,
     /// The plan of K3s has no `install.sh`.
     #[error("no install.sh for K3s in the plan")]
     NoInstallScript,
@@ -411,19 +405,9 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
         (Command::Plan { json }, Document::Join(config)) => join::show_plan(&config, *json).await,
         (Command::Apply { .. }, Document::Join(config)) => join::apply(&config, reviewed).await,
         (Command::Plan { json }, Document::Install(config)) => {
-            if config.distribution.rancher().is_some() {
-                apply::show_plan(&config, *json).await
-            } else {
-                kubesolo::show_plan(&config, *json).await
-            }
+            apply::show_plan(&config, *json).await
         }
-        (Command::Apply { .. }, Document::Install(config)) => {
-            if config.distribution.rancher().is_some() {
-                apply::run(&config, reviewed).await
-            } else {
-                kubesolo::apply(&config, reviewed).await
-            }
-        }
+        (Command::Apply { .. }, Document::Install(config)) => apply::run(&config, reviewed).await,
         (Command::Uninstall { .. } | Command::Doctor | Command::Node { .. }, _) => Ok(()),
     }
 }
