@@ -191,9 +191,6 @@ enum InstallError {
     /// The reviewed plan no longer holds.
     #[error("{}", (i18n::messages().stale)(.0))]
     Stale(Stale),
-    /// The plan made when the install starts is not the one the Review screen showed.
-    #[error("{}", .0.messages().screens.review_changed)]
-    ReviewChanged(i18n::Lang),
     /// Data that could not be written as JSON or YAML.
     #[error("{what}: {reason}")]
     Serialize {

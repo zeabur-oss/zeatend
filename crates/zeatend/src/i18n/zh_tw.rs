@@ -130,8 +130,6 @@ const SCREENS: Screens = Screens {
     needs_systemd: "這台主機沒有使用 systemd，無法開啟畫面。請寫好 /etc/zeatend/config.yaml，\
                     再執行 sudo zeatend apply --foreground",
     joins: |path| format!("{path} 會讓這台主機加入叢集，請執行 sudo zeatend apply"),
-    review_changed: "確認畫面之後，這台主機有了變化，所以沒有開始安裝。請重新開啟 zeatend，\
-                     看看新的計畫。",
 };
 
 const DONE: &str = "完成";

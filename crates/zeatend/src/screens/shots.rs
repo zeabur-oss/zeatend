@@ -11,9 +11,9 @@ use zeatend_host::progress::Event;
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::{Component, Config};
 use zeatend_plan::finding::{Check, Finding};
-use zeatend_plan::plan::Facts;
+use zeatend_plan::plan::{self, Facts};
 
-use super::app::{Action, App, Choices};
+use super::app::{Action, App, Choices, Review};
 use super::host::Host;
 use super::{draw, svg};
 use crate::i18n::{Lang, NoCjk, Screen};
@@ -61,6 +61,16 @@ fn host() -> Host {
 
 fn press(app: &mut App, code: KeyCode) -> Option<Action> {
     app.on_key(KeyEvent::new(code, KeyModifiers::NONE))
+}
+
+/// Presses Enter on the Access screen and shows the plan of this made-up host.
+fn review(app: &mut App) {
+    let action = press(app, KeyCode::Enter);
+    let Some(Action::Plan(config)) = action else {
+        panic!("{action:?}");
+    };
+    let plan = plan::plan(&config, &facts()).unwrap();
+    app.reviewed(Ok(Review::new(&config, plan)));
 }
 
 fn type_text(app: &mut App, text: &str) {
@@ -130,7 +140,7 @@ fn scenario(name: &str, lang: Lang, no_cjk: Option<NoCjk>) -> App {
             press(&mut app, KeyCode::Tab);
             type_text(&mut app, "k8s.example.com");
             if name != "access" {
-                press(&mut app, KeyCode::Enter);
+                review(&mut app);
             }
             if name == "install" || name == "done" {
                 let action = press(&mut app, KeyCode::Enter);
@@ -284,6 +294,24 @@ fn the_screens_go_back_and_check_what_was_typed() {
         app.choices.as_ref().unwrap().distribution,
         Distribution::KubeSolo
     );
+}
+
+#[test]
+fn confirming_the_review_starts_the_install_with_the_plan_it_showed() {
+    let app = scenario("review", Lang::En, None);
+    let shown = app
+        .choices
+        .as_ref()
+        .unwrap()
+        .review
+        .clone()
+        .unwrap()
+        .unwrap();
+    let mut app = app;
+    let Some(Action::Install(_, sent)) = press(&mut app, KeyCode::Enter) else {
+        panic!("the Review screen did not start the install");
+    };
+    assert_eq!(*sent, shown);
 }
 
 #[test]
