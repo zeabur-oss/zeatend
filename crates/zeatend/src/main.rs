@@ -146,7 +146,7 @@ enum InstallError {
     #[error("{0} ended without a result; see `journalctl -u {0}`")]
     UnitEnded(String),
     /// A finding of the plan that stops `apply`.
-    #[error("{}", i18n::en::finding(.0))]
+    #[error("{}", (i18n::ENGLISH.finding)(.0))]
     Blocked(Finding),
     /// A host check failed.
     #[error("{}", i18n::messages().host_not_ready)]

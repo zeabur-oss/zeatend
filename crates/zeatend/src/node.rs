@@ -195,7 +195,7 @@ fn instructions(i: &Instructions<'_>) -> String {
     for advice in join::advice(i.distribution, i.role) {
         push(
             &mut text,
-            &format!("  - {}", crate::i18n::en::finding(&advice)),
+            &format!("  - {}", (crate::i18n::ENGLISH.finding)(&advice)),
         );
     }
     push(&mut text, "");
