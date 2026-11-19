@@ -172,7 +172,11 @@ struct Instructions<'a> {
     server: &'a str,
     role: Role,
     token: &'a Token,
-    /// The cluster's release, which the new node installs too.
+    /// The cluster's release, as recorded.
+    ///
+    /// The configuration names it only when it is not this zeatend's pinned release, so the new
+    /// node installs it too. Otherwise the node follows the pin, also when a newer zeatend
+    /// upgrades the cluster.
     version: Option<&'a str>,
     /// The cluster's nodes, whose names the new node does not take.
     node_names: &'a [&'a str],
@@ -258,7 +262,7 @@ fn duration(ttl: Duration) -> String {
 /// The shell commands that write the join configuration and run zeatend.
 fn commands(i: &Instructions<'_>) -> String {
     let mut lines = vec![format!("distribution: {}", i.distribution.id())];
-    if let Some(version) = i.version {
+    if let Some(version) = i.version.filter(|v| *v != i.distribution.pinned_version()) {
         lines.push(format!("{}Version: {version}", i.distribution.id()));
     }
     lines.extend([
@@ -360,8 +364,23 @@ mod tests {
         assert_eq!(config.join.role, Role::Server);
         assert_eq!(config.version(), None);
         assert!(text.contains("does not expire"), "{text}");
+
         assert!(!text.contains("token delete"), "{text}");
         assert!(text.contains("three or more servers"), "{text}");
+    }
+
+    #[test]
+    fn a_cluster_at_the_pin_gives_the_new_node_no_version_so_it_follows_the_pin() {
+        let text = instructions(&Instructions {
+            distribution: Rancher::K3s,
+            server: "https://10.0.1.10:6443",
+            role: Role::Worker,
+            token: &worker_token(),
+            version: Some(Rancher::K3s.pinned_version()),
+            node_names: &["vps-1"],
+            ttl: Duration::from_hours(1),
+        });
+        assert_eq!(pasted(&text).version(), None, "{text}");
     }
 
     #[test]
