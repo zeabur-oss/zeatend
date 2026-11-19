@@ -62,11 +62,15 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
         // A personal configuration has no distribution, release or join keys.
         config.insert("distribution".to_owned(), Value::from("kubesolo"));
     } else {
-        keep(
-            &mut config,
-            &installer,
-            &["distribution", "rke2Version", "k3sVersion"],
-        );
+        keep(&mut config, &installer, &["distribution"]);
+        // The installer names the release of each distribution in a key of its own.
+        let distribution = config
+            .get("distribution")
+            .and_then(Value::as_str)
+            .unwrap_or("k3s");
+        if let Some(version) = installer.get(format!("{distribution}Version")) {
+            config.insert("version".to_owned(), version.clone());
+        }
     }
     if let Some(host) = installer.get("host") {
         let mut kept = Map::new();
@@ -157,6 +161,27 @@ mod tests {
         assert_eq!(config.distribution, Distribution::Rke2);
         assert_eq!(config.host.tls_san, ["api.example.com"]);
         assert_eq!(config.host.node_name.as_deref(), Some("node-1"));
+    }
+
+    #[test]
+    fn the_installers_release_key_of_the_distribution_is_the_version() {
+        let version = |yaml: &str| match document(yaml).unwrap() {
+            Document::Install(config) => config.version,
+            Document::Join(config) => config.version,
+        };
+        assert_eq!(
+            version("k3sVersion: v1.37.1+k3s1\nrke2Version: v1.37.1+rke2r1\n").as_deref(),
+            Some("v1.37.1+k3s1")
+        );
+        assert_eq!(
+            version("distribution: rke2\nk3sVersion: v1.37.1+k3s1\nrke2Version: v1.37.1+rke2r1\n")
+                .as_deref(),
+            Some("v1.37.1+rke2r1")
+        );
+        assert_eq!(
+            version("distribution: rke2\nk3sVersion: v1.37.1+k3s1\n"),
+            None
+        );
     }
 
     #[test]

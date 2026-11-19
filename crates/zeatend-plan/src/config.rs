@@ -19,14 +19,11 @@ pub struct Config {
     /// with little memory.
     #[serde(default)]
     pub distribution: Distribution,
-    /// An RKE2 release other than the pinned one, such as `v1.37.1+rke2r1`. Its downloads are
-    /// checked only against the release's own checksum list, so the plan warns that it is
-    /// unsupported.
+    /// A K3s or RKE2 release other than the pinned one, such as `v1.37.1+k3s1` or
+    /// `v1.37.1+rke2r1`. Its downloads are checked only against the release's own checksum list,
+    /// so the plan warns that it is unsupported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rke2_version: Option<String>,
-    /// A K3s release other than the pinned one, such as `v1.37.1+k3s1`, checked the same way.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub k3s_version: Option<String>,
+    pub version: Option<String>,
     /// Packaged components that K3s or RKE2 does not deploy. Absent: each deploys its own
     /// defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -141,10 +138,8 @@ pub struct JoinConfig {
     /// The cluster's distribution, K3s or RKE2.
     #[serde(default)]
     pub distribution: Distribution,
-    /// An RKE2 release other than the pinned one; it must match the cluster's.
-    pub rke2_version: Option<String>,
-    /// A K3s release other than the pinned one; it must match the cluster's.
-    pub k3s_version: Option<String>,
+    /// A K3s or RKE2 release other than the pinned one; it must match the cluster's.
+    pub version: Option<String>,
     /// Servers only: the packaged components the cluster does not deploy. Give each server the
     /// same list, as each one deploys the packaged components.
     #[serde(default)]
@@ -242,11 +237,7 @@ impl JoinConfig {
     pub fn check(&self) -> Result<(), PlanError> {
         let join = &self.join;
         let rancher = self.rancher()?;
-        check_version(
-            self.distribution,
-            self.rke2_version.as_ref(),
-            self.k3s_version.as_ref(),
-        )?;
+        check_version(self.distribution, self.version.as_deref())?;
         if join.role == Role::Server && !rancher.takes_servers() {
             return Err(PlanError::SecondServer);
         }
@@ -280,16 +271,6 @@ impl JoinConfig {
         }
         check_disable(self.distribution, &self.disable)?;
         self.host.check()
-    }
-
-    /// The release chosen instead of the pinned one, for the distribution.
-    #[must_use]
-    pub fn version(&self) -> Option<&str> {
-        version(
-            self.distribution,
-            self.rke2_version.as_ref(),
-            self.k3s_version.as_ref(),
-        )
     }
 }
 
@@ -330,51 +311,29 @@ pub fn server_address(url: &str, default_port: u16) -> Result<(String, u16), Pla
     Ok((host.to_owned(), port))
 }
 
-/// The release override of another distribution is a mistake: it would be ignored. An override
-/// is a release tag, `v1.37.1+k3s1` or `v1.37.1+rke2r1`. `KubeSolo` takes none.
-fn check_version(
-    distribution: Distribution,
-    rke2: Option<&String>,
-    k3s: Option<&String>,
-) -> Result<(), PlanError> {
-    for (name, version, build) in [("rke2Version", rke2, "rke2r"), ("k3sVersion", k3s, "k3s")] {
-        if let Some(version) = version
-            && !is_release_tag(version, build)
-        {
-            return Err(PlanError::Config(format!(
-                "{name}: {version} is not a release tag such as v1.37.1+{build}1"
-            )));
-        }
-    }
-    match (distribution, rke2, k3s) {
-        (Distribution::K3s, Some(_), _) => Err(PlanError::Config(
-            "rke2Version applies to distribution: rke2; this one is k3s (set k3sVersion)"
-                .to_owned(),
-        )),
-        (Distribution::Rke2, _, Some(_)) => Err(PlanError::Config(
-            "k3sVersion applies to distribution: k3s; this one is rke2 (set rke2Version)"
-                .to_owned(),
-        )),
-        (Distribution::KubeSolo, Some(_), _) | (Distribution::KubeSolo, _, Some(_)) => {
-            Err(PlanError::Config(
-                "distribution: kubesolo installs the pinned KubeSolo release; remove k3sVersion \
-                 and rke2Version"
+/// A release override is a release tag of the distribution, `v1.37.1+k3s1` or `v1.37.1+rke2r1`.
+/// `KubeSolo` takes none.
+fn check_version(distribution: Distribution, version: Option<&str>) -> Result<(), PlanError> {
+    let Some(version) = version else {
+        return Ok(());
+    };
+    let build = match distribution {
+        Distribution::KubeSolo => {
+            return Err(PlanError::Config(
+                "distribution: kubesolo installs the pinned KubeSolo release; remove version"
                     .to_owned(),
-            ))
+            ));
         }
-        _ => Ok(()),
-    }
-}
-
-fn version<'a>(
-    distribution: Distribution,
-    rke2: Option<&'a String>,
-    k3s: Option<&'a String>,
-) -> Option<&'a str> {
-    match distribution {
-        Distribution::KubeSolo => None,
-        Distribution::K3s => k3s.map(String::as_str),
-        Distribution::Rke2 => rke2.map(String::as_str),
+        Distribution::K3s => "k3s",
+        Distribution::Rke2 => "rke2r",
+    };
+    if is_release_tag(version, build) {
+        Ok(())
+    } else {
+        Err(PlanError::Config(format!(
+            "version: {version} is not a {} release tag such as v1.37.1+{build}1",
+            distribution.title()
+        )))
     }
 }
 
@@ -423,23 +382,9 @@ impl Config {
     ///
     /// The first invalid value.
     pub fn check(&self) -> Result<(), PlanError> {
-        check_version(
-            self.distribution,
-            self.rke2_version.as_ref(),
-            self.k3s_version.as_ref(),
-        )?;
+        check_version(self.distribution, self.version.as_deref())?;
         check_disable(self.distribution, &self.disable)?;
         self.host.check()
-    }
-
-    /// The release chosen instead of the pinned one, for the distribution.
-    #[must_use]
-    pub fn version(&self) -> Option<&str> {
-        version(
-            self.distribution,
-            self.rke2_version.as_ref(),
-            self.k3s_version.as_ref(),
-        )
     }
 }
 
@@ -525,23 +470,23 @@ mod tests {
 
     #[test]
     fn a_release_override_must_match_the_distribution() {
-        assert!(Config::parse("k3sVersion: v1.37.1+k3s1\n").is_ok());
-        assert!(Config::parse("rke2Version: v1.37.1+rke2r1\n").is_err());
-        let rke2 = Config::parse("distribution: rke2\nrke2Version: v1.37.1+rke2r1\n").unwrap();
-        assert_eq!(rke2.version(), Some("v1.37.1+rke2r1"));
-        assert!(Config::parse("distribution: rke2\nk3sVersion: v1.37.1+k3s1\n").is_err());
-        assert!(Config::parse("distribution: kubesolo\nk3sVersion: v1.37.1+k3s1\n").is_err());
-        for bad in [
-            "stable",
-            "1.37.1+k3s1",
-            "v1.37+k3s1",
-            "v1.37.1",
-            "v1.37.1+rke2r1",
-        ] {
-            let err = Config::parse(&format!("k3sVersion: {bad}\n")).unwrap_err();
-            assert!(err.to_string().contains("k3sVersion"), "{bad}: {err}");
+        let k3s = Config::parse("version: v1.37.1+k3s1\n").unwrap();
+        assert_eq!(k3s.version.as_deref(), Some("v1.37.1+k3s1"));
+        assert!(Config::parse("version: v1.37.1+rke2r1\n").is_err());
+        let rke2 = Config::parse("distribution: rke2\nversion: v1.37.1+rke2r1\n").unwrap();
+        assert_eq!(rke2.version.as_deref(), Some("v1.37.1+rke2r1"));
+        assert!(Config::parse("distribution: rke2\nversion: v1.37.1+k3s1\n").is_err());
+        let err = Config::parse("distribution: kubesolo\nversion: v1.37.1+k3s1\n").unwrap_err();
+        assert!(err.to_string().contains("remove version"), "{err}");
+        for bad in ["stable", "1.37.1+k3s1", "v1.37+k3s1", "v1.37.1"] {
+            let err = Config::parse(&format!("version: {bad}\n")).unwrap_err();
+            assert!(
+                err.to_string().contains("not a K3s release tag"),
+                "{bad}: {err}"
+            );
         }
-        assert!(Config::parse("distribution: rke2\nrke2Version: v1.37.1+k3s1\n").is_err());
+        // The keys of each distribution's release are gone.
+        assert!(Config::parse("k3sVersion: v1.37.1+k3s1\n").is_err());
     }
 
     #[test]

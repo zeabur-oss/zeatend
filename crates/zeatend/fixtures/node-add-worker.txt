@@ -10,7 +10,7 @@ On the new VM, as root, with this zeatend copied to /usr/local/bin:
 install -d -m 0700 /etc/zeatend
 (umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
 distribution: k3s
-k3sVersion: v1.37.1+k3s1
+version: v1.37.1+k3s1
 join:
   server: https://10.0.1.10:6443
   role: worker

@@ -217,7 +217,12 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
         memory(rancher, facts, &mut findings)?;
-        let cluster = cluster_plan(rancher, config.version(), &facts.arch, &mut findings)?;
+        let cluster = cluster_plan(
+            rancher,
+            config.version.as_deref(),
+            &facts.arch,
+            &mut findings,
+        )?;
         let mut files = rancher.server_files(&cluster::Options {
             tls_san: config.host.tls_san.clone(),
             tuning,
@@ -473,7 +478,7 @@ mod tests {
     #[test]
     fn rke2_brings_canal_and_another_release_is_checked_against_its_own_list() {
         let plan = plan(
-            &config("distribution: rke2\nrke2Version: v1.37.1+rke2r1\n"),
+            &config("distribution: rke2\nversion: v1.37.1+rke2r1\n"),
             &facts(),
         )
         .unwrap();

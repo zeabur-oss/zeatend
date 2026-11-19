@@ -226,11 +226,8 @@ impl Choices {
     pub(crate) fn config(&self) -> Config {
         let mut config = self.config.clone();
         config.distribution = self.distribution;
-        if self.distribution != Distribution::K3s {
-            config.k3s_version = None;
-        }
-        if self.distribution != Distribution::Rke2 {
-            config.rke2_version = None;
+        if self.distribution != self.config.distribution {
+            config.version = None;
         }
         config
             .disable
