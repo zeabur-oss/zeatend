@@ -32,6 +32,8 @@ host:
 
 K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安裝 Kubernetes 1.37。KubeSolo 還沒有 1.37 版，所以 KubeSolo `v1.3.0` 安裝的是 Kubernetes 1.36.6。
 
+K3s 和 RKE2 照上游的預設，部署自帶的元件，例如 Traefik。要改用自己安裝的版本，就用 `disable` 關掉，例如 `disable: [traefik, metrics-server]`。`local-storage` 會關掉 K3s 的 local-path 儲存類別。KubeSolo 沒有這些元件。元件如果在之前安裝時關掉了，就會維持關閉。
+
 - `zeatend plan` 顯示 `apply` 會安裝哪些東西，並執行主機檢查；加上 `--json` 會以 JSON 輸出計畫。
 - `zeatend apply` 負責安裝，或讓現有的安裝符合設定檔。重複執行也沒有問題。
 - `zeatend uninstall` 移除 K3s、RKE2 或 KubeSolo，以及 zeatend 寫入的檔案。它會先列出要移除和保留的項目，並詢問是否繼續（`--yes` 可以略過詢問）。除非加上 `--delete-volumes`，磁碟區都會保留。

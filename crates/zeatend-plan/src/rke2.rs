@@ -14,6 +14,7 @@ use crate::cluster::{
     AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, disable_list,
     yaml_list,
 };
+use crate::config::Component;
 use crate::tuning::HostTuning;
 
 /// Where the tarball installs.
@@ -65,14 +66,31 @@ fn config(options: &Options) -> String {
     out.push_str(
         "profile: cis\n\
          write-kubeconfig-mode: \"0600\"\n\
-         # No packaged ingress; ServiceLB gives the one you install ports 80 and 443.\n\
-         ingress-controller: none\n\
          enable-servicelb: true\n\
          audit-policy-file: /etc/rancher/rke2/audit-policy.yaml\n",
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     out.push_str(&control_plane_requests());
-    disable_list(&mut out, &[], &options.disable);
+    // RKE2 takes Traefik off with `ingress-controller`, not with `disable`.
+    let traefik = Component::Traefik.name();
+    if options.off.contains(&Component::Traefik) || options.disable.iter().any(|i| i == traefik) {
+        out.push_str("ingress-controller: none\n");
+    }
+    let off: Vec<&str> = options
+        .off
+        .iter()
+        .filter_map(|c| match c {
+            Component::MetricsServer => Some("rke2-metrics-server"),
+            Component::Traefik | Component::LocalStorage => None,
+        })
+        .collect();
+    let kept: Vec<String> = options
+        .disable
+        .iter()
+        .filter(|i| *i != traefik)
+        .cloned()
+        .collect();
+    disable_list(&mut out, &off, &kept);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -105,6 +123,7 @@ mod tests {
             tls_san,
             tuning: tuning(),
             own_network: false,
+            off: Vec::new(),
             disable: Vec::new(),
         }
     }
@@ -183,7 +202,8 @@ mod tests {
                 .iter()
                 .all(|f| !f.path.starts_with(MANIFESTS_DIR))
         );
-        assert!(config(&options(Vec::new())).contains("ingress-controller: none\n"));
+        // RKE2's default ingress controller, Traefik, runs.
+        assert!(!config(&options(Vec::new())).contains("ingress-controller"));
     }
 
     #[test]
@@ -217,5 +237,29 @@ mod tests {
                 .any(|a| a.as_str().unwrap().starts_with("kube-reserved="))
         );
         assert!(agent.get("control-plane-resource-requests").is_none());
+    }
+
+    #[test]
+    fn the_configuration_turns_off_the_components_it_names() {
+        let config = |off: Vec<Component>, disable: Vec<String>| -> serde_json::Value {
+            serde_saphyr::from_str(&config(&Options {
+                off,
+                disable,
+                ..options(Vec::new())
+            }))
+            .unwrap()
+        };
+        let off = config(
+            vec![Component::Traefik, Component::MetricsServer],
+            Vec::new(),
+        );
+        assert_eq!(off["ingress-controller"], "none");
+        assert_eq!(off["disable"], serde_json::json!(["rke2-metrics-server"]));
+        // An earlier install with `ingress-controller: none` keeps it.
+        let kept = crate::cluster::disabled_components("ingress-controller: none\n");
+        assert_eq!(kept, ["traefik"]);
+        let earlier = config(Vec::new(), kept);
+        assert_eq!(earlier["ingress-controller"], "none");
+        assert!(earlier.get("disable").is_none());
     }
 }

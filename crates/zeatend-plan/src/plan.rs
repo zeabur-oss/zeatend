@@ -242,6 +242,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tls_san: config.host.tls_san.clone(),
             tuning,
             own_network: rancher == Rancher::K3s && facts.k3s_own_network,
+            off: config.disable.clone(),
             disable: facts.disabled_components.clone(),
         });
         files.push(rancher.node_name_file(&node_name));

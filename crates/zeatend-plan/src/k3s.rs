@@ -133,10 +133,9 @@ fn config(options: &Options) -> String {
            - terminated-pod-gc-threshold=1000\n"
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
-    // Traefik comes from the Zeabur catalog, which needs a newer chart with the Gateway API
-    // provider, so the packaged one is off. The packaged local-path stays as the default storage
-    // class. ServiceLB stays and gives an ingress ports 80 and 443.
-    disable_list(&mut out, &["traefik"], &options.disable);
+    // ServiceLB stays and gives an ingress ports 80 and 443.
+    let off: Vec<&str> = options.off.iter().map(|c| c.name()).collect();
+    disable_list(&mut out, &off, &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -260,6 +259,7 @@ mod tests {
             tls_san: vec!["k8s.example.com".to_owned()],
             tuning: tuning(MemoryTier::Small),
             own_network: false,
+            off: Vec::new(),
             disable: Vec::new(),
         }
     }
@@ -292,10 +292,8 @@ mod tests {
         ] {
             assert!(apiserver.contains(&json!(arg)), "{arg}");
         }
-        let disable = config["disable"].as_array().unwrap();
-        assert!(disable.contains(&json!("traefik")));
-        assert!(!disable.contains(&json!("local-storage")));
-        assert!(!disable.contains(&json!("servicelb")));
+        // K3s's own defaults: Traefik, metrics-server, local-path and ServiceLB all run.
+        assert!(config.get("disable").is_none());
         assert_eq!(config["tls-san"], json!(["k8s.example.com"]));
     }
 
@@ -478,5 +476,19 @@ mod tests {
                     .all(|f| f.path != MEMORY_DROP_IN)
             );
         }
+    }
+
+    #[test]
+    fn the_configuration_turns_off_the_components_it_names() {
+        use crate::config::Component;
+        let config = config_of(&host_files(&Options {
+            off: vec![Component::Traefik, Component::MetricsServer],
+            disable: vec!["metrics-server".to_owned(), "servicelb".to_owned()],
+            ..options()
+        }));
+        assert_eq!(
+            config["disable"],
+            json!(["traefik", "metrics-server", "servicelb"])
+        );
     }
 }

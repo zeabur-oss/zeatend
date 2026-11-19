@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config::Component;
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
 
@@ -552,12 +553,15 @@ pub struct Options {
     /// K3s only: an earlier install turned flannel off for a network plugin of its own, which
     /// zeatend keeps.
     pub own_network: bool,
+    /// Packaged components that the configuration turns off.
+    pub off: Vec<Component>,
     /// Packaged components that an earlier install turned off, which zeatend keeps off. See
     /// [`disabled_components`].
     pub disable: Vec<String>,
 }
 
-/// The packaged components that the K3s or RKE2 configuration `config` turns off.
+/// The packaged components that the K3s or RKE2 configuration `config` turns off. RKE2's
+/// `ingress-controller: none` comes back as `traefik`.
 ///
 /// zeabur-installer turns off K3s's `local-storage` and the packaged metrics-server, as its own
 /// run in their place; turning them on again would give two of each.
@@ -566,7 +570,7 @@ pub fn disabled_components(config: &str) -> Vec<String> {
     let Ok(value) = serde_saphyr::from_str::<Value>(config) else {
         return Vec::new();
     };
-    match value.get("disable") {
+    let mut items: Vec<String> = match value.get("disable") {
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(Value::as_str)
@@ -574,7 +578,17 @@ pub fn disabled_components(config: &str) -> Vec<String> {
             .collect(),
         Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
         _ => Vec::new(),
+    };
+    let no_ingress = match value.get("ingress-controller") {
+        Some(Value::String(controller)) => controller == "none",
+        Some(Value::Array(controllers)) => controllers.iter().any(|c| c.as_str() == Some("none")),
+        _ => false,
+    };
+    let traefik = Component::Traefik.name();
+    if no_ingress && !items.iter().any(|item| item == traefik) {
+        items.push(traefik.to_owned());
     }
+    items
 }
 
 /// The `disable` list: `always`, then the components an earlier install turned off.
@@ -684,6 +698,7 @@ mod tests {
                 tls_san: Vec::new(),
                 tuning,
                 own_network: false,
+                off: Vec::new(),
                 disable: Vec::new(),
             };
             let file = rancher

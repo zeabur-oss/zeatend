@@ -26,9 +26,50 @@ pub struct Config {
     /// A K3s release other than the pinned one, such as `v1.37.1+k3s1`, checked the same way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub k3s_version: Option<String>,
+    /// Packaged components that K3s or RKE2 does not deploy. Absent: each deploys its own
+    /// defaults.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disable: Vec<Component>,
     /// Host settings.
     #[serde(default)]
     pub host: Host,
+}
+
+/// A packaged component of K3s or RKE2 that the configuration can turn off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Component {
+    /// The packaged ingress controller, Traefik on K3s and on RKE2 v1.36 and later.
+    Traefik,
+    /// metrics-server.
+    MetricsServer,
+    /// K3s's local-path provisioner and its default storage class. RKE2 has none.
+    LocalStorage,
+}
+
+impl Component {
+    /// The name in the configuration and in K3s's `disable` list.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Traefik => "traefik",
+            Self::MetricsServer => "metrics-server",
+            Self::LocalStorage => "local-storage",
+        }
+    }
+}
+
+/// Each component in `disable` must be one that `distribution` packages.
+fn check_disable(distribution: Distribution, disable: &[Component]) -> Result<(), PlanError> {
+    match distribution {
+        Distribution::KubeSolo if !disable.is_empty() => Err(PlanError::Config(
+            "disable: KubeSolo packages none of these components; remove disable".to_owned(),
+        )),
+        Distribution::Rke2 if disable.contains(&Component::LocalStorage) => Err(PlanError::Config(
+            "disable: local-storage is K3s's; RKE2 packages no storage class".to_owned(),
+        )),
+        Distribution::KubeSolo | Distribution::K3s | Distribution::Rke2 => Ok(()),
+    }
 }
 
 /// Host settings.
@@ -94,6 +135,10 @@ pub struct JoinConfig {
     pub rke2_version: Option<String>,
     /// A K3s release other than the pinned one; it must match the cluster's.
     pub k3s_version: Option<String>,
+    /// Servers only: the packaged components the cluster does not deploy. Give each server the
+    /// same list, as each one deploys the packaged components.
+    #[serde(default)]
+    pub disable: Vec<Component>,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
@@ -218,6 +263,12 @@ impl JoinConfig {
                 "host.tlsSan applies to servers; a worker serves no Kubernetes API".to_owned(),
             ));
         }
+        if join.role == Role::Worker && !self.disable.is_empty() {
+            return Err(PlanError::Config(
+                "disable applies to servers; a worker deploys no packaged components".to_owned(),
+            ));
+        }
+        check_disable(self.distribution, &self.disable)?;
         self.host.check()
     }
 
@@ -408,6 +459,7 @@ impl Config {
             self.rke2_version.as_ref(),
             self.k3s_version.as_ref(),
         )?;
+        check_disable(self.distribution, &self.disable)?;
         self.host.check()
     }
 
@@ -557,5 +609,27 @@ mod tests {
         assert!(check_token("K10abc::abcdef.0123456789abcdef", Role::Worker).is_err());
         assert!(check_token("K10", Role::Worker).is_err());
         check_token(&format!("K10{HASH}::server:x"), Role::Server).unwrap();
+    }
+
+    #[test]
+    fn disable_names_components_the_distribution_packages() {
+        let k3s = Config::parse("disable: [traefik, metrics-server, local-storage]\n").unwrap();
+        assert_eq!(
+            k3s.disable,
+            [
+                Component::Traefik,
+                Component::MetricsServer,
+                Component::LocalStorage
+            ]
+        );
+        assert!(Config::parse("disable: [servicelb]\n").is_err());
+        assert!(Config::parse("distribution: rke2\ndisable: [traefik, metrics-server]\n").is_ok());
+        assert!(Config::parse("distribution: rke2\ndisable: [local-storage]\n").is_err());
+        assert!(Config::parse("distribution: kubesolo\ndisable: [traefik]\n").is_err());
+        assert!(join("disable: [traefik]\n").is_err());
+        let server = Document::parse(&format!(
+            "distribution: rke2\njoin:\n  server: https://10.0.0.5:9345\n  role: server\n  token: K10{HASH}::server:x\ndisable: [traefik]\n"
+        ));
+        assert!(matches!(server, Ok(Document::Join(c)) if c.disable == [Component::Traefik]));
     }
 }

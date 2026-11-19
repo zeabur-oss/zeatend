@@ -133,6 +133,7 @@ impl Node {
                     tls_san: Vec::new(),
                     tuning,
                     own_network: false,
+                    off: Vec::new(),
                     disable: Vec::new(),
                 }),
                 Role::Worker => rancher.agent_files(&tuning),
