@@ -9,6 +9,7 @@ use crate::cluster::{self, Distribution, HostFile, Rancher};
 use crate::config::{Config, Role};
 use crate::finding::{Check, Finding};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
+use crate::precondition::Preconditions;
 use crate::record::{Changes, Record};
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
@@ -99,6 +100,8 @@ pub struct Plan {
     pub changes: Option<Changes>,
     /// What to read before applying.
     pub findings: Vec<Check>,
+    /// What the plan found on the host and what it writes; `apply` fills it.
+    pub preconditions: Preconditions,
 }
 
 /// The release a plan installs.
@@ -273,6 +276,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         host_files,
         changes,
         findings: findings.into_iter().map(Check::from).collect(),
+        preconditions: Preconditions::default(),
     })
 }
 

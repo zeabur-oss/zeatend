@@ -134,7 +134,7 @@ fn scenario(name: &str, lang: Lang, no_cjk: Option<NoCjk>) -> App {
             }
             if name == "install" || name == "done" {
                 let action = press(&mut app, KeyCode::Enter);
-                assert!(matches!(action, Some(Action::Install(_))), "{action:?}");
+                assert!(matches!(action, Some(Action::Install(..))), "{action:?}");
                 app.start(UNIT);
                 app.progress.tick(1_794_991_689 + 125);
                 for event in install_lines(app.lang, name == "done") {

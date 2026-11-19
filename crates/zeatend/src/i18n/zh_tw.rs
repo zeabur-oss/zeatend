@@ -2,6 +2,7 @@
 
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
+use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
@@ -10,6 +11,10 @@ pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在檢查主機",
     apply_stops: "修好失敗的項目之前，apply 不會繼續執行。",
     host_not_ready: "主機還沒準備好，修好失敗的項目後再執行一次 apply",
+    not_plan: |path, reason| {
+        format!("沒有做任何變更：{path} 不是 `zeatend plan --json` 輸出的計畫（{reason}）")
+    },
+    stale,
     doctor_needs_root: "用 root 身分執行 doctor（加上 sudo），檢查需要讀取叢集的檔案和憑證",
     no_config_installer,
     no_config_defaults,
@@ -125,6 +130,8 @@ const SCREENS: Screens = Screens {
     needs_systemd: "這台主機沒有使用 systemd，無法開啟畫面。請寫好 /etc/zeatend/config.yaml，\
                     再執行 sudo zeatend apply --foreground",
     joins: |path| format!("{path} 會讓這台主機加入叢集，請執行 sudo zeatend apply"),
+    review_changed: "確認畫面之後，這台主機有了變化，所以沒有開始安裝。請重新開啟 zeatend，\
+                     看看新的計畫。",
 };
 
 const DONE: &str = "完成";
@@ -194,6 +201,23 @@ fn joined(j: &Joined<'_>) -> String {
         "{} 已經以{role}的身分加入叢集。在伺服器上列出節點：\n  {} get nodes -o wide",
         j.node, j.kubectl
     )
+}
+
+fn stale(stale: &Stale) -> String {
+    let why = match stale {
+        Stale::Writes => {
+            "設定檔、這台主機或 zeatend 有了變化，現在 apply 要做的事和檔案裡的計畫不一樣"
+                .to_owned()
+        }
+        Stale::File(path) => format!("產生計畫之後，{path} 被改過了"),
+        Stale::Release { reviewed, now } => format!(
+            "產生計畫時安裝的版本是 {}，現在是 {}",
+            reviewed.as_deref().unwrap_or("（沒有）"),
+            now.as_deref().unwrap_or("（沒有）")
+        ),
+        Stale::Record => "產生計畫之後，安裝紀錄有了變化".to_owned(),
+    };
+    format!("沒有做任何變更：{why}。請重新執行 `zeatend plan --json`，看過新的計畫再套用。")
 }
 
 const fn status(status: Status) -> &'static str {

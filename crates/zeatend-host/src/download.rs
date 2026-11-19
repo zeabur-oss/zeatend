@@ -470,6 +470,12 @@ pub fn is_cached(path: &Path, expected: &str) -> bool {
     sha256_file(path).is_ok_and(|actual| actual == expected)
 }
 
+/// The SHA-256 of `bytes`.
+#[must_use]
+pub fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
 /// The SHA-256 of a file.
 ///
 /// # Errors

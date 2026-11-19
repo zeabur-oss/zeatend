@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use unicode_width::UnicodeWidthStr as _;
 use zeatend_plan::cluster::Distribution;
 use zeatend_plan::finding::{Finding, Status, Topic};
+use zeatend_plan::precondition::Stale;
 
 /// A language zeatend has messages for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +163,10 @@ pub(crate) struct Messages {
     pub(crate) apply_stops: &'static str,
     /// The error of `apply` when a check failed.
     pub(crate) host_not_ready: &'static str,
+    /// `apply --plan` with a file, at the path, that is not a plan, and why.
+    pub(crate) not_plan: fn(&str, &str) -> String,
+    /// `apply --plan` with a plan that no longer holds.
+    pub(crate) stale: fn(&Stale) -> String,
     /// `doctor` without root, which cannot read the cluster's files.
     pub(crate) doctor_needs_root: &'static str,
     /// `apply` found no configuration file and takes the settings zeabur-installer wrote: the
@@ -353,6 +358,8 @@ pub(crate) struct Screens {
     pub(crate) needs_systemd: &'static str,
     /// The configuration file joins a cluster, which the screens do not do.
     pub(crate) joins: fn(&str) -> String,
+    /// The plan made when the install starts is not the one the Review screen showed.
+    pub(crate) review_changed: &'static str,
 }
 
 /// A screen of the install screens.
@@ -637,6 +644,17 @@ mod tests {
                 let stop = if lang == Lang::En { ". " } else { "。" };
                 assert!(text.contains(stop) && text.ends_with(stop.trim()), "{text}");
             }
+        }
+    }
+
+    #[test]
+    fn the_stale_and_review_changed_texts_end_with_a_full_stop() {
+        let stale = Stale::File("/etc/rancher/k3s/config.yaml".to_owned());
+        for lang in Lang::ALL {
+            let messages = lang.messages();
+            let stop = if lang == Lang::En { "." } else { "。" };
+            assert!((messages.stale)(&stale).ends_with(stop), "{lang:?}");
+            assert!(messages.screens.review_changed.ends_with(stop), "{lang:?}");
         }
     }
 

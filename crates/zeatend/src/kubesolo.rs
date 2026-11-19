@@ -14,10 +14,12 @@ use zeatend_plan::kubesolo::{
     ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
 };
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
+use zeatend_plan::precondition::Preconditions;
 use zeatend_plan::record::Record;
 
 use crate::apply::{
-    changed_files, check_host, owe_restart, restart_owed, restarted, show_checks, write_record,
+    changed_files, check_host, check_reviewed, owe_restart, preconditions, restart_owed, restarted,
+    show_checks, write_record,
 };
 use crate::{InstallError, output, render};
 
@@ -30,7 +32,7 @@ const fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
 }
 
 /// The plan, with the install record read from the host.
-async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
+pub(crate) async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
     let mut facts = facts::read().await?;
     facts.record = crate::installer::read_record(config.distribution).await?;
     if facts.record.is_some() {
@@ -43,6 +45,13 @@ async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
         changes.set_host_files(changed);
         changes.restart |= outdated || restart_owed(STATE_DIR);
     }
+    plan.preconditions = preconditions(
+        &plan.host_files,
+        Path::new(BINARY),
+        plan.facts.record.as_ref(),
+        &Record::new(plan.distribution, plan.release.version()),
+    )
+    .await?;
     Ok(plan)
 }
 
@@ -69,9 +78,15 @@ pub(crate) fn kubectl() -> Kubectl {
     Kubectl::new(KUBECTL, ADMIN_KUBECONFIG)
 }
 
-pub(crate) async fn apply(config: &Config) -> Result<(), InstallError> {
+/// Installs `KubeSolo`. With `reviewed`, the preconditions of a reviewed plan, it stops unless the
+/// plan made now still meets them.
+pub(crate) async fn apply(
+    config: &Config,
+    reviewed: Option<&Preconditions>,
+) -> Result<(), InstallError> {
     let plan = make_plan(config).await?;
     output::line(render::plan(&plan).trim_end());
+    check_reviewed(reviewed, &plan.preconditions)?;
     check_host(Node::KubeSolo, config.host.require_encrypted_disk).await?;
 
     let restarted = install_kubesolo(&plan).await?;

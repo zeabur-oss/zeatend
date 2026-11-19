@@ -35,7 +35,7 @@ K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安装 Kubernetes 1.37。Ku
 K3s 和 RKE2 按上游的默认设置，部署自带的组件，例如 Traefik。要改用自己安装的版本，就用 `disable` 关闭，例如 `disable: [traefik, metrics-server]`。`local-storage` 会关闭 K3s 的 local-path 存储类。KubeSolo 没有这些组件。由 zeabur-installer 安装的集群，`disable` 一开始就是 installer 关闭的那些组件。
 
 - `zeatend plan` 显示 `apply` 会安装哪些内容，并运行主机检查；加上 `--json` 会以 JSON 输出计划。
-- `zeatend apply` 负责安装，或让现有的安装与配置文件一致。重复运行也没有问题。
+- `zeatend apply` 负责安装，或让现有的安装与配置文件一致。重复运行也没有问题。`apply --plan <文件>` 会应用 `plan --json` 写入文件的计划；如果计划要写入的文件、安装的版本或安装记录在那之后发生了变化，就不会做任何更改。
 - `zeatend uninstall` 删除 K3s、RKE2 或 KubeSolo，以及 zeatend 写入的文件。它会先列出要删除和保留的内容，并询问是否继续（`--yes` 跳过询问）。除非加上 `--delete-volumes`，存储卷都会保留。
 
 在使用 systemd 的主机上，`apply` 会在临时单元 `zeatend-install-<id>.service` 中运行安装，并显示进度。SSH 连接断开后，安装会继续。再运行一次 `sudo zeatend apply` 就能接着查看：安装单元运行期间，`apply` 会从 journal 显示该单元的进度，不会另外开始新的安装。完整输出可以用 `journalctl -u 'zeatend-install-*'` 查看。`apply --foreground` 不创建单元，直接在当前的 zeatend 进程中运行安装，`apply --json` 则以 JSON 逐行输出进度。

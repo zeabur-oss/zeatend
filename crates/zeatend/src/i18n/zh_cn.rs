@@ -2,6 +2,7 @@
 
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
+use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
@@ -10,6 +11,10 @@ pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在检查主机",
     apply_stops: "修复失败的项目之前，apply 不会继续运行。",
     host_not_ready: "主机还没准备好，修复失败的项目后再运行一次 apply",
+    not_plan: |path, reason| {
+        format!("没有做任何更改：{path} 不是 `zeatend plan --json` 输出的计划（{reason}）")
+    },
+    stale,
     doctor_needs_root: "用 root 身份运行 doctor（加上 sudo），检查需要读取集群的文件和凭据",
     no_config_installer,
     no_config_defaults,
@@ -125,6 +130,8 @@ const SCREENS: Screens = Screens {
     needs_systemd: "这台主机没有使用 systemd，无法打开界面。请写好 /etc/zeatend/config.yaml，\
                     再运行 sudo zeatend apply --foreground",
     joins: |path| format!("{path} 会让这台主机加入集群，请运行 sudo zeatend apply"),
+    review_changed: "确认界面之后，这台主机发生了变化，所以没有开始安装。请重新打开 zeatend，\
+                     看看新的计划。",
 };
 
 const DONE: &str = "完成";
@@ -194,6 +201,23 @@ fn joined(j: &Joined<'_>) -> String {
         "{} 已经作为{role}加入集群。在服务器上列出节点：\n  {} get nodes -o wide",
         j.node, j.kubectl
     )
+}
+
+fn stale(stale: &Stale) -> String {
+    let why = match stale {
+        Stale::Writes => {
+            "配置文件、这台主机或 zeatend 发生了变化，现在 apply 要做的事和文件里的计划不一样"
+                .to_owned()
+        }
+        Stale::File(path) => format!("生成计划之后，{path} 被改过了"),
+        Stale::Release { reviewed, now } => format!(
+            "生成计划时安装的版本是 {}，现在是 {}",
+            reviewed.as_deref().unwrap_or("（没有）"),
+            now.as_deref().unwrap_or("（没有）")
+        ),
+        Stale::Record => "生成计划之后，安装记录发生了变化".to_owned(),
+    };
+    format!("没有做任何更改：{why}。请重新运行 `zeatend plan --json`，看过新的计划再应用。")
 }
 
 const fn status(status: Status) -> &'static str {
