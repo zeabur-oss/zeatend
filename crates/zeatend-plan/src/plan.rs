@@ -6,10 +6,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
-use crate::config::Config;
+use crate::config::{Config, Role};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::record::{Changes, Record};
 use crate::tuning::{HostTuning, MemoryTier};
+use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, kubesolo, node_name};
 
 /// The label and field manager on everything zeatend creates.
@@ -35,6 +36,9 @@ pub struct Facts {
     /// What an earlier `apply` or `join` recorded on the host.
     #[serde(skip)]
     pub record: Option<Record>,
+    /// The Kubernetes version the cluster's API server reports, when the cluster answers.
+    #[serde(skip)]
+    pub kubernetes: Option<Kubernetes>,
     /// `kernel.apparmor_restrict_unprivileged_unconfined` is 1; see
     /// [`cluster::apparmor_profile`].
     #[serde(skip)]
@@ -109,6 +113,15 @@ impl Release {
         match self {
             Self::Cluster(cluster) => &cluster.version,
             Self::KubeSolo(solo) => &solo.version,
+        }
+    }
+
+    /// The Kubernetes version it runs: from a K3s or RKE2 tag, or the minor `KubeSolo` ships.
+    #[must_use]
+    pub fn kubernetes(&self) -> Option<Kubernetes> {
+        match self {
+            Self::Cluster(cluster) => Kubernetes::parse(&cluster.version),
+            Self::KubeSolo(solo) => Kubernetes::parse(&solo.kubernetes),
         }
     }
 }
@@ -206,7 +219,8 @@ impl From<pins::Asset> for Download {
 /// # Errors
 ///
 /// When a newer zeatend applied, the architecture has no release, the node name cannot be used,
-/// or a first install of K3s or RKE2 does not fit in the host's memory.
+/// a first install of K3s or RKE2 does not fit in the host's memory, or the plan would downgrade
+/// the release or skip a Kubernetes minor version (see [`upgrade`]).
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
     let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
@@ -257,6 +271,14 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         (Release::KubeSolo(solo), files)
     };
     host_files.extend(facts.apparmor_profile());
+    upgrade::check_release(
+        facts.record.as_ref(),
+        config.distribution,
+        release.version(),
+    )?;
+    if let Some(planned) = release.kubernetes() {
+        upgrade::check_kubernetes(facts.kubernetes, planned, Role::Server, config.distribution)?;
+    }
     let changes = facts
         .record
         .as_ref()
@@ -406,6 +428,7 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.5".to_owned()],
             record: None,
+            kubernetes: None,
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
         }

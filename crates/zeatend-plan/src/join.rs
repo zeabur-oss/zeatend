@@ -12,6 +12,7 @@ use crate::cluster::{self, HostFile, PortUse, Rancher};
 use crate::config::{JoinConfig, Role};
 use crate::plan::{ClusterPlan, Facts, Warning, cluster_plan, warning};
 use crate::tuning::{HostTuning, MemoryTier};
+use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, node_name};
 
 /// Connections timed to the server's join port.
@@ -343,7 +344,8 @@ fn standing_warnings(distribution: Rancher, role: Role, token_pinned: bool) -> V
 /// # Errors
 ///
 /// When a newer zeatend applied, the architecture has no release, K3s is asked for a second
-/// server, or the node name cannot be used.
+/// server, the node name cannot be used, or the plan would downgrade the release, skip a
+/// Kubernetes minor version or run a worker newer than the API server (see [`crate::upgrade`]).
 pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanError> {
     facts.facts.check_zeatend_version()?;
     let join = &config.join;
@@ -361,6 +363,20 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &facts.facts.arch,
         &mut warnings,
     )?;
+
+    upgrade::check_release(
+        facts.facts.record.as_ref(),
+        distribution.into(),
+        &cluster.version,
+    )?;
+    if let Some(planned) = Kubernetes::parse(&cluster.version) {
+        upgrade::check_kubernetes(
+            facts.facts.kubernetes,
+            planned,
+            join.role,
+            distribution.into(),
+        )?;
+    }
 
     let tuning = HostTuning::new(distribution.into(), MemoryTier::of(facts.facts.memory_mib));
     let (mut host_files, unit) = match join.role {
@@ -456,6 +472,7 @@ mod tests {
                 memory_mib: 4096,
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
                 record: None,
+                kubernetes: None,
                 apparmor_restricts_unconfined: false,
                 k3s_own_network: false,
             },

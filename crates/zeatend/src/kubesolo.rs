@@ -35,6 +35,9 @@ fn release(plan: &Plan) -> Result<&KubeSoloPlan, InstallError> {
 async fn make_plan(config: &Config) -> Result<Plan, InstallError> {
     let mut facts = facts::read().await?;
     facts.record = read_record(Path::new(STATE_DIR))?;
+    if facts.record.is_some() {
+        facts.kubernetes = crate::apply::running_kubernetes(&kubectl()).await;
+    }
     let mut plan = plan::plan(config, &facts)?;
     let outdated = binary_outdated(Path::new(BINARY), &release(&plan)?.version).await;
     let changed = changed_files(plan.host_files.iter());
