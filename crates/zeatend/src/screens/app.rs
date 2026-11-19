@@ -208,11 +208,18 @@ impl Choices {
         }
     }
 
-    /// The configuration the choices make. The API certificate keeps the names it had and adds
-    /// the address, unless it is the host's own, and the DNS name.
+    /// The configuration the choices make. A release override of another distribution goes. The
+    /// API certificate keeps the names it had and adds the address, unless it is the host's own,
+    /// and the DNS name.
     pub(crate) fn config(&self) -> Config {
         let mut config = self.config.clone();
         config.distribution = self.distribution;
+        if self.distribution != Distribution::K3s {
+            config.k3s_version = None;
+        }
+        if self.distribution != Distribution::Rke2 {
+            config.rke2_version = None;
+        }
         let address = self.value(FieldKind::Address);
         let extra = [
             (!self.host.addresses.iter().any(|a| a == address)).then_some(address),
@@ -230,6 +237,7 @@ impl Choices {
 
     fn review(&self) -> Result<Review, String> {
         let config = self.config();
+        config.check().map_err(|e| e.to_string())?;
         let plan = plan::plan(&config, &self.host.facts).map_err(|e| e.to_string())?;
         Ok(Review {
             release: format!("{} {}", config.distribution.title(), plan.release.version()),
