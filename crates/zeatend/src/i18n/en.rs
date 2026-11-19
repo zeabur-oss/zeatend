@@ -146,8 +146,6 @@ const SCREENS: Screens = Screens {
     needs_systemd: "this host does not run systemd, which the screens need. Write \
                     /etc/zeatend/config.yaml and run sudo zeatend apply --foreground",
     joins: |path| format!("{path} joins this host to a cluster. Run sudo zeatend apply"),
-    review_changed: "this host changed after the Review screen, so the install did not start. \
-                     Open zeatend again to see the new plan.",
 };
 
 const DONE: &str = "Done";

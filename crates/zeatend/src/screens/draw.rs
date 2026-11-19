@@ -475,7 +475,7 @@ fn draw_review(frame: &mut Frame<'_>, pen: &Pen<'_>, choices: &Choices, area: Re
             w.review_node,
             ok.map_or_else(
                 || choices.value(FieldKind::Node).to_owned(),
-                |r| r.node_name.clone(),
+                |r| r.plan.node_name.clone(),
             ),
             Style::new(),
         ),

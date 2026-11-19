@@ -16,8 +16,10 @@ use crate::unit;
 /// What the event loop does after a key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Action {
+    /// Make the plan of this configuration for the Review screen.
+    Plan(Box<Config>),
     /// Write this configuration and start the install of the plan the Review screen showed.
-    Install(Box<Config>, Review),
+    Install(Box<Config>, Box<Review>),
     /// Close the screens before the install starts.
     Quit,
     /// Close the screens while the install goes on.
@@ -103,21 +105,21 @@ impl Field {
     }
 }
 
-/// What the Review screen shows from the plan.
+/// The plan the Review screen shows, which the install starts with unchanged.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Review {
     /// The distribution and its release, such as `K3s v1.37.2+k3s1`.
     pub(crate) release: String,
-    /// The node's name.
-    pub(crate) node_name: String,
+    /// The plan, with what it found on the host.
+    pub(crate) plan: plan::Plan,
 }
 
 impl Review {
-    /// What the Review screen shows of `plan`, made from `config`.
-    pub(crate) fn of(config: &Config, plan: &plan::Plan) -> Self {
+    /// The review of `plan`, made from `config`.
+    pub(crate) fn new(config: &Config, plan: plan::Plan) -> Self {
         Self {
             release: format!("{} {}", config.distribution.title(), plan.release.version()),
-            node_name: plan.node_name.clone(),
+            plan,
         }
     }
 }
@@ -246,13 +248,6 @@ impl Choices {
         let node = self.value(FieldKind::Node);
         config.host.node_name = (!node.is_empty()).then(|| node.to_owned());
         config
-    }
-
-    fn review(&self) -> Result<Review, String> {
-        let config = self.config();
-        config.check().map_err(|e| e.to_string())?;
-        let plan = plan::plan(&config, &self.host.facts).map_err(|e| e.to_string())?;
-        Ok(Review::of(&config, &plan))
     }
 }
 
@@ -434,7 +429,7 @@ impl App {
         }
         match self.screen {
             Screen::Server => self.on_server_key(key.code),
-            Screen::Access => self.on_access_key(key.code),
+            Screen::Access => return self.on_access_key(key.code),
             Screen::Review => return self.on_review_key(key.code),
             Screen::Install => {
                 if key.code == KeyCode::Enter && self.progress.end.is_some() {
@@ -496,10 +491,8 @@ impl App {
         clippy::wildcard_enum_match_arm,
         reason = "a key the screen does not use does nothing"
     )]
-    fn on_access_key(&mut self, code: KeyCode) {
-        let Some(choices) = &mut self.choices else {
-            return;
-        };
+    fn on_access_key(&mut self, code: KeyCode) -> Option<Action> {
+        let choices = self.choices.as_mut()?;
         let count = choices.fields.len();
         match code {
             KeyCode::Tab | KeyCode::Down => choices.focus = (choices.focus + 1) % count,
@@ -514,8 +507,7 @@ impl App {
                         .position(|f| f.kind == kind)
                         .unwrap_or(0);
                 } else {
-                    choices.review = Some(choices.review());
-                    self.screen = Screen::Review;
+                    return Some(Action::Plan(Box::new(choices.config())));
                 }
             }
             _ => {
@@ -524,6 +516,7 @@ impl App {
                 }
             }
         }
+        None
     }
 
     #[expect(
@@ -536,12 +529,23 @@ impl App {
             KeyCode::Esc => self.screen = Screen::Access,
             KeyCode::Enter => {
                 if let Some(Ok(review)) = &choices.review {
-                    return Some(Action::Install(Box::new(choices.config()), review.clone()));
+                    return Some(Action::Install(
+                        Box::new(choices.config()),
+                        Box::new(review.clone()),
+                    ));
                 }
             }
             _ => {}
         }
         None
+    }
+
+    /// The Review screen, showing `review`, or why there is no plan.
+    pub(crate) fn reviewed(&mut self, review: Result<Review, String>) {
+        if let Some(choices) = &mut self.choices {
+            choices.review = Some(review);
+            self.screen = Screen::Review;
+        }
     }
 
     /// The Install screen, following `unit`.

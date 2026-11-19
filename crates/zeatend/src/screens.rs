@@ -133,6 +133,7 @@ async fn event_loop(
                 };
                 match app.on_key(key) {
                     None => {}
+                    Some(Action::Plan(choices)) => app.reviewed(review(&choices).await),
                     Some(Action::Install(choices, review)) => {
                         match install(config, &choices, &review, app.lang).await {
                             Ok(unit) => {
@@ -191,19 +192,24 @@ fn follow(unit: String, tx: UnboundedSender<Option<String>>) {
     });
 }
 
+/// The plan of `config` made from this host, for the Review screen.
+async fn review(config: &Config) -> Result<Review, String> {
+    config.check().map_err(|e| e.to_string())?;
+    let plan = apply::install_plan(config)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(Review::new(config, plan))
+}
+
 /// Writes the configuration to `path` and starts the install unit, which reports in `lang` and
-/// applies the plan made now. It stops when that plan is not the one `review` showed.
+/// applies the plan `review` showed.
 async fn install(
     path: &Path,
     config: &Config,
     review: &Review,
     lang: Lang,
 ) -> Result<String, InstallError> {
-    let plan = apply::install_plan(config).await?;
-    if Review::of(config, &plan) != *review {
-        return Err(InstallError::ReviewChanged(lang));
-    }
-    let json = serde_json::to_string_pretty(&plan).map_err(|e| InstallError::Serialize {
+    let json = serde_json::to_string_pretty(&review.plan).map_err(|e| InstallError::Serialize {
         what: "plan",
         reason: e.to_string(),
     })?;
@@ -241,6 +247,8 @@ fn finish(app: &App, action: &Action) -> ExitCode {
             output::err(&format!("error: {error}"));
             ExitCode::FAILURE
         }
-        (Action::Quit | Action::Install(..) | Action::Close, _) => ExitCode::from(130),
+        (Action::Quit | Action::Plan(_) | Action::Install(..) | Action::Close, _) => {
+            ExitCode::from(130)
+        }
     }
 }

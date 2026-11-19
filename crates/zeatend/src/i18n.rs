@@ -358,8 +358,6 @@ pub(crate) struct Screens {
     pub(crate) needs_systemd: &'static str,
     /// The configuration file joins a cluster, which the screens do not do.
     pub(crate) joins: fn(&str) -> String,
-    /// The plan made when the install starts is not the one the Review screen showed.
-    pub(crate) review_changed: &'static str,
 }
 
 /// A screen of the install screens.
@@ -648,13 +646,12 @@ mod tests {
     }
 
     #[test]
-    fn the_stale_and_review_changed_texts_end_with_a_full_stop() {
+    fn the_stale_texts_end_with_a_full_stop() {
         let stale = Stale::File("/etc/rancher/k3s/config.yaml".to_owned());
         for lang in Lang::ALL {
             let messages = lang.messages();
             let stop = if lang == Lang::En { "." } else { "。" };
             assert!((messages.stale)(&stale).ends_with(stop), "{lang:?}");
-            assert!(messages.screens.review_changed.ends_with(stop), "{lang:?}");
         }
     }
 
