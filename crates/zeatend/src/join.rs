@@ -52,6 +52,9 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
     };
     let mut facts = facts::read().await?;
     facts.record = apply::read_record(Path::new(apply::STATE_DIR))?;
+    if facts.record.is_some() {
+        facts.kubernetes = apply::running_kubernetes(&own_kubectl(distribution)).await;
+    }
     Ok(JoinFacts {
         facts,
         rtt_us,

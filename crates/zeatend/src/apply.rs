@@ -14,6 +14,7 @@ use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
+use zeatend_plan::upgrade::Kubernetes;
 
 use crate::{InstallError, i18n, output, render};
 
@@ -126,10 +127,19 @@ pub(crate) async fn run(config: &Config) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// The plan, with the install record read from the host.
+/// The Kubernetes version the API server behind `kubectl` reports; `None` when it does not answer.
+pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> {
+    let version = kubectl.raw("/version").await.ok()?;
+    Kubernetes::parse(version.get("gitVersion")?.as_str()?)
+}
+
+/// The plan, with the install record and the running Kubernetes version read from the host.
 async fn make_plan(config: &Config, rancher: Rancher) -> Result<Plan, InstallError> {
     let mut facts = facts::read().await?;
     facts.record = read_record(Path::new(STATE_DIR))?;
+    if facts.record.is_some() {
+        facts.kubernetes = running_kubernetes(&Kubectl::admin(rancher)).await;
+    }
     let mut plan = plan::plan(config, &facts)?;
     if plan.changes.is_some() {
         let mut pending = pending(&ClusterInstall {

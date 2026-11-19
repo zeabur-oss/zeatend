@@ -266,6 +266,7 @@ mod tests {
             memory_mib: 8192,
             node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
             record: None,
+            kubernetes: None,
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
         }

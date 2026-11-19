@@ -34,6 +34,7 @@ pub async fn read() -> Result<Facts, HostError> {
         })?,
         node_ips,
         record: None,
+        kubernetes: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
             .is_ok_and(|v| v.trim() == "1"),
         k3s_own_network: fs::read_to_string(k3s::CONFIG_FILE)
