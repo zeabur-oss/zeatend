@@ -628,16 +628,17 @@ pub(crate) fn manifest<T: Serialize>(
     header: &str,
     objects: &[T],
 ) -> Result<HostFile, PlanError> {
-    let mut content = header.to_owned();
-    for object in objects {
-        let json = serde_json::to_string(object).map_err(|e| PlanError::HostFile {
-            path: path.clone(),
-            reason: e.to_string(),
-        })?;
-        content.push_str("---\n");
-        content.push_str(&json);
-        content.push('\n');
-    }
+    let documents = objects
+        .iter()
+        .map(|object| {
+            let json = serde_json::to_string(object).map_err(|e| PlanError::HostFile {
+                path: path.clone(),
+                reason: e.to_string(),
+            })?;
+            Ok(format!("---\n{json}\n"))
+        })
+        .collect::<Result<String, PlanError>>()?;
+    let content = header.to_owned() + &documents;
     Ok(HostFile {
         path,
         mode: 0o600,
@@ -940,11 +941,8 @@ pub fn left_to_remove(
 pub(crate) const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n\
                       # Put your own settings in config.yaml.d/90-local.yaml instead of editing this file.\n";
 
-/// Metadata only, never bodies, so Secret values stay out of the log. Every request on Secrets
-/// is kept, reads included, with who made it. Of the rest, only changes by people and workloads
-/// are kept: reads, events, leases, token and access reviews, and requests from nodes and
-/// control-plane components are frequent and routine. The first rule that matches decides. The
-/// log keeps 30 days, 10 files of 100 MB, under `/var/lib/rancher/<name>/server/logs`.
+/// The audit policy: metadata only, so Secret values stay out of the log; routine reads and
+/// requests from nodes are not kept.
 pub(crate) const AUDIT_POLICY: &str = r#"# Written by zeatend.
 apiVersion: audit.k8s.io/v1
 kind: Policy
@@ -989,10 +987,7 @@ const KUBELET_ARGS: [&str; 3] = [
      TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
 ];
 
-/// The disk thresholds K3s sets in its kubelet configuration, which RKE2 runs as its agent
-/// (<https://github.com/k3s-io/k3s/blob/3acf8db8f2096ae0ea34f4b4ce1048e6472b89be/pkg/daemons/agent/agent.go#L192-L195>).
-/// The flag replaces the whole map, and a threshold it leaves out is zero
-/// (<https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/#hard-eviction-thresholds>).
+/// The disk thresholds K3s sets for the kubelet; the flag replaces the whole map, so they are kept.
 const DISK_EVICTION_HARD: &str = "nodefs.available<5%,imagefs.available<5%";
 
 /// RKE2's `control-plane-resource-requests` for etcd and kube-controller-manager.

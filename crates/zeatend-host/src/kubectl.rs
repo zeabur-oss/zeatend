@@ -1,7 +1,4 @@
 //! The cluster, through the `kubectl` and admin kubeconfig of K3s or RKE2.
-//!
-//! A subprocess rather than a client library: zeatend reads a few objects and waits on them, and
-//! `kubectl` is already on the host, matched to the server.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};

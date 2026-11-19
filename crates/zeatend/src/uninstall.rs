@@ -630,37 +630,33 @@ fn runtime_mounts(mounts: &str) -> Vec<String> {
 
 /// The mount points that hold volumes this uninstall moves or removes, each with its volume.
 ///
-/// The killall scripts of K3s and RKE2 unmount all under their data directory, and a rename does
-/// not move a mount point or go to another file system. So a stashed volume must not be a mount
-/// point, have one in it, or be on one between it and its stash. With `delete_volumes`, no volume
-/// may be a mount point or have one in it, else its data stays on that file system.
+/// A rename does not move a mount point, so a stashed volume must not be, hold or sit under one.
 fn volume_mounts(
     mounts: &str,
     volumes: &[Volume],
     delete_volumes: bool,
 ) -> Vec<(String, &'static str)> {
-    let mut found = Vec::new();
-    for volume in volumes {
-        if volume.stash.is_none() && !delete_volumes {
-            continue;
-        }
-        let mut points = mounts_under(mounts, volume.path);
-        if let Some(stash) = volume.stash {
-            let top = Path::new(stash).parent();
-            let all = mount_points(mounts);
-            points.extend(
-                Path::new(volume.path)
-                    .ancestors()
-                    .skip(1)
-                    .take_while(|dir| Some(*dir) != top)
-                    .filter_map(|dir| dir.to_str())
-                    .filter(|dir| all.iter().any(|m| m == dir))
-                    .map(str::to_owned),
-            );
-        }
-        found.extend(points.into_iter().map(|m| (m, volume.path)));
-    }
-    found
+    let all = mount_points(mounts);
+    volumes
+        .iter()
+        .filter(|volume| volume.stash.is_some() || delete_volumes)
+        .flat_map(|volume| {
+            let mut points = mounts_under(mounts, volume.path);
+            if let Some(stash) = volume.stash {
+                let top = Path::new(stash).parent();
+                points.extend(
+                    Path::new(volume.path)
+                        .ancestors()
+                        .skip(1)
+                        .take_while(|dir| Some(*dir) != top)
+                        .filter_map(|dir| dir.to_str())
+                        .filter(|dir| all.iter().any(|m| m == dir))
+                        .map(str::to_owned),
+                );
+            }
+            points.into_iter().map(|m| (m, volume.path))
+        })
+        .collect()
 }
 
 /// The mount points in `mounts`, as in `/proc/mounts`.
@@ -1029,7 +1025,15 @@ mod tests {
         for path in [apply::STATE_DIR, kubesolo::STATE_DIR] {
             assert!(leftovers.remove.contains(&Remove::Tree(path.to_owned())));
         }
-        assert_eq!(leftovers.volumes.len(), 4);
+        let paths: Vec<&str> = leftovers.volumes.iter().map(|v| v.path).collect();
+        for path in [
+            K3S_LOCAL_PATH,
+            KUBESOLO_LOCAL_PATH,
+            ZEABUR_STORAGE,
+            LONGHORN,
+        ] {
+            assert!(paths.contains(&path));
+        }
         let first_empty_dir = leftovers
             .remove
             .iter()
