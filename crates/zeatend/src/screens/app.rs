@@ -222,7 +222,7 @@ impl Choices {
         }
         config
             .disable
-            .retain(|c| self.distribution.turns_off(*c).is_some());
+            .retain(|c| self.distribution.packaged(*c).is_some());
         let address = self.value(FieldKind::Address);
         let extra = [
             (!self.host.addresses.iter().any(|a| a == address)).then_some(address),

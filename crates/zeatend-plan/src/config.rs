@@ -66,7 +66,7 @@ impl Component {
 fn check_disable(distribution: Distribution, disable: &[Component]) -> Result<(), PlanError> {
     disable
         .iter()
-        .find(|c| distribution.turns_off(**c).is_none())
+        .find(|c| distribution.packaged(**c).is_none())
         .map_or(Ok(()), |component| {
             Err(PlanError::Config(format!(
                 "disable: {} packages no {}; remove it",

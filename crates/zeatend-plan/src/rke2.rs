@@ -208,7 +208,7 @@ mod tests {
             ..options(Vec::new())
         }))
         .unwrap();
-        assert_eq!(parsed["ingress-controller"], "none");
+        assert_eq!(parsed["ingress-controller"], serde_json::json!(["none"]));
         assert_eq!(
             parsed["disable"],
             serde_json::json!(["rke2-metrics-server"])

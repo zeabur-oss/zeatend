@@ -154,7 +154,10 @@ async fn wait_removed(
                 .await;
             addons.is_ok_and(|addons| {
                 charts.is_ok_and(|charts| {
-                    cluster::left_to_remove(rancher, disable, &addons, &charts).is_empty()
+                    cluster::left_to_remove(rancher, disable, &addons, &charts, |file| {
+                        Path::new(file).exists()
+                    })
+                    .is_empty()
                 })
             })
         },

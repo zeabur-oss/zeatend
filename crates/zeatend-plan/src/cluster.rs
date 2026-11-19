@@ -51,17 +51,27 @@ impl Distribution {
         }
     }
 
-    /// How the distribution turns `component` off; `None` when it does not package it.
+    /// How the distribution packages `component`; `None` when it does not package it.
     #[must_use]
-    pub const fn turns_off(self, component: Component) -> Option<TurnOff> {
-        match (self, component) {
-            (Self::K3s, Component::Traefik) => Some(TurnOff::Disable("traefik")),
-            (Self::K3s, Component::MetricsServer) => Some(TurnOff::Disable("metrics-server")),
-            (Self::K3s, Component::LocalStorage) => Some(TurnOff::Disable("local-storage")),
-            (Self::Rke2, Component::Traefik) => Some(TurnOff::NoIngressController),
-            (Self::Rke2, Component::MetricsServer) => Some(TurnOff::Disable("rke2-metrics-server")),
-            (Self::Rke2, Component::LocalStorage) | (Self::KubeSolo, _) => None,
-        }
+    pub const fn packaged(self, component: Component) -> Option<Packaged> {
+        let (manifest, setting, item) = match (self, component) {
+            (Self::K3s, Component::Traefik) => ("traefik", "disable", "traefik"),
+            (Self::K3s, Component::MetricsServer) => {
+                ("metrics-server", "disable", "metrics-server")
+            }
+            (Self::K3s, Component::LocalStorage) => ("local-storage", "disable", "local-storage"),
+            // RKE2 chooses its ingress controller, and `traefik` is not an item of `disable`.
+            (Self::Rke2, Component::Traefik) => ("rke2-traefik", "ingress-controller", "none"),
+            (Self::Rke2, Component::MetricsServer) => {
+                ("rke2-metrics-server", "disable", "rke2-metrics-server")
+            }
+            (Self::Rke2, Component::LocalStorage) | (Self::KubeSolo, _) => return None,
+        };
+        Some(Packaged {
+            manifest,
+            setting,
+            item,
+        })
     }
 
     /// K3s or RKE2, which take workers and share a server; `None` for `KubeSolo`.
@@ -563,13 +573,16 @@ pub struct HostFile {
     pub content: String,
 }
 
-/// How K3s or RKE2 turns a packaged component off.
+/// A component that K3s or RKE2 packages: the manifest the server deploys it from, and the item
+/// of a list setting in the server's configuration that turns it off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnOff {
-    /// An item of the `disable` list.
-    Disable(&'static str),
-    /// `ingress-controller: none`: RKE2 deploys no ingress controller.
-    NoIngressController,
+pub struct Packaged {
+    /// The manifest in the manifests directory, without `.yaml`; it names the Addon.
+    pub manifest: &'static str,
+    /// The list setting, such as `disable`.
+    pub setting: &'static str,
+    /// The item of `setting` that turns the component off.
+    pub item: &'static str,
 }
 
 /// Server settings from the configuration and the host.
@@ -601,7 +614,43 @@ pub fn disabled_components(
 ) -> Result<Vec<Component>, PlanError> {
     let value: Value =
         serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
-    let items: Vec<String> = match value.get("disable") {
+    let table: Vec<(Component, Packaged)> = Component::ALL
+        .into_iter()
+        .filter_map(|c| Some((c, distribution.packaged(c)?)))
+        .collect();
+    let mut off = Vec::new();
+    for setting in settings(&table) {
+        for item in list(value.get(setting)) {
+            let (component, _) = table
+                .iter()
+                .find(|(_, p)| p.setting == setting && p.item == item)
+                .ok_or_else(|| {
+                    PlanError::Config(format!("{setting}: zeatend has no component for {item}"))
+                })?;
+            off.push(*component);
+        }
+    }
+    Ok(Component::ALL
+        .into_iter()
+        .filter(|c| off.contains(c))
+        .collect())
+}
+
+/// The list settings of `table`, each once, in the order of the table.
+fn settings(table: &[(Component, Packaged)]) -> Vec<&'static str> {
+    let mut settings: Vec<&'static str> = Vec::new();
+    for (_, packaged) in table {
+        if !settings.contains(&packaged.setting) {
+            settings.push(packaged.setting);
+        }
+    }
+    settings
+}
+
+/// The items of a list setting, which a configuration writes as a list or a comma-separated
+/// string.
+fn list(value: Option<&Value>) -> Vec<String> {
+    let items: Vec<String> = match value {
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(Value::as_str)
@@ -610,71 +659,53 @@ pub fn disabled_components(
         Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
         _ => Vec::new(),
     };
-    let mut off = Vec::new();
-    for item in items.iter().filter(|item| !item.is_empty()) {
-        let component = Component::ALL
-            .into_iter()
-            .find(|c| {
-                matches!(distribution.turns_off(*c), Some(TurnOff::Disable(name)) if name == item)
-            })
-            .ok_or_else(|| PlanError::Config(format!("disable: zeatend cannot keep {item} off")))?;
-        off.push(component);
-    }
-    let none = |v: &Value| v.as_str() == Some("none");
-    if value
-        .get("ingress-controller")
-        .is_some_and(|v| none(v) || v.as_array().is_some_and(|a| a.iter().any(none)))
-    {
-        off.extend(
-            Component::ALL
-                .into_iter()
-                .filter(|c| distribution.turns_off(*c) == Some(TurnOff::NoIngressController)),
-        );
-    }
-    Ok(Component::ALL
-        .into_iter()
-        .filter(|c| off.contains(c))
-        .collect())
+    items.into_iter().filter(|item| !item.is_empty()).collect()
 }
 
 /// The settings that turn off the components in `disable`.
 pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[Component]) {
-    let mut items = Vec::new();
-    for component in disable {
-        match distribution.turns_off(*component) {
-            Some(TurnOff::Disable(item)) => items.push(item.to_owned()),
-            Some(TurnOff::NoIngressController) => out.push_str("ingress-controller: none\n"),
-            None => {}
-        }
+    let table: Vec<(Component, Packaged)> = disable
+        .iter()
+        .filter_map(|c| Some((*c, distribution.packaged(*c)?)))
+        .collect();
+    for setting in settings(&table) {
+        let items: Vec<String> = table
+            .iter()
+            .filter(|(_, p)| p.setting == setting)
+            .map(|(_, p)| p.item.to_owned())
+            .collect();
+        yaml_list(out, setting, &items);
     }
-    yaml_list(out, "disable", &items);
 }
 
 /// The objects that the server has not removed yet for the components in `disable`.
 ///
 /// The result has `addon/<name>` and `helmchart/<name>` items. `addons` and `charts` are the
-/// API's lists of the Addons and the `HelmCharts` in `kube-system`.
+/// API's lists of the Addons and the `HelmCharts` in `kube-system`; `exists` tells whether a file
+/// exists on the host.
 ///
 /// The server keeps an Addon for each manifest, with the checksum of the manifest, and applies a
-/// manifest only when its checksum changes. For a component that `disable` turns off, the server
-/// deletes the manifest's `HelmCharts`, which uninstalls them, and then the Addon. When the
-/// server restarts before the removal completes and `disable` turns the component on again, the
-/// Addon gets the checksum again while the uninstall deletes the `HelmChart`. The server then
-/// does not apply the manifest again, and the component does not come back.
+/// manifest only when its checksum changes. To turn a component off, K3s deletes the manifest,
+/// and RKE2 empties the manifest of an ingress controller. The server then deletes the
+/// `HelmCharts` that the manifest made, which uninstalls them, and K3s also deletes the Addon.
+///
+/// When the server restarts before the removal completes and `disable` turns the component on
+/// again, the Addon of a deleted manifest gets the checksum again while the uninstall deletes the
+/// `HelmChart`. The server then does not apply the manifest again, and the component does not
+/// come back. An Addon whose manifest exists has the checksum of the emptied manifest, which
+/// changes when the component is turned on again.
 #[must_use]
 pub fn left_to_remove(
     rancher: Rancher,
     disable: &[Component],
     addons: &Value,
     charts: &Value,
+    exists: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     let manifests = rancher.manifests_dir();
     let names: Vec<&str> = disable
         .iter()
-        .filter_map(|c| match Distribution::from(rancher).turns_off(*c)? {
-            TurnOff::Disable(item) => Some(item),
-            TurnOff::NoIngressController => Some("rke2-traefik"),
-        })
+        .filter_map(|c| Some(Distribution::from(rancher).packaged(*c)?.manifest))
         .collect();
     let items = |list: &'_ Value| -> Vec<Value> {
         list.get("items")
@@ -691,10 +722,11 @@ pub fn left_to_remove(
     };
     let addons = items(addons).into_iter().filter(|addon| {
         let source = text(addon, "/spec/source");
-        names.iter().any(|name| {
-            source == format!("{manifests}/{name}.yaml")
-                || source.starts_with(&format!("{manifests}/{name}/"))
-        })
+        !exists(&source)
+            && names.iter().any(|name| {
+                source == format!("{manifests}/{name}.yaml")
+                    || source.starts_with(&format!("{manifests}/{name}/"))
+            })
     });
     let charts = items(charts).into_iter().filter(|chart| {
         let owner = text(
@@ -939,7 +971,7 @@ mod tests {
         for distribution in [Distribution::K3s, Distribution::Rke2] {
             let packaged: Vec<Component> = Component::ALL
                 .into_iter()
-                .filter(|c| distribution.turns_off(*c).is_some())
+                .filter(|c| distribution.packaged(*c).is_some())
                 .collect();
             let mut config = String::new();
             turn_off(&mut config, distribution, &packaged);
@@ -977,6 +1009,10 @@ mod tests {
         );
         assert!(disabled_components(Distribution::K3s, "disable: [servicelb]\n").is_err());
         assert!(disabled_components(Distribution::Rke2, "disable: [traefik]\n").is_err());
+        // zeatend writes the setting again and would deploy Traefik instead.
+        assert!(
+            disabled_components(Distribution::Rke2, "ingress-controller: ingress-nginx\n").is_err()
+        );
     }
 
     #[test]
@@ -1001,7 +1037,7 @@ mod tests {
         ]});
         let disable = [Component::Traefik, Component::MetricsServer];
         assert_eq!(
-            left_to_remove(Rancher::K3s, &disable, &addons, &charts),
+            left_to_remove(Rancher::K3s, &disable, &addons, &charts, |_| false),
             [
                 "addon/traefik",
                 "addon/metrics-apiservice",
@@ -1009,12 +1045,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            left_to_remove(Rancher::K3s, &[], &addons, &charts),
+            left_to_remove(Rancher::K3s, &[], &addons, &charts, |_| false),
             Vec::<String>::new()
         );
         let none = serde_json::json!({"items": []});
         assert_eq!(
-            left_to_remove(Rancher::K3s, &disable, &none, &charts),
+            left_to_remove(Rancher::K3s, &disable, &none, &charts, |_| false),
             ["helmchart/traefik-crd"]
         );
 
@@ -1024,8 +1060,21 @@ mod tests {
             addon("rke2-traefik-crd", &format!("{rke2}/rke2-traefik-crd.yaml")),
         ]});
         assert_eq!(
-            left_to_remove(Rancher::Rke2, &[Component::Traefik], &addons, &none),
-            ["addon/rke2-traefik"]
+            left_to_remove(Rancher::Rke2, &[Component::Traefik], &addons, &none, |_| {
+                true
+            }),
+            Vec::<String>::new()
+        );
+        let charts = serde_json::json!({"items": [chart("rke2-traefik", "rke2-traefik")]});
+        assert_eq!(
+            left_to_remove(
+                Rancher::Rke2,
+                &[Component::Traefik],
+                &addons,
+                &charts,
+                |_| true
+            ),
+            ["helmchart/rke2-traefik"]
         );
     }
 }
