@@ -50,4 +50,5 @@ Shared with [Zeabur Builder](https://github.com/zeabur-oss/builder) and
   the only cryptographic backend, no advisories.
 - Cargo does not pick a release younger than seven days (`.cargo/config.toml`).
 
-Documentation is written in English.
+Documentation is written in English. `README.md` also has `README.zh-TW.md` and
+`README.zh-CN.md`: change all three in the same pull request.

@@ -3,6 +3,8 @@
   <img alt="Zeatend: turn one Linux server into a cluster that’s ready to use. zeatend apply turns a Linux server into a running Kubernetes cluster." src="docs/images/cover-light.avif">
 </picture>
 
+English | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
+
 # Zeabur Zeatend
 
 A Kubernetes cluster manager in the spirit of [k3sup](https://github.com/alexellis/k3sup). It
