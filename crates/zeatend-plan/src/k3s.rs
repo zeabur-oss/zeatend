@@ -181,15 +181,9 @@ plugins:
 /// The port K3s's packaged metrics-server serves on (`--secure-port`).
 const METRICS_SERVER_PORT: u16 = 10250;
 
-/// What RKE2's `cis` profile creates in the system namespaces and K3s does not: a policy that
-/// lets in only the namespace's own pods, `CoreDNS` reachable from every pod, Traefik's entry
-/// points reachable unless `disable` turns Traefik off, and default service accounts that mount no
-/// token. K3s applies the file on every start, as RKE2 re-creates its own.
-///
-/// The API server reaches metrics-server from the server's host, which is not a pod of
-/// `kube-system`. On another node, kube-router refuses that traffic, so `kubectl top` and the
-/// Horizontal Pod Autoscaler stop. metrics-server's port is open, as `CoreDNS`'s is: metrics-server
-/// asks the API server to authenticate and authorise each request.
+/// What RKE2's `cis` profile creates in the system namespaces and K3s does not: network policies
+/// and default service accounts that mount no token. The metrics-server port stays open, as the
+/// API server reaches it from the host.
 fn system_objects(disable: &[Component]) -> Result<HostFile, PlanError> {
     let same_namespace = NetworkPolicyIngressRule {
         from: Some(vec![NetworkPolicyPeer {

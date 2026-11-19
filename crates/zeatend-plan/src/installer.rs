@@ -131,11 +131,10 @@ pub fn keep_disabled(mut document: Document, rancher_config: &str) -> Result<Doc
 
 /// Copies the values of `keys` that `from` has into `to`.
 fn keep(to: &mut Map<String, Value>, from: &Value, keys: &[&str]) {
-    for key in keys {
-        if let Some(value) = from.get(key) {
-            to.insert((*key).to_owned(), value.clone());
-        }
-    }
+    to.extend(
+        keys.iter()
+            .filter_map(|key| Some(((*key).to_owned(), from.get(key)?.clone()))),
+    );
 }
 
 #[cfg(test)]

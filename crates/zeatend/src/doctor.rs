@@ -225,11 +225,8 @@ fn readiness(nodes: &[v1::Node], command: impl Fn(&str) -> String) -> Finding {
     }
 }
 
-/// The memory each kubelet keeps from pods: the node's capacity less its allocatable memory,
-/// which is `system-reserved`, `kube-reserved` and the hard eviction threshold together
-/// (<https://kubernetes.io/docs/tasks/administer-cluster/reserve-compute-resources/#node-allocatable>).
-/// A kubelet that keeps less than the OS needs at idle has no reserves, at most its default
-/// threshold of 100 MiB, and pods may take the memory the OS and the kubelet need.
+/// The memory each kubelet keeps from pods: capacity less allocatable. Too little leaves pods able
+/// to take the memory the OS needs.
 fn reserves(nodes: &[v1::Node], distribution: Distribution) -> Vec<Finding> {
     let mut found = Vec::new();
     let mut low = Vec::new();
@@ -289,10 +286,8 @@ fn bytes(quantity: &str) -> Option<u64> {
     number.parse::<u64>().ok()?.checked_mul(1 << shift)
 }
 
-/// Whether kube-apiserver writes Secrets encrypted, from the encryption configuration K3s or RKE2
-/// writes: the first provider for `secrets` is the one it writes with, and `identity` writes
-/// them as they are
-/// (<https://kubernetes.io/docs/tasks/administer-cluster/encrypt-data/#understanding-the-encryption-at-rest-configuration>).
+/// Whether kube-apiserver writes Secrets encrypted, from the first `secrets` provider of the
+/// encryption configuration.
 fn secrets_encryption(distribution: Rancher, config: Option<&str>) -> Finding {
     let config: EncryptionConfiguration = config
         .and_then(|c| serde_json::from_str(c).ok())
