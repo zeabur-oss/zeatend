@@ -6,9 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::{Distribution, HostFile, PortUse};
-use crate::installer::KUBESOLO_WEBHOOK_SCRIPT;
+use crate::cluster::{APPARMOR_PROFILE, Distribution, HostFile, PortUse};
+use crate::installer::{self, KUBESOLO_WEBHOOK_SCRIPT};
 use crate::tuning::HostTuning;
+use crate::uninstall::{Remove, parent};
 use crate::{PlanError, ports};
 
 /// Its configuration file.
@@ -17,6 +18,8 @@ pub const CONFIG_FILE: &str = "/etc/kubesolo/config.yaml";
 pub const UNIT_FILE: &str = "/etc/systemd/system/kubesolo.service";
 /// The kubeconfig zeatend writes for the person's own computer.
 pub const KUBECONFIG: &str = "/etc/zeatend/kubeconfig.yaml";
+/// The CNI configuration `KubeSolo` writes on every start.
+pub const CNI_CONFIG: &str = "/etc/cni/net.d/10-bridge.conflist";
 
 /// The least memory `KubeSolo` is planned for.
 ///
@@ -105,6 +108,32 @@ pub struct ApiServer {
     /// Extra API server certificate names.
     #[serde(rename = "extraSANs", default)]
     pub extra_sans: Vec<String>,
+}
+
+/// What `KubeSolo`, zeatend and zeabur-installer leave on the host for `uninstall` to remove.
+/// zeatend installs `KubeSolo` without its installer, so this is all of it.
+#[must_use]
+pub fn footprint() -> Vec<Remove> {
+    let layout = Distribution::KubeSolo.layout();
+    let trees = [
+        UNIT_FILE,
+        layout.binary,
+        CONFIG_FILE,
+        CNI_CONFIG,
+        layout.data_dir,
+        layout.state_dir,
+        KUBECONFIG,
+        APPARMOR_PROFILE,
+        installer::KUBESOLO_STATE_DIR,
+        installer::KUBESOLO_KUBECONFIG,
+        KUBESOLO_WEBHOOK_SCRIPT,
+    ];
+    let dirs = [CONFIG_FILE, KUBECONFIG, installer::KUBESOLO_KUBECONFIG];
+    trees
+        .map(|path| Remove::Tree(path.to_owned()))
+        .into_iter()
+        .chain(dirs.map(|path| Remove::EmptyDir(parent(path))))
+        .collect()
 }
 
 /// The configuration file and the unit, in the order to write them.

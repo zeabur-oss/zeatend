@@ -24,8 +24,8 @@ use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::{Check, Finding, Kept, Status};
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::tuning::OS_IDLE_MIB;
+use zeatend_plan::uninstall::{self, Node};
 
-use crate::uninstall::{self, Node};
 use crate::{InstallError, i18n, join, load, output};
 
 /// The exit code when the checks cannot run.
@@ -48,7 +48,7 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
         }
     };
     let root = Path::new("/");
-    let checks = match uninstall::detect(|path| uninstall::exists(root, path))
+    let checks = match uninstall::detect(|path| crate::uninstall::exists(root, path))
         .first()
         .copied()
     {

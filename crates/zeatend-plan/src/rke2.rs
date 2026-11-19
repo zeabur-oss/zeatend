@@ -14,13 +14,18 @@ use crate::PlanError;
 use crate::cluster::{
     AUDIT_POLICY, Distribution, HostFile, Options, Rancher, RancherConfig, control_plane_requests,
 };
+use crate::config::Role;
 use crate::tuning::HostTuning;
+use crate::uninstall::Remove;
 
 /// Where the tarball installs.
 pub const PREFIX: &str = "/usr/local";
 
 /// Where RKE2's deploy controller reads the manifests it applies on a server.
 pub const MANIFESTS_DIR: &str = "/var/lib/rancher/rke2/server/manifests";
+
+/// The audit policy of a server.
+const AUDIT_POLICY_FILE: &str = "/etc/rancher/rke2/audit-policy.yaml";
 
 const RKE2: Rancher = Rancher::Rke2;
 
@@ -34,12 +39,22 @@ pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
     Ok(vec![
         RKE2.sysctl(),
         HostFile {
-            path: format!("{dir}/audit-policy.yaml"),
+            path: AUDIT_POLICY_FILE.to_owned(),
             mode: 0o600,
             content: AUDIT_POLICY.to_owned(),
         },
         config(options).file(format!("{dir}/config.yaml"))?,
     ])
+}
+
+/// What an RKE2 node of `role` leaves on the host for `uninstall` to remove.
+#[must_use]
+pub fn footprint(role: Role, joined: bool) -> Vec<Remove> {
+    let mut paths = RKE2.footprint(role, joined);
+    if role == Role::Server {
+        paths.push(Remove::Tree(AUDIT_POLICY_FILE.to_owned()));
+    }
+    paths
 }
 
 /// The files of a worker: the kernel parameters and an agent `config.yaml` with the server's

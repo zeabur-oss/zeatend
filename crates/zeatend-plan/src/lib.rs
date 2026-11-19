@@ -16,6 +16,7 @@ pub mod record;
 pub mod rke2;
 pub mod token;
 pub mod tuning;
+pub mod uninstall;
 pub mod upgrade;
 
 /// Why a plan cannot be made.

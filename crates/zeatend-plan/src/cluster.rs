@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Component, Role};
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
+use crate::uninstall::{Remove, parent};
 use crate::{PlanError, ports};
 
 /// The Kubernetes distribution zeatend installs.
@@ -546,12 +547,17 @@ impl Rancher {
                 egress: None,
             }),
         };
-        let path = format!("{}/zeatend-servicelb-policy.yaml", self.manifests_dir());
+        let path = self.servicelb_policy_path();
         let header = format!(
             "# Written by zeatend; {} applies it on every start.\n",
             self.distribution().title()
         );
         manifest(path, &header, &[policy])
+    }
+
+    /// Where [`Self::servicelb_policy`] goes.
+    fn servicelb_policy_path(self) -> String {
+        format!("{}/zeatend-servicelb-policy.yaml", self.manifests_dir())
     }
 
     /// The files of a worker.
@@ -652,6 +658,36 @@ impl Rancher {
             "{}/config.yaml.d/10-join.yaml",
             self.distribution().layout().config_dir
         )
+    }
+
+    /// What zeatend and zeabur-installer leave on every node of this distribution, and on every
+    /// server. Each distribution's `footprint` adds its own files.
+    pub(crate) fn footprint(self, role: Role, joined: bool) -> Vec<Remove> {
+        let layout = self.distribution().layout();
+        let mut paths = vec![
+            layout.state_dir.to_owned(),
+            crate::installer::RANCHER_STATE_DIR.to_owned(),
+            self.paths().sysctl_file.to_owned(),
+            format!("{}/config.yaml", layout.config_dir),
+            self.node_name_path(),
+            self.node_ip_path(),
+            APPARMOR_PROFILE.to_owned(),
+        ];
+        if role == Role::Server {
+            paths.push(self.servicelb_policy_path());
+        }
+        if joined {
+            paths.extend([
+                self.join_path(),
+                self.paths().join_token_file.to_owned(),
+                crate::installer::join_token_file(self),
+            ]);
+        }
+        paths
+            .into_iter()
+            .map(Remove::Tree)
+            .chain([Remove::EmptyDir(parent(layout.state_dir))])
+            .collect()
     }
 }
 

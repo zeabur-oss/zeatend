@@ -28,8 +28,9 @@ use serde::{Deserialize, Serialize};
 use crate::cluster::{
     AUDIT_POLICY, Distribution, HostFile, Options, Rancher, RancherConfig, managed, manifest,
 };
-use crate::config::Component;
+use crate::config::{Component, Role};
 use crate::tuning::HostTuning;
+use crate::uninstall::{Remove, parent};
 use crate::{PlanError, ports};
 
 /// The binary; `install.sh` expects it here.
@@ -43,6 +44,12 @@ pub const CONFIG_FILE: &str = "/etc/rancher/k3s/config.yaml";
 /// The drop-in that sets `GOMEMLIMIT` for `k3s server`. `install.sh` writes the unit and its
 /// environment file again on every install, so the limit is in a drop-in of its own.
 pub const MEMORY_DROP_IN: &str = "/etc/systemd/system/k3s.service.d/zeatend-memory.conf";
+/// The audit policy of a server.
+const AUDIT_POLICY_FILE: &str = "/etc/rancher/k3s/audit-policy.yaml";
+/// The admission plugins' settings of a server.
+const ADMISSION_FILE: &str = "/etc/rancher/k3s/admission.yaml";
+/// The manifest of [`system_objects`].
+const SYSTEM_OBJECTS_FILE: &str = "/var/lib/rancher/k3s/server/manifests/zeabur-cis.yaml";
 
 const K3S: Rancher = Rancher::K3s;
 
@@ -52,16 +59,15 @@ const K3S: Rancher = Rancher::K3s;
 ///
 /// When a file cannot be serialised.
 pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
-    let dir = K3S.distribution().layout().config_dir;
     let files = vec![
         K3S.sysctl(),
         HostFile {
-            path: format!("{dir}/audit-policy.yaml"),
+            path: AUDIT_POLICY_FILE.to_owned(),
             mode: 0o600,
             content: AUDIT_POLICY.to_owned(),
         },
         HostFile {
-            path: format!("{dir}/admission.yaml"),
+            path: ADMISSION_FILE.to_owned(),
             mode: 0o600,
             content: ADMISSION.to_owned(),
         },
@@ -72,6 +78,26 @@ pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
         .into_iter()
         .chain(memory_drop_in(&options.tuning))
         .collect())
+}
+
+/// What a K3s node of `role` leaves on the host for `uninstall` to remove.
+#[must_use]
+pub fn footprint(role: Role, joined: bool) -> Vec<Remove> {
+    let mut paths = K3S.footprint(role, joined);
+    if role == Role::Server {
+        paths.extend(
+            [
+                AUDIT_POLICY_FILE,
+                ADMISSION_FILE,
+                SYSTEM_OBJECTS_FILE,
+                MEMORY_DROP_IN,
+                AUDIT_LOG_DIR,
+            ]
+            .map(|path| Remove::Tree(path.to_owned())),
+        );
+        paths.push(Remove::EmptyDir(parent(MEMORY_DROP_IN)));
+    }
+    paths
 }
 
 /// The unit drop-in with the `GOMEMLIMIT` of `tuning`, if it has one.
@@ -240,7 +266,7 @@ fn system_objects(disable: &[Component]) -> Result<HostFile, PlanError> {
             }),
     );
     manifest(
-        format!("{MANIFESTS_DIR}/zeabur-cis.yaml"),
+        SYSTEM_OBJECTS_FILE.to_owned(),
         "# Written by zeatend; K3s applies it on every start.\n",
         &objects,
     )
