@@ -443,7 +443,7 @@ pub(crate) fn finding(finding: &Finding) -> String {
         Finding::SecretsPlain { distribution } => format!(
             "the API server stores Secrets unencrypted; `sudo {} secrets-encrypt status` shows \
              the state",
-            distribution.id()
+            distribution.distribution().id()
         ),
         Finding::MemoryLow {
             have_mib,
@@ -467,7 +467,7 @@ pub(crate) fn finding(finding: &Finding) -> String {
         } => format!(
             "{} {version} is not supported by this zeatend release: its downloads are checked \
              only against the release's own checksum list.",
-            distribution.title()
+            distribution.distribution().title()
         ),
         Finding::ServerUnreachable { server, port } => format!(
             "Cannot connect to {server}. Check the address and that TCP {port} is open from this \

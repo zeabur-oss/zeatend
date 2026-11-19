@@ -17,7 +17,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::Component;
+use crate::config::{Component, Role};
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::{PlanError, ports};
@@ -43,8 +43,8 @@ impl Distribution {
     pub const fn id(self) -> &'static str {
         match self {
             Self::KubeSolo => "kubesolo",
-            Self::K3s => Rancher::K3s.id(),
-            Self::Rke2 => Rancher::Rke2.id(),
+            Self::K3s => "k3s",
+            Self::Rke2 => "rke2",
         }
     }
 
@@ -53,8 +53,18 @@ impl Distribution {
     pub const fn title(self) -> &'static str {
         match self {
             Self::KubeSolo => "KubeSolo",
-            Self::K3s => Rancher::K3s.title(),
-            Self::Rke2 => Rancher::Rke2.title(),
+            Self::K3s => "K3s",
+            Self::Rke2 => "RKE2",
+        }
+    }
+
+    /// Where it keeps its files.
+    #[must_use]
+    pub const fn layout(self) -> &'static Layout {
+        match self {
+            Self::KubeSolo => &KUBESOLO_LAYOUT,
+            Self::K3s => &K3S_LAYOUT,
+            Self::Rke2 => &RKE2_LAYOUT,
         }
     }
 
@@ -102,8 +112,8 @@ impl Distribution {
     pub const fn pinned_version(self) -> &'static str {
         match self {
             Self::KubeSolo => KUBESOLO.version,
-            Self::K3s => Rancher::K3s.pinned_version(),
-            Self::Rke2 => Rancher::Rke2.pinned_version(),
+            Self::K3s => K3S.version,
+            Self::Rke2 => RKE2.version,
         }
     }
 
@@ -112,8 +122,8 @@ impl Distribution {
     pub const fn kubernetes(self) -> &'static str {
         match self {
             Self::KubeSolo => KUBESOLO.kubernetes,
-            Self::K3s => Rancher::K3s.kubernetes(),
-            Self::Rke2 => Rancher::Rke2.kubernetes(),
+            Self::K3s => K3S.kubernetes,
+            Self::Rke2 => RKE2.kubernetes,
         }
     }
 }
@@ -171,15 +181,118 @@ pub enum Rancher {
     Rke2,
 }
 
-/// Where a distribution keeps its files.
+/// Where a distribution keeps its files and what it runs as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Layout {
+    /// The systemd unit of a server, or of `KubeSolo`.
+    pub server_unit: &'static str,
+    /// The systemd unit of a worker; `None` when the distribution takes no workers.
+    pub agent_unit: Option<&'static str>,
+    /// The distribution's binary.
+    pub binary: &'static str,
     /// Its configuration directory.
     pub config_dir: &'static str,
-    /// The cluster-admin kubeconfig, kept for emergencies.
-    pub admin_kubeconfig: &'static str,
+    /// The cluster's data, certificates and images on this host.
+    pub data_dir: &'static str,
+    /// zeatend's downloads and install record.
+    pub state_dir: &'static str,
     /// The `kubectl` that matches the server.
     pub kubectl: &'static str,
+    /// The cluster-admin kubeconfig, kept for emergencies.
+    pub admin_kubeconfig: &'static str,
+    /// The kubelet's client certificate, whose subject names the node.
+    pub kubelet_cert: &'static str,
+    /// The kubeconfig zeatend writes for the person's own computer; `None` when the admin
+    /// kubeconfig serves.
+    pub kubeconfig: Option<&'static str>,
+    /// The distribution's uninstall of a server; `None` when zeatend removes it itself.
+    pub server_uninstall: Option<&'static str>,
+    /// The distribution's uninstall of a worker.
+    pub agent_uninstall: Option<&'static str>,
+    /// Stops the distribution, its containers and their mounts.
+    pub killall: Option<&'static str>,
+    /// The volumes of the distribution's local-path provisioner.
+    pub local_path: Option<&'static str>,
+}
+
+impl Layout {
+    /// The systemd unit of a node with `role`. `KubeSolo` has servers only.
+    #[must_use]
+    pub const fn unit(&self, role: Role) -> &'static str {
+        match (role, self.agent_unit) {
+            (Role::Worker, Some(unit)) => unit,
+            _ => self.server_unit,
+        }
+    }
+
+    /// The distribution's uninstall of a node with `role`.
+    #[must_use]
+    pub const fn uninstall(&self, role: Role) -> Option<&'static str> {
+        match role {
+            Role::Server => self.server_uninstall,
+            Role::Worker => self.agent_uninstall,
+        }
+    }
+}
+
+const K3S_LAYOUT: Layout = Layout {
+    server_unit: "k3s",
+    agent_unit: Some("k3s-agent"),
+    binary: crate::k3s::BINARY,
+    config_dir: "/etc/rancher/k3s",
+    data_dir: "/var/lib/rancher/k3s",
+    state_dir: RANCHER_STATE_DIR,
+    kubectl: "/var/lib/rancher/k3s/data/current/bin/kubectl",
+    admin_kubeconfig: "/etc/rancher/k3s/k3s.yaml",
+    kubelet_cert: "/var/lib/rancher/k3s/agent/client-kubelet.crt",
+    kubeconfig: None,
+    server_uninstall: Some("/usr/local/bin/k3s-uninstall.sh"),
+    agent_uninstall: Some("/usr/local/bin/k3s-agent-uninstall.sh"),
+    killall: Some("/usr/local/bin/k3s-killall.sh"),
+    local_path: Some("/var/lib/rancher/k3s/storage"),
+};
+
+const RKE2_LAYOUT: Layout = Layout {
+    server_unit: "rke2-server",
+    agent_unit: Some("rke2-agent"),
+    binary: "/usr/local/bin/rke2",
+    config_dir: "/etc/rancher/rke2",
+    data_dir: "/var/lib/rancher/rke2",
+    state_dir: RANCHER_STATE_DIR,
+    kubectl: "/var/lib/rancher/rke2/bin/kubectl",
+    admin_kubeconfig: "/etc/rancher/rke2/rke2.yaml",
+    kubelet_cert: "/var/lib/rancher/rke2/agent/client-kubelet.crt",
+    kubeconfig: None,
+    // From RKE2's tarball, unpacked into `rke2::PREFIX`.
+    server_uninstall: Some("/usr/local/bin/rke2-uninstall.sh"),
+    agent_uninstall: Some("/usr/local/bin/rke2-uninstall.sh"),
+    killall: Some("/usr/local/bin/rke2-killall.sh"),
+    local_path: None,
+};
+
+const KUBESOLO_LAYOUT: Layout = Layout {
+    server_unit: "kubesolo",
+    agent_unit: None,
+    binary: "/usr/local/bin/kubesolo",
+    config_dir: "/etc/kubesolo",
+    data_dir: "/var/lib/kubesolo",
+    state_dir: "/var/lib/zeatend",
+    kubectl: "/var/lib/zeatend/bin/kubectl",
+    admin_kubeconfig: "/var/lib/kubesolo/pki/admin/admin.kubeconfig",
+    kubelet_cert: "/var/lib/kubesolo/pki/kubelet/kubelet.crt",
+    kubeconfig: Some(crate::kubesolo::KUBECONFIG),
+    server_uninstall: None,
+    agent_uninstall: None,
+    killall: None,
+    local_path: Some("/var/lib/kubesolo/local-path-storage"),
+};
+
+/// zeatend's downloads and install record on K3s and RKE2.
+const RANCHER_STATE_DIR: &str = "/var/lib/rancher/zeatend";
+
+/// The files only K3s and RKE2 have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RancherPaths {
     /// Archives the distribution imports into containerd on every start.
     pub images_dir: &'static str,
     /// The join token of a joining node, mode 0600.
@@ -188,8 +301,6 @@ pub struct Layout {
     pub server_token_file: &'static str,
     /// The kubelet's credentials on any node; a node may read its own Node object with them.
     pub kubelet_kubeconfig: &'static str,
-    /// The kubelet's client certificate, whose subject names the node.
-    pub kubelet_cert: &'static str,
     /// The server's certificates and keys. The distribution writes the certificates 0644; the
     /// CIS benchmark wants 0600.
     pub tls_dir: &'static str,
@@ -197,28 +308,20 @@ pub struct Layout {
     pub sysctl_file: &'static str,
 }
 
-const K3S_LAYOUT: Layout = Layout {
-    config_dir: "/etc/rancher/k3s",
-    admin_kubeconfig: "/etc/rancher/k3s/k3s.yaml",
-    kubectl: "/var/lib/rancher/k3s/data/current/bin/kubectl",
+const K3S_PATHS: RancherPaths = RancherPaths {
     images_dir: "/var/lib/rancher/k3s/agent/images",
     join_token_file: "/etc/rancher/k3s/zeatend-join-token",
     server_token_file: "/var/lib/rancher/k3s/server/token",
     kubelet_kubeconfig: "/var/lib/rancher/k3s/agent/kubelet.kubeconfig",
-    kubelet_cert: "/var/lib/rancher/k3s/agent/client-kubelet.crt",
     tls_dir: "/var/lib/rancher/k3s/server/tls",
     sysctl_file: "/etc/sysctl.d/60-k3s-cis.conf",
 };
 
-const RKE2_LAYOUT: Layout = Layout {
-    config_dir: "/etc/rancher/rke2",
-    admin_kubeconfig: "/etc/rancher/rke2/rke2.yaml",
-    kubectl: "/var/lib/rancher/rke2/bin/kubectl",
+const RKE2_PATHS: RancherPaths = RancherPaths {
     images_dir: "/var/lib/rancher/rke2/agent/images",
     join_token_file: "/etc/rancher/rke2/zeatend-join-token",
     server_token_file: "/var/lib/rancher/rke2/server/token",
     kubelet_kubeconfig: "/var/lib/rancher/rke2/agent/kubelet.kubeconfig",
-    kubelet_cert: "/var/lib/rancher/rke2/agent/client-kubelet.crt",
     tls_dir: "/var/lib/rancher/rke2/server/tls",
     sysctl_file: "/etc/sysctl.d/60-rke2-cis.conf",
 };
@@ -271,57 +374,30 @@ impl Rancher {
     /// Both, in the order an interface lists them.
     pub const ALL: [Self; 2] = [Self::K3s, Self::Rke2];
 
+    /// The same distribution.
+    #[must_use]
+    pub const fn distribution(self) -> Distribution {
+        match self {
+            Self::K3s => Distribution::K3s,
+            Self::Rke2 => Distribution::Rke2,
+        }
+    }
+
+    /// The files only K3s and RKE2 have.
+    #[must_use]
+    pub const fn paths(self) -> &'static RancherPaths {
+        match self {
+            Self::K3s => &K3S_PATHS,
+            Self::Rke2 => &RKE2_PATHS,
+        }
+    }
+
     /// The directory whose manifests the server's deploy controller applies.
     #[must_use]
     pub const fn manifests_dir(self) -> &'static str {
         match self {
             Self::K3s => crate::k3s::MANIFESTS_DIR,
             Self::Rke2 => crate::rke2::MANIFESTS_DIR,
-        }
-    }
-
-    /// Its name in configuration files.
-    #[must_use]
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::K3s => "k3s",
-            Self::Rke2 => "rke2",
-        }
-    }
-
-    /// Its name for people.
-    #[must_use]
-    pub const fn title(self) -> &'static str {
-        match self {
-            Self::K3s => "K3s",
-            Self::Rke2 => "RKE2",
-        }
-    }
-
-    /// Where it keeps its files.
-    #[must_use]
-    pub const fn layout(self) -> &'static Layout {
-        match self {
-            Self::K3s => &K3S_LAYOUT,
-            Self::Rke2 => &RKE2_LAYOUT,
-        }
-    }
-
-    /// The systemd unit of a server.
-    #[must_use]
-    pub const fn server_unit(self) -> &'static str {
-        match self {
-            Self::K3s => "k3s",
-            Self::Rke2 => "rke2-server",
-        }
-    }
-
-    /// The systemd unit of a worker.
-    #[must_use]
-    pub const fn agent_unit(self) -> &'static str {
-        match self {
-            Self::K3s => "k3s-agent",
-            Self::Rke2 => "rke2-agent",
         }
     }
 
@@ -339,24 +415,6 @@ impl Rancher {
     #[must_use]
     pub const fn takes_servers(self) -> bool {
         matches!(self, Self::Rke2)
-    }
-
-    /// The Kubernetes minor of the pinned release.
-    #[must_use]
-    pub const fn kubernetes(self) -> &'static str {
-        match self {
-            Self::K3s => K3S.kubernetes,
-            Self::Rke2 => RKE2.kubernetes,
-        }
-    }
-
-    /// The pinned release.
-    #[must_use]
-    pub const fn pinned_version(self) -> &'static str {
-        match self {
-            Self::K3s => K3S.version,
-            Self::Rke2 => RKE2.version,
-        }
     }
 
     /// The memory the kubelet keeps from pods on an RKE2 server for RKE2 (`kube-reserved`).
@@ -491,7 +549,7 @@ impl Rancher {
         let path = format!("{}/zeatend-servicelb-policy.yaml", self.manifests_dir());
         let header = format!(
             "# Written by zeatend; {} applies it on every start.\n",
-            self.title()
+            self.distribution().title()
         );
         manifest(path, &header, &[policy])
     }
@@ -513,12 +571,12 @@ impl Rancher {
     #[must_use]
     pub fn sysctl(self) -> HostFile {
         HostFile {
-            path: self.layout().sysctl_file.to_owned(),
+            path: self.paths().sysctl_file.to_owned(),
             mode: 0o644,
             content: format!(
                 "# Written by zeatend: the kernel parameters {} requires.\n\
                  vm.panic_on_oom=0\nvm.overcommit_memory=1\nkernel.panic=10\nkernel.panic_on_oops=1\n",
-                self.title()
+                self.distribution().title()
             ),
         }
     }
@@ -529,10 +587,9 @@ impl Rancher {
     ///
     /// When the file cannot be serialised.
     pub fn join_file(self, server: &str) -> Result<HostFile, PlanError> {
-        let layout = self.layout();
         RancherConfig {
             server: Some(server.to_owned()),
-            token_file: Some(layout.join_token_file),
+            token_file: Some(self.paths().join_token_file),
             ..RancherConfig::default()
         }
         .file(self.join_path())
@@ -557,7 +614,7 @@ impl Rancher {
     pub fn node_name_path(self) -> String {
         format!(
             "{}/config.yaml.d/15-node-name.yaml",
-            self.layout().config_dir
+            self.distribution().layout().config_dir
         )
     }
 
@@ -582,13 +639,19 @@ impl Rancher {
     /// Where [`Self::node_ip_file`] goes.
     #[must_use]
     pub fn node_ip_path(self) -> String {
-        format!("{}/config.yaml.d/20-node-ip.yaml", self.layout().config_dir)
+        format!(
+            "{}/config.yaml.d/20-node-ip.yaml",
+            self.distribution().layout().config_dir
+        )
     }
 
     /// Where [`Self::join_file`] goes.
     #[must_use]
     pub fn join_path(self) -> String {
-        format!("{}/config.yaml.d/10-join.yaml", self.layout().config_dir)
+        format!(
+            "{}/config.yaml.d/10-join.yaml",
+            self.distribution().layout().config_dir
+        )
     }
 }
 
@@ -1106,9 +1169,9 @@ mod tests {
             let join = d.join_file("https://10.0.0.5:6443").unwrap();
             let value: Value = serde_saphyr::from_str(&join.content).unwrap();
             assert_eq!(value["server"], "https://10.0.0.5:6443");
-            assert_eq!(value["token-file"], d.layout().join_token_file);
+            assert_eq!(value["token-file"], d.paths().join_token_file);
             assert_eq!(join.mode, 0o600);
-            assert!(join.path.starts_with(d.layout().config_dir));
+            assert!(join.path.starts_with(d.distribution().layout().config_dir));
             let ip = d
                 .node_ip_file(&["10.0.0.6".to_owned(), "fd00::6".to_owned()])
                 .unwrap()

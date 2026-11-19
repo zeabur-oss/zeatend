@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::{self, Kubectl};
-use zeatend_host::{facts, files, network, preflight, systemd};
+use zeatend_host::{facts, files, network, systemd};
 use zeatend_plan::cluster::Rancher;
 use zeatend_plan::config::{self, JoinConfig, Role};
 use zeatend_plan::finding::Status;
@@ -47,10 +47,7 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
         };
         ports.push((p, open));
     }
-    let unit = match config.join.role {
-        Role::Worker => distribution.agent_unit(),
-        Role::Server => distribution.server_unit(),
-    };
+    let unit = distribution.distribution().layout().unit(config.join.role);
     let mut facts = facts::read().await?;
     facts.record = crate::installer::read_record(distribution.into()).await?;
     if facts.record.is_some() {
@@ -72,7 +69,7 @@ async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallErr
     let distribution = plan.cluster.distribution;
     plan.preconditions = apply::preconditions(
         &plan.host_files,
-        &apply::release_binary(distribution),
+        Path::new(distribution.distribution().layout().binary),
         plan.facts.record.as_ref(),
         &Record::new(distribution.into(), &plan.cluster.version),
     )
@@ -80,18 +77,12 @@ async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallErr
     Ok((plan, token))
 }
 
-/// What the plan installs, for the preflight checks.
-const fn node(plan: &JoinPlan) -> preflight::Node {
-    match plan.role {
-        Role::Server => preflight::Node::Server(plan.cluster.distribution),
-        Role::Worker => preflight::Node::Agent(plan.cluster.distribution),
-    }
-}
-
 /// The node's own `kubectl`, with the kubelet's credentials, which an agent also has.
 pub(crate) fn own_kubectl(distribution: Rancher) -> Kubectl {
-    let layout = distribution.layout();
-    Kubectl::new(layout.kubectl, layout.kubelet_kubeconfig)
+    Kubectl::new(
+        distribution.distribution().layout().kubectl,
+        distribution.paths().kubelet_kubeconfig,
+    )
 }
 
 pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), InstallError> {
@@ -100,7 +91,13 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
         return crate::print_json(&plan);
     }
     output::line(render::join_plan(&plan).trim_end());
-    if apply::show_checks(node(&plan), config.host.require_encrypted_disk).await {
+    if apply::show_checks(
+        config.distribution,
+        plan.role,
+        config.host.require_encrypted_disk,
+    )
+    .await
+    {
         output::line(crate::i18n::messages().apply_stops);
     }
     Ok(())
@@ -118,12 +115,17 @@ pub(crate) async fn apply(
     if let Some(blocker) = plan.findings.iter().find(|c| c.status == Status::Fail) {
         return Err(InstallError::Blocked(blocker.finding.clone()));
     }
-    apply::check_host(node(&plan), config.host.require_encrypted_disk).await?;
+    apply::check_host(
+        config.distribution,
+        plan.role,
+        config.host.require_encrypted_disk,
+    )
+    .await?;
 
     let distribution = plan.cluster.distribution;
-    let layout = distribution.layout();
+    let layout = distribution.distribution().layout();
     let changed = files::write(
-        Path::new(layout.join_token_file),
+        Path::new(distribution.paths().join_token_file),
         0o600,
         format!("{token}\n").as_bytes(),
     )?;
@@ -145,7 +147,7 @@ pub(crate) async fn apply(
     )
     .await?;
     apply::write_record(
-        Path::new(apply::STATE_DIR),
+        Path::new(layout.state_dir),
         &Record::new(distribution.into(), &plan.cluster.version),
     )?;
 

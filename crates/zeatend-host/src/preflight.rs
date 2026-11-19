@@ -5,7 +5,8 @@ use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 
-use zeatend_plan::cluster::{PortUse, Rancher};
+use zeatend_plan::cluster::{Distribution, PortUse};
+use zeatend_plan::config::Role;
 use zeatend_plan::finding::{BusyPort, Check, Finding, Leftover};
 use zeatend_plan::kubesolo;
 
@@ -30,52 +31,22 @@ pub struct Options {
     /// Fail on a disk that is not encrypted.
     pub require_encrypted_disk: bool,
     /// What this host runs.
-    pub node: Node,
+    pub distribution: Distribution,
+    /// A server also listens on the API and join ports. `KubeSolo` is a server.
+    pub role: Role,
 }
 
-/// What a host runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Node {
-    /// A server, which also listens on the API and join ports.
-    Server(Rancher),
-    /// A worker.
-    Agent(Rancher),
-    /// `KubeSolo`, one node.
-    KubeSolo,
-}
-
-impl Node {
-    /// The distribution id, as the `OTHERS` list names it.
-    const fn kind(self) -> &'static str {
-        match self {
-            Self::Server(d) | Self::Agent(d) => d.id(),
-            Self::KubeSolo => "kubesolo",
-        }
-    }
-
-    const fn data_dir(self) -> &'static str {
-        match self {
-            Self::Server(_) | Self::Agent(_) => "/var/lib/rancher",
-            Self::KubeSolo => kubesolo::DATA_DIR,
-        }
-    }
-
-    /// Where the node keeps secrets or data: the root file system, the data directory, and the
-    /// configuration with its tokens and kubeconfigs.
-    fn secret_paths(self) -> Vec<&'static str> {
-        let mut paths = vec!["/", self.data_dir()];
-        match self {
-            Self::Server(d) | Self::Agent(d) => paths.push(d.layout().config_dir),
-            Self::KubeSolo => {
-                paths.extend(
-                    [kubesolo::CONFIG_FILE, kubesolo::KUBECONFIG]
-                        .iter()
-                        .filter_map(|f| Path::new(f).parent()?.to_str()),
-                );
-            }
-        }
-        paths
-    }
+/// Where a node of `distribution` keeps secrets or data: the root file system, the data
+/// directory, and the configuration with its tokens and kubeconfigs.
+fn secret_paths(distribution: Distribution) -> Vec<&'static str> {
+    let layout = distribution.layout();
+    let mut paths = vec!["/", layout.data_dir, layout.config_dir];
+    paths.extend(
+        layout
+            .kubeconfig
+            .and_then(|f| Path::new(f).parent()?.to_str()),
+    );
+    paths
 }
 
 /// Files left by Kubernetes distributions, and the id of the distribution that owns each, which
@@ -88,8 +59,16 @@ const OTHERS: [(&str, &str, Option<&str>); 9] = [
     ("/snap/bin/microk8s", "MicroK8s", None),
     ("/usr/local/bin/rke2", "RKE2", Some("rke2")),
     ("/etc/rancher/rke2", "RKE2", Some("rke2")),
-    (kubesolo::BINARY, "KubeSolo", Some("kubesolo")),
-    (kubesolo::DATA_DIR, "KubeSolo", Some("kubesolo")),
+    (
+        Distribution::KubeSolo.layout().binary,
+        "KubeSolo",
+        Some("kubesolo"),
+    ),
+    (
+        Distribution::KubeSolo.layout().data_dir,
+        "KubeSolo",
+        Some("kubesolo"),
+    ),
 ];
 const DISK_NEEDED_GIB: u64 = 10;
 const DISK_ROOMY_GIB: u64 = 30;
@@ -103,16 +82,16 @@ pub async fn run(options: Options) -> Vec<Check> {
         time_sync().await,
         swap(),
         crash_kernel(),
-        other_distributions(options.node),
+        other_distributions(options.distribution),
     ];
-    if options.node == Node::KubeSolo {
+    if options.distribution == Distribution::KubeSolo {
         checks.push(docker().await);
     }
     if !options.cluster_running {
-        checks.push(ports(options.node));
+        checks.push(ports(options.distribution, options.role));
     }
-    checks.push(disk_space(options.node.data_dir()).await);
-    checks.push(encryption(options.node, options.require_encrypted_disk).await);
+    checks.push(disk_space(options.distribution.layout().data_dir).await);
+    checks.push(encryption(options.distribution, options.require_encrypted_disk).await);
     checks
 }
 
@@ -189,10 +168,10 @@ fn crash_reserve(raw: Option<&str>) -> Finding {
     }
 }
 
-fn other_distributions(node: Node) -> Check {
+fn other_distributions(distribution: Distribution) -> Check {
     let found: Vec<Leftover> = OTHERS
         .iter()
-        .filter(|(_, _, own)| own.is_none_or(|own| own != node.kind()))
+        .filter(|(_, _, own)| own.is_none_or(|own| own != distribution.id()))
         .filter(|(path, ..)| Path::new(path).exists())
         .map(|&(path, distribution, _)| Leftover { distribution, path })
         .collect();
@@ -244,16 +223,16 @@ fn docker_check(found: Vec<String>, iptables: &str) -> Finding {
 
 /// The TCP ports a node needs free.
 #[must_use]
-fn needed_ports(node: Node) -> Vec<(u16, PortUse)> {
-    match node {
-        Node::Server(d) => d.node_ports(true),
-        Node::Agent(d) => d.node_ports(false),
-        Node::KubeSolo => kubesolo::ports(),
-    }
+fn needed_ports(distribution: Distribution, role: Role) -> Vec<(u16, PortUse)> {
+    distribution
+        .rancher()
+        .map_or_else(kubesolo::ports, |rancher| {
+            rancher.node_ports(role == Role::Server)
+        })
 }
 
-fn ports(node: Node) -> Check {
-    let ports = needed_ports(node);
+fn ports(distribution: Distribution, role: Role) -> Check {
+    let ports = needed_ports(distribution, role);
     let busy: Vec<BusyPort> = ports
         .iter()
         .filter(|(port, _)| TcpListener::bind(("0.0.0.0", *port)).is_err())
@@ -269,16 +248,8 @@ fn ports(node: Node) -> Check {
     .into()
 }
 
-fn existing_or_var_lib(dir: &str) -> &str {
-    if Path::new(dir).exists() {
-        dir
-    } else {
-        "/var/lib"
-    }
-}
-
 async fn disk_space(data_dir: &str) -> Check {
-    let target = existing_or_var_lib(data_dir);
+    let target = existing_ancestor(data_dir);
     let kib = cmd::run("df", &["-Pk", target], None)
         .await
         .ok()
@@ -345,11 +316,12 @@ fn least_encrypted(found: &[(&'static str, Encryption)]) -> (Encryption, Vec<&'s
     )
 }
 
-/// Whether every file system `node` keeps secrets or data on is encrypted; each one is read once.
-async fn encryption(node: Node, required: bool) -> Check {
+/// Whether every file system a node of `distribution` keeps secrets or data on is encrypted; each
+/// one is read once.
+async fn encryption(distribution: Distribution, required: bool) -> Check {
     let mut sources: Vec<String> = Vec::new();
     let mut found = Vec::new();
-    for path in node.secret_paths() {
+    for path in secret_paths(distribution) {
         let Some(source) = mount_source(existing_ancestor(path)).await else {
             found.push((path, Encryption::Unknown));
             continue;
@@ -440,14 +412,25 @@ mod tests {
             Finding::CrashKept { mib: 512 }
         );
         assert_eq!(Finding::CrashKept { mib: 512 }.status(), Status::Warn);
-        let ports = |node| -> Vec<u16> { needed_ports(node).iter().map(|(p, _)| *p).collect() };
-        assert_eq!(ports(Node::Agent(Rancher::Rke2)), [80, 443, 10250]);
+        let ports = |distribution, role| -> Vec<u16> {
+            needed_ports(distribution, role)
+                .iter()
+                .map(|(p, _)| *p)
+                .collect()
+        };
+        assert_eq!(ports(Distribution::Rke2, Role::Worker), [80, 443, 10250]);
         assert_eq!(
-            ports(Node::Server(Rancher::Rke2)),
+            ports(Distribution::Rke2, Role::Server),
             [80, 443, 6443, 9345, 10250]
         );
-        assert_eq!(ports(Node::Server(Rancher::K3s)), [80, 443, 6443, 10250]);
-        assert_eq!(ports(Node::KubeSolo), [80, 443, 6443, 10250, 10443]);
+        assert_eq!(
+            ports(Distribution::K3s, Role::Server),
+            [80, 443, 6443, 10250]
+        );
+        assert_eq!(
+            ports(Distribution::KubeSolo, Role::Server),
+            [80, 443, 6443, 10250, 10443]
+        );
     }
 
     #[test]
@@ -523,21 +506,15 @@ mod tests {
     #[test]
     fn encryption_covers_where_each_node_keeps_secrets_and_data() {
         assert_eq!(
-            Node::Server(Rancher::K3s).secret_paths(),
-            ["/", "/var/lib/rancher", "/etc/rancher/k3s"]
+            secret_paths(Distribution::K3s),
+            ["/", "/var/lib/rancher/k3s", "/etc/rancher/k3s"]
         );
         assert_eq!(
-            Node::Agent(Rancher::K3s).secret_paths(),
-            ["/", "/var/lib/rancher", "/etc/rancher/k3s"]
+            secret_paths(Distribution::Rke2),
+            ["/", "/var/lib/rancher/rke2", "/etc/rancher/rke2"]
         );
-        for node in [Node::Server(Rancher::Rke2), Node::Agent(Rancher::Rke2)] {
-            assert_eq!(
-                node.secret_paths(),
-                ["/", "/var/lib/rancher", "/etc/rancher/rke2"]
-            );
-        }
         assert_eq!(
-            Node::KubeSolo.secret_paths(),
+            secret_paths(Distribution::KubeSolo),
             ["/", "/var/lib/kubesolo", "/etc/kubesolo", "/etc/zeatend"]
         );
         assert_eq!(existing_ancestor("/no/such/dir/here"), "/");

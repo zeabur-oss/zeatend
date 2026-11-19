@@ -52,7 +52,7 @@ const K3S: Rancher = Rancher::K3s;
 ///
 /// When a file cannot be serialised.
 pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
-    let dir = K3S.layout().config_dir;
+    let dir = K3S.distribution().layout().config_dir;
     let files = vec![
         K3S.sysctl(),
         HostFile {
@@ -115,7 +115,7 @@ pub fn agent_files(tuning: &HostTuning) -> Result<Vec<HostFile>, PlanError> {
 }
 
 fn config(options: &Options) -> RancherConfig {
-    let dir = K3S.layout().config_dir;
+    let dir = K3S.distribution().layout().config_dir;
     let mut config = RancherConfig {
         protect_kernel_defaults: Some(true),
         secrets_encryption: Some(true),

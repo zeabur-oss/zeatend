@@ -1,10 +1,10 @@
-//! The cluster, through the `kubectl` and admin kubeconfig of K3s or RKE2.
+//! The cluster, through the `kubectl` and admin kubeconfig of K3s, RKE2 or `KubeSolo`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
-use zeatend_plan::cluster::Rancher;
+use zeatend_plan::cluster::Distribution;
 
 use crate::{HostError, cmd};
 
@@ -23,7 +23,7 @@ pub struct Kubectl {
 impl Kubectl {
     /// The `kubectl` of the distribution with its admin kubeconfig.
     #[must_use]
-    pub fn admin(distribution: Rancher) -> Self {
+    pub fn admin(distribution: Distribution) -> Self {
         let layout = distribution.layout();
         Self::new(layout.kubectl, layout.admin_kubeconfig)
     }

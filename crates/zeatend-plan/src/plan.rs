@@ -311,7 +311,7 @@ pub(crate) fn cluster_plan(
     findings: &mut Vec<Finding>,
 ) -> Result<ClusterPlan, PlanError> {
     let unknown_arch = || PlanError::Arch(arch.to_owned());
-    let pinned_version = distribution.pinned_version();
+    let pinned_version = distribution.distribution().pinned_version();
     let (version, pinned) = match version {
         Some(v) if v != pinned_version => {
             findings.push(Finding::ReleaseUnpinned {

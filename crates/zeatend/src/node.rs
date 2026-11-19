@@ -17,7 +17,7 @@ use zeatend_plan::config::{Component, Role};
 use zeatend_plan::token::JoinToken;
 use zeatend_plan::{PlanError, join, ports};
 
-use crate::{InstallError, apply, output};
+use crate::{InstallError, output};
 
 /// What `node add` takes from the command line.
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ pub(crate) struct AddOptions {
 fn server_distribution() -> Result<Rancher, InstallError> {
     Rancher::ALL
         .into_iter()
-        .find(|d| Path::new(d.layout().admin_kubeconfig).exists())
+        .find(|d| Path::new(d.distribution().layout().admin_kubeconfig).exists())
         .ok_or_else(|| {
             let kubesolo = Path::new(zeatend_plan::kubesolo::CONFIG_FILE).exists();
             if kubesolo {
@@ -49,8 +49,8 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     if options.role == Role::Server && !distribution.takes_servers() {
         return Err(PlanError::SecondServer.into());
     }
-    let layout = distribution.layout();
-    let kubectl = Kubectl::admin(distribution);
+    let layout = distribution.distribution().layout();
+    let kubectl = Kubectl::admin(distribution.distribution());
     let nodes: List<Node> = kubectl.raw("/api/v1/nodes").await?;
     let nodes = nodes.items;
     let address = if let Some(address) = &options.address {
@@ -70,7 +70,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         Role::Worker => {
             let ttl = format!("{}s", options.ttl.as_secs());
             let out = cmd::run(
-                &apply::release_binary(distribution),
+                layout.binary,
                 &[
                     "token",
                     "create",
@@ -85,8 +85,9 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             Token::Bootstrap(out.trim().to_owned())
         }
         Role::Server => {
-            let text = String::from_utf8(files::read_secret(Path::new(layout.server_token_file))?)
-                .map_err(|_e| InstallError::NotText(layout.server_token_file.into()))?;
+            let file = distribution.paths().server_token_file;
+            let text = String::from_utf8(files::read_secret(Path::new(file))?)
+                .map_err(|_e| InstallError::NotText(file.into()))?;
             Token::Server(text.trim().to_owned())
         }
     };
@@ -221,7 +222,7 @@ fn instructions(i: &Instructions<'_>) -> String {
         ),
     }
     push(&mut text, "");
-    let layout = i.distribution.layout();
+    let layout = i.distribution.distribution().layout();
     push(&mut text, "When the node is Ready, here:");
     push(
         &mut text,
@@ -235,7 +236,7 @@ fn instructions(i: &Instructions<'_>) -> String {
             &mut text,
             &format!(
                 "  {} token delete {id}   # revokes the token",
-                apply::release_binary(i.distribution).display()
+                layout.binary
             ),
         );
     }
@@ -254,9 +255,18 @@ fn duration(ttl: Duration) -> String {
 
 /// The shell commands that write the join configuration and run zeatend.
 fn commands(i: &Instructions<'_>) -> String {
-    let mut lines = vec![format!("distribution: {}", i.distribution.id())];
-    if let Some(version) = i.version.filter(|v| *v != i.distribution.pinned_version()) {
-        lines.push(format!("{}Version: {version}", i.distribution.id()));
+    let mut lines = vec![format!(
+        "distribution: {}",
+        i.distribution.distribution().id()
+    )];
+    if let Some(version) = i
+        .version
+        .filter(|v| *v != i.distribution.distribution().pinned_version())
+    {
+        lines.push(format!(
+            "{}Version: {version}",
+            i.distribution.distribution().id()
+        ));
     }
     if !i.disable.is_empty() {
         let names: Vec<&str> = i.disable.iter().map(|c| c.name()).collect();
@@ -279,12 +289,13 @@ fn commands(i: &Instructions<'_>) -> String {
          EOF\n\
          zeatend plan    # what it installs, the distance to this server, the ports and warnings\n\
          zeatend apply   # installs {} and waits until the node is Ready\n",
-        i.distribution.title()
+        i.distribution.distribution().title()
     )
 }
 
 #[cfg(test)]
 mod tests {
+    use zeatend_plan::cluster::Distribution;
     use zeatend_plan::config::{Document, JoinConfig};
 
     use super::*;
@@ -388,7 +399,7 @@ mod tests {
             server: "https://10.0.1.10:6443",
             role: Role::Worker,
             token: &worker_token(),
-            version: Some(Rancher::K3s.pinned_version()),
+            version: Some(Distribution::K3s.pinned_version()),
             node_names: &["vps-1"],
             disable: &[],
             ttl: Duration::from_hours(1),

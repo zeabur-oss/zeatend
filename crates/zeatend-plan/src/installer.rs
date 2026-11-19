@@ -29,7 +29,10 @@ pub const KUBESOLO_WEBHOOK_SCRIPT: &str = "/usr/local/libexec/zeabur-kubesolo-we
 /// The file that holds the join token on a node the installer joined to a K3s or RKE2 cluster.
 #[must_use]
 pub fn join_token_file(rancher: Rancher) -> String {
-    format!("{}/zeabur-join-token", rancher.layout().config_dir)
+    format!(
+        "{}/zeabur-join-token",
+        rancher.distribution().layout().config_dir
+    )
 }
 
 /// The installer's state directory for `distribution`.

@@ -413,7 +413,7 @@ fn finding(finding: &Finding) -> String {
         }
         Finding::SecretsPlain { distribution } => format!(
             "API 伺服器以未加密形式儲存 Secret，用 `sudo {} secrets-encrypt status` 查看狀態",
-            distribution.id()
+            distribution.distribution().id()
         ),
         // Plan findings stay in English until zeatend#32 words them.
         Finding::MemoryLow { .. }

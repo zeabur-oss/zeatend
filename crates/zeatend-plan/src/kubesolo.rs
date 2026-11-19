@@ -6,29 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::{HostFile, PortUse};
+use crate::cluster::{Distribution, HostFile, PortUse};
 use crate::installer::KUBESOLO_WEBHOOK_SCRIPT;
 use crate::tuning::HostTuning;
 use crate::{PlanError, ports};
 
-/// The systemd unit.
-pub const UNIT: &str = "kubesolo";
-/// The binary from the release archive.
-pub const BINARY: &str = "/usr/local/bin/kubesolo";
-/// Its state: the database, certificates and images.
-pub const DATA_DIR: &str = "/var/lib/kubesolo";
 /// Its configuration file.
 pub const CONFIG_FILE: &str = "/etc/kubesolo/config.yaml";
 /// The unit file.
 pub const UNIT_FILE: &str = "/etc/systemd/system/kubesolo.service";
-/// The kubelet's certificate, whose subject names the node.
-pub const KUBELET_CERT: &str = "/var/lib/kubesolo/pki/kubelet/kubelet.crt";
-/// The cluster-admin kubeconfig `KubeSolo` writes.
-pub const ADMIN_KUBECONFIG: &str = "/var/lib/kubesolo/pki/admin/admin.kubeconfig";
-/// zeatend's downloads and the kubectl it uses.
-pub const STATE_DIR: &str = "/var/lib/zeatend";
-/// The pinned kubectl.
-pub const KUBECTL: &str = "/var/lib/zeatend/bin/kubectl";
 /// The kubeconfig zeatend writes for the person's own computer.
 pub const KUBECONFIG: &str = "/etc/zeatend/kubeconfig.yaml";
 
@@ -300,7 +286,8 @@ pub fn kubeconfig(admin: &Kubeconfig, name: &str) -> Result<Kubeconfig, PlanErro
         })
         .ok_or_else(|| {
             PlanError::Kubeconfig(format!(
-                "{ADMIN_KUBECONFIG}: no context with a client certificate"
+                "{}: no context with a client certificate",
+                Distribution::KubeSolo.layout().admin_kubeconfig
             ))
         })?;
     Ok(Kubeconfig {
@@ -330,7 +317,6 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
-    use crate::cluster::Distribution;
     use crate::tuning::MemoryTier;
 
     fn tuning() -> HostTuning {
@@ -369,10 +355,10 @@ mod tests {
         assert!(value.get("network").is_none());
         assert_eq!(value["kubernetes"], json!({"nodeName": "solo"}));
         let unit = files.iter().find(|f| f.path == UNIT_FILE).unwrap();
-        assert!(
-            unit.content
-                .contains(&format!("ExecStart={BINARY} --config={CONFIG_FILE}"))
-        );
+        assert!(unit.content.contains(&format!(
+            "ExecStart={} --config={CONFIG_FILE}",
+            Distribution::KubeSolo.layout().binary
+        )));
         assert!(
             unit.content
                 .contains("[Service]\nType=simple\nEnvironment=GOMEMLIMIT=500MiB\nExecStart=")

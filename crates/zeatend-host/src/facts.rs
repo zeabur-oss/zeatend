@@ -5,7 +5,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use zeatend_plan::cluster::Rancher;
+use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::plan::Facts;
 use zeatend_plan::{installer, k3s, kubesolo};
 
@@ -62,7 +62,7 @@ fn host_hex() -> Result<String, HostError> {
 pub fn installed_node_name(root: &Path) -> Option<String> {
     let at = |path: &str| root.join(path.trim_start_matches('/'));
     let configured = Rancher::ALL.into_iter().find_map(|d| {
-        let dir = at(d.layout().config_dir);
+        let dir = at(d.distribution().layout().config_dir);
         let mut files = vec![dir.join("config.yaml")];
         let mut drop_ins: Vec<_> = fs::read_dir(dir.join("config.yaml.d"))
             .into_iter()
@@ -81,11 +81,14 @@ pub fn installed_node_name(root: &Path) -> Option<String> {
     configured
         .or_else(|| kubesolo_node_name(&at(kubesolo::CONFIG_FILE)))
         .or_else(|| {
-            Rancher::ALL
-                .into_iter()
-                .map(|d| d.layout().kubelet_cert)
-                .chain([kubesolo::KUBELET_CERT])
-                .find_map(|cert| cert_node_name(&fs::read_to_string(at(cert)).ok()?))
+            [
+                Distribution::K3s,
+                Distribution::Rke2,
+                Distribution::KubeSolo,
+            ]
+            .into_iter()
+            .map(|d| d.layout().kubelet_cert)
+            .find_map(|cert| cert_node_name(&fs::read_to_string(at(cert)).ok()?))
         })
         .map(|name| name.trim().to_ascii_lowercase())
         .filter(|name| !name.is_empty())
@@ -318,7 +321,11 @@ mod tests {
     fn kubesolo_keeps_its_name_too() {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
-        write(root, kubesolo::KUBELET_CERT, &cert("system:node:solo"));
+        write(
+            root,
+            Distribution::KubeSolo.layout().kubelet_cert,
+            &cert("system:node:solo"),
+        );
         assert_eq!(installed_node_name(root).as_deref(), Some("solo"));
         write(
             root,

@@ -30,7 +30,7 @@ const RKE2: Rancher = Rancher::Rke2;
 ///
 /// When a file cannot be serialised.
 pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
-    let dir = RKE2.layout().config_dir;
+    let dir = RKE2.distribution().layout().config_dir;
     Ok(vec![
         RKE2.sysctl(),
         HostFile {
@@ -56,7 +56,10 @@ pub fn agent_files(tuning: &HostTuning) -> Result<Vec<HostFile>, PlanError> {
     };
     Ok(vec![
         RKE2.sysctl(),
-        config.file(format!("{}/config.yaml", RKE2.layout().config_dir))?,
+        config.file(format!(
+            "{}/config.yaml",
+            RKE2.distribution().layout().config_dir
+        ))?,
     ])
 }
 
@@ -65,7 +68,10 @@ fn config(options: &Options) -> RancherConfig {
         profile: Some("cis"),
         write_kubeconfig_mode: Some("0600"),
         enable_servicelb: Some(true),
-        audit_policy_file: Some(format!("{}/audit-policy.yaml", RKE2.layout().config_dir)),
+        audit_policy_file: Some(format!(
+            "{}/audit-policy.yaml",
+            RKE2.distribution().layout().config_dir
+        )),
         kubelet_arg: Rancher::kubelet_args(&options.tuning, true),
         control_plane_resource_requests: control_plane_requests(),
         tls_san: options.tls_san.clone(),
