@@ -47,10 +47,6 @@ pub struct Facts {
     /// network plugin of its own, which zeatend keeps. See [`crate::k3s::runs_own_network`].
     #[serde(default)]
     pub k3s_own_network: bool,
-    /// The packaged components that the K3s or RKE2 configuration on the host turns off. See
-    /// [`crate::cluster::disabled_components`].
-    #[serde(default)]
-    pub disabled_components: Vec<String>,
     /// The script that zeabur-installer's `KubeSolo` unit runs after each start is on the host.
     /// See [`crate::kubesolo::Options::installer_webhook`].
     #[serde(default)]
@@ -242,7 +238,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tls_san: config.host.tls_san.clone(),
             tuning,
             own_network: rancher == Rancher::K3s && facts.k3s_own_network,
-            disable: facts.disabled_components.clone(),
+            disable: config.disable.clone(),
         });
         files.push(rancher.node_name_file(&node_name));
         files.extend(rancher.node_ip_file(&facts.node_ips));
@@ -441,7 +437,6 @@ mod tests {
             kubernetes: None,
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
-            disabled_components: Vec::new(),
             installer_webhook: false,
         }
     }

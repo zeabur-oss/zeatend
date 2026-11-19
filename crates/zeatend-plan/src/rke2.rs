@@ -11,8 +11,8 @@
 //! overrides it cleanly.
 
 use crate::cluster::{
-    AUDIT_POLICY, HEADER, HostFile, Options, Rancher, control_plane_requests, disable_list,
-    yaml_list,
+    AUDIT_POLICY, Distribution, HEADER, HostFile, Options, Rancher, control_plane_requests,
+    turn_off, yaml_list,
 };
 use crate::tuning::HostTuning;
 
@@ -65,14 +65,12 @@ fn config(options: &Options) -> String {
     out.push_str(
         "profile: cis\n\
          write-kubeconfig-mode: \"0600\"\n\
-         # No packaged ingress; ServiceLB gives the one you install ports 80 and 443.\n\
-         ingress-controller: none\n\
          enable-servicelb: true\n\
          audit-policy-file: /etc/rancher/rke2/audit-policy.yaml\n",
     );
     out.push_str(&Rancher::kubelet_args(&options.tuning, true));
     out.push_str(&control_plane_requests());
-    disable_list(&mut out, &[], &options.disable);
+    turn_off(&mut out, Distribution::Rke2, &options.disable);
     yaml_list(&mut out, "tls-san", &options.tls_san);
     out
 }
@@ -107,26 +105,6 @@ mod tests {
             own_network: false,
             disable: Vec::new(),
         }
-    }
-
-    #[test]
-    fn components_an_earlier_install_turned_off_stay_off() {
-        let config = |disable: Vec<String>| -> serde_json::Value {
-            let files = host_files(&Options {
-                disable,
-                ..options(Vec::new())
-            });
-            let file = files
-                .iter()
-                .find(|f| f.path == "/etc/rancher/rke2/config.yaml")
-                .unwrap();
-            serde_saphyr::from_str(&file.content).unwrap()
-        };
-        assert!(config(Vec::new()).get("disable").is_none());
-        assert_eq!(
-            config(vec!["rke2-metrics-server".to_owned()])["disable"],
-            serde_json::json!(["rke2-metrics-server"])
-        );
     }
 
     #[test]
@@ -183,7 +161,8 @@ mod tests {
                 .iter()
                 .all(|f| !f.path.starts_with(MANIFESTS_DIR))
         );
-        assert!(config(&options(Vec::new())).contains("ingress-controller: none\n"));
+        // RKE2's default ingress controller, Traefik, runs.
+        assert!(!config(&options(Vec::new())).contains("ingress-controller"));
     }
 
     #[test]
@@ -217,5 +196,26 @@ mod tests {
                 .any(|a| a.as_str().unwrap().starts_with("kube-reserved="))
         );
         assert!(agent.get("control-plane-resource-requests").is_none());
+    }
+
+    #[test]
+    fn disable_turns_off_the_ingress_controller_and_metrics_server() {
+        let parsed: serde_json::Value = serde_saphyr::from_str(&config(&Options {
+            disable: vec![
+                crate::config::Component::Traefik,
+                crate::config::Component::MetricsServer,
+            ],
+            ..options(Vec::new())
+        }))
+        .unwrap();
+        assert_eq!(parsed["ingress-controller"], serde_json::json!(["none"]));
+        assert_eq!(
+            parsed["disable"],
+            serde_json::json!(["rke2-metrics-server"])
+        );
+        let plain: serde_json::Value =
+            serde_saphyr::from_str(&config(&options(Vec::new()))).unwrap();
+        assert!(plain.get("ingress-controller").is_none());
+        assert!(plain.get("disable").is_none());
     }
 }

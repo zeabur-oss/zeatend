@@ -5,7 +5,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use zeatend_plan::cluster::{self, Rancher};
+use zeatend_plan::cluster::Rancher;
 use zeatend_plan::plan::Facts;
 use zeatend_plan::{installer, k3s, kubesolo};
 
@@ -39,12 +39,6 @@ pub async fn read() -> Result<Facts, HostError> {
             .is_ok_and(|v| v.trim() == "1"),
         k3s_own_network: fs::read_to_string(k3s::CONFIG_FILE)
             .is_ok_and(|config| k3s::runs_own_network(&config)),
-        disabled_components: [Rancher::K3s, Rancher::Rke2]
-            .iter()
-            .find_map(|rancher| {
-                fs::read_to_string(format!("{}/config.yaml", rancher.layout().config_dir)).ok()
-            })
-            .map_or_else(Vec::new, |config| cluster::disabled_components(&config)),
         installer_webhook: Path::new(installer::KUBESOLO_WEBHOOK_SCRIPT).exists(),
     })
 }

@@ -208,9 +208,9 @@ impl Choices {
         }
     }
 
-    /// The configuration the choices make. A release override of another distribution goes. The
-    /// API certificate keeps the names it had and adds the address, unless it is the host's own,
-    /// and the DNS name.
+    /// The configuration the choices make. A release override of another distribution goes, and so
+    /// does a component in `disable` that the distribution does not package. The API certificate
+    /// keeps the names it had and adds the address, unless it is the host's own, and the DNS name.
     pub(crate) fn config(&self) -> Config {
         let mut config = self.config.clone();
         config.distribution = self.distribution;
@@ -220,6 +220,9 @@ impl Choices {
         if self.distribution != Distribution::Rke2 {
             config.rke2_version = None;
         }
+        config
+            .disable
+            .retain(|c| self.distribution.packaged(*c).is_some());
         let address = self.value(FieldKind::Address);
         let extra = [
             (!self.host.addresses.iter().any(|a| a == address)).then_some(address),

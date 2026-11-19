@@ -388,7 +388,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
                 tuning,
                 // Only RKE2 takes a second server, and it always runs Canal.
                 own_network: false,
-                disable: facts.facts.disabled_components.clone(),
+                disable: config.disable.clone(),
             }),
             distribution.server_unit(),
         ),
@@ -476,7 +476,6 @@ mod tests {
                 kubernetes: None,
                 apparmor_restricts_unconfined: false,
                 k3s_own_network: false,
-                disabled_components: Vec::new(),
                 installer_webhook: false,
             },
             rtt_us: rtt_us.to_vec(),

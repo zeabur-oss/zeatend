@@ -39,6 +39,11 @@ host:
 K3s (`v1.37.2+k3s1`) and RKE2 (`v1.37.2+rke2r1`) install Kubernetes 1.37. KubeSolo `v1.3.0` installs
 Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
 
+K3s and RKE2 deploy their packaged components as upstream ships them, Traefik among them. To run
+your own instead, turn them off with `disable`, such as `disable: [traefik, metrics-server]`.
+`local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these. On a
+cluster that zeabur-installer installed, `disable` starts as the list the installer turned off.
+
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to

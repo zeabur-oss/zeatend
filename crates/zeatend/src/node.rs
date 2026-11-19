@@ -11,8 +11,8 @@ use std::time::Duration;
 use serde_json::Value;
 use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
-use zeatend_plan::cluster::Rancher;
-use zeatend_plan::config::Role;
+use zeatend_plan::cluster::{self, Rancher};
+use zeatend_plan::config::{Component, Role};
 use zeatend_plan::{PlanError, join};
 
 use crate::{InstallError, apply, output};
@@ -100,6 +100,16 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         }
     };
     let record = crate::installer::read_record(distribution.into()).await?;
+    // A server turns off what this one turns off. A worker deploys no packaged components.
+    let disable = match options.role {
+        Role::Server => {
+            let path = format!("{}/config.yaml", layout.config_dir);
+            let config = std::fs::read_to_string(&path)
+                .map_err(|e| InstallError::Message(format!("{path}: {e}")))?;
+            cluster::disabled_components(distribution.into(), &config)?
+        }
+        Role::Worker => Vec::new(),
+    };
     let text = instructions(&Instructions {
         distribution,
         server: &server_url(&address, distribution.join_port()),
@@ -110,6 +120,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             .iter()
             .filter_map(|n| n.pointer("/metadata/name").and_then(Value::as_str))
             .collect::<Vec<_>>(),
+        disable: &disable,
         ttl: options.ttl,
     });
     output::line(text.trim_end());
@@ -180,6 +191,8 @@ struct Instructions<'a> {
     version: Option<&'a str>,
     /// The cluster's nodes, whose names the new node does not take.
     node_names: &'a [&'a str],
+    /// The packaged components that a new server turns off, as this one does.
+    disable: &'a [Component],
     ttl: Duration,
 }
 
@@ -265,6 +278,10 @@ fn commands(i: &Instructions<'_>) -> String {
     if let Some(version) = i.version.filter(|v| *v != i.distribution.pinned_version()) {
         lines.push(format!("{}Version: {version}", i.distribution.id()));
     }
+    if !i.disable.is_empty() {
+        let names: Vec<&str> = i.disable.iter().map(|c| c.name()).collect();
+        lines.push(format!("disable: [{}]", names.join(", ")));
+    }
     lines.extend([
         "join:".to_owned(),
         format!("  server: {}", i.server),
@@ -320,6 +337,7 @@ mod tests {
             token: &worker_token(),
             version: Some("v1.37.1+k3s1"),
             node_names: &["vps-1"],
+            disable: &[],
             ttl: Duration::from_hours(1),
         });
         assert_eq!(text, include_str!("../fixtures/node-add-worker.txt"));
@@ -334,12 +352,14 @@ mod tests {
             token: &worker_token(),
             version: Some("v1.37.1+rke2r1"),
             node_names: &["vps-1", "vps-2"],
+            disable: &[],
             ttl: Duration::from_mins(30),
         });
         let config = pasted(&text);
         assert_eq!(config.join.server, "https://10.0.1.10:9345");
         assert_eq!(config.join.role, Role::Worker);
         assert_eq!(config.join.node_names, ["vps-1", "vps-2"]);
+        assert_eq!(config.disable, []);
         assert_eq!(config.version(), Some("v1.37.1+rke2r1"));
         assert!(text.contains("joins workers for 30m"), "{text}");
         assert!(
@@ -358,11 +378,16 @@ mod tests {
             token: &token,
             version: None,
             node_names: &["vps-1"],
+            disable: &[Component::Traefik, Component::MetricsServer],
             ttl: Duration::from_hours(1),
         });
         let config = pasted(&text);
         assert_eq!(config.join.role, Role::Server);
         assert_eq!(config.version(), None);
+        assert_eq!(
+            config.disable,
+            [Component::Traefik, Component::MetricsServer]
+        );
         assert!(text.contains("does not expire"), "{text}");
 
         assert!(!text.contains("token delete"), "{text}");
@@ -378,6 +403,7 @@ mod tests {
             token: &worker_token(),
             version: Some(Rancher::K3s.pinned_version()),
             node_names: &["vps-1"],
+            disable: &[],
             ttl: Duration::from_hours(1),
         });
         assert_eq!(pasted(&text).version(), None, "{text}");

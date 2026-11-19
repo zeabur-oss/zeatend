@@ -10,6 +10,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::PlanError;
+use crate::config::Component;
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
 
@@ -47,6 +49,29 @@ impl Distribution {
             Self::K3s => Rancher::K3s.title(),
             Self::Rke2 => Rancher::Rke2.title(),
         }
+    }
+
+    /// How the distribution packages `component`; `None` when it does not package it.
+    #[must_use]
+    pub const fn packaged(self, component: Component) -> Option<Packaged> {
+        let (manifest, setting, item) = match (self, component) {
+            (Self::K3s, Component::Traefik) => ("traefik", "disable", "traefik"),
+            (Self::K3s, Component::MetricsServer) => {
+                ("metrics-server", "disable", "metrics-server")
+            }
+            (Self::K3s, Component::LocalStorage) => ("local-storage", "disable", "local-storage"),
+            // RKE2 chooses its ingress controller, and `traefik` is not an item of `disable`.
+            (Self::Rke2, Component::Traefik) => ("rke2-traefik", "ingress-controller", "none"),
+            (Self::Rke2, Component::MetricsServer) => {
+                ("rke2-metrics-server", "disable", "rke2-metrics-server")
+            }
+            (Self::Rke2, Component::LocalStorage) | (Self::KubeSolo, _) => return None,
+        };
+        Some(Packaged {
+            manifest,
+            setting,
+            item,
+        })
     }
 
     /// K3s or RKE2, which take workers and share a server; `None` for `KubeSolo`.
@@ -232,6 +257,15 @@ const K3S_MIN_MEMORY_MIB: u64 = 1900;
 impl Rancher {
     /// Both, in the order an interface lists them.
     pub const ALL: [Self; 2] = [Self::K3s, Self::Rke2];
+
+    /// The directory whose manifests the server's deploy controller applies.
+    #[must_use]
+    pub const fn manifests_dir(self) -> &'static str {
+        match self {
+            Self::K3s => crate::k3s::MANIFESTS_DIR,
+            Self::Rke2 => crate::rke2::MANIFESTS_DIR,
+        }
+    }
 
     /// Its name in configuration files.
     #[must_use]
@@ -421,10 +455,7 @@ impl Rancher {
     /// profile adds it, and zeatend adds it on K3s. Without this policy, a `ServiceLB` pod on a
     /// worker gets no outside requests. Each distribution labels the pods with its own prefix.
     fn servicelb_policy(self) -> HostFile {
-        let manifests = match self {
-            Self::K3s => crate::k3s::MANIFESTS_DIR,
-            Self::Rke2 => crate::rke2::MANIFESTS_DIR,
-        };
+        let manifests = self.manifests_dir();
         let policy = serde_json::json!({
             "apiVersion": "networking.k8s.io/v1",
             "kind": "NetworkPolicy",
@@ -542,6 +573,18 @@ pub struct HostFile {
     pub content: String,
 }
 
+/// A component that K3s or RKE2 packages: the manifest the server deploys it from, and the item
+/// of a list setting in the server's configuration that turns it off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Packaged {
+    /// The manifest in the manifests directory, without `.yaml`; it names the Addon.
+    pub manifest: &'static str,
+    /// The list setting, such as `disable`.
+    pub setting: &'static str,
+    /// The item of `setting` that turns the component off.
+    pub item: &'static str,
+}
+
 /// Server settings from the configuration and the host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
@@ -552,21 +595,62 @@ pub struct Options {
     /// K3s only: an earlier install turned flannel off for a network plugin of its own, which
     /// zeatend keeps.
     pub own_network: bool,
-    /// Packaged components that an earlier install turned off, which zeatend keeps off. See
-    /// [`disabled_components`].
-    pub disable: Vec<String>,
+    /// Packaged components that the configuration turns off.
+    pub disable: Vec<Component>,
 }
 
-/// The packaged components that the K3s or RKE2 configuration `config` turns off.
+/// The packaged components that the K3s or RKE2 configuration `config` of an earlier install
+/// turns off, for zeatend's `disable`.
 ///
-/// zeabur-installer turns off K3s's `local-storage` and the packaged metrics-server, as its own
-/// run in their place; turning them on again would give two of each.
-#[must_use]
-pub fn disabled_components(config: &str) -> Vec<String> {
-    let Ok(value) = serde_saphyr::from_str::<Value>(config) else {
-        return Vec::new();
-    };
-    match value.get("disable") {
+/// zeabur-installer turns off Traefik, metrics-server and K3s's `local-storage`, as the Zeabur
+/// catalog installs its own; turning them on again would give two of each.
+///
+/// # Errors
+///
+/// When the configuration does not parse, or turns off a component zeatend cannot name.
+pub fn disabled_components(
+    distribution: Distribution,
+    config: &str,
+) -> Result<Vec<Component>, PlanError> {
+    let value: Value =
+        serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
+    let table: Vec<(Component, Packaged)> = Component::ALL
+        .into_iter()
+        .filter_map(|c| Some((c, distribution.packaged(c)?)))
+        .collect();
+    let mut off = Vec::new();
+    for setting in settings(&table) {
+        for item in list(value.get(setting)) {
+            let (component, _) = table
+                .iter()
+                .find(|(_, p)| p.setting == setting && p.item == item)
+                .ok_or_else(|| {
+                    PlanError::Config(format!("{setting}: zeatend has no component for {item}"))
+                })?;
+            off.push(*component);
+        }
+    }
+    Ok(Component::ALL
+        .into_iter()
+        .filter(|c| off.contains(c))
+        .collect())
+}
+
+/// The list settings of `table`, each once, in the order of the table.
+fn settings(table: &[(Component, Packaged)]) -> Vec<&'static str> {
+    let mut settings: Vec<&'static str> = Vec::new();
+    for (_, packaged) in table {
+        if !settings.contains(&packaged.setting) {
+            settings.push(packaged.setting);
+        }
+    }
+    settings
+}
+
+/// The items of a list setting, which a configuration writes as a list or a comma-separated
+/// string.
+fn list(value: Option<&Value>) -> Vec<String> {
+    let items: Vec<String> = match value {
         Some(Value::Array(items)) => items
             .iter()
             .filter_map(Value::as_str)
@@ -574,24 +658,87 @@ pub fn disabled_components(config: &str) -> Vec<String> {
             .collect(),
         Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
         _ => Vec::new(),
+    };
+    items.into_iter().filter(|item| !item.is_empty()).collect()
+}
+
+/// The settings that turn off the components in `disable`.
+pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[Component]) {
+    let table: Vec<(Component, Packaged)> = disable
+        .iter()
+        .filter_map(|c| Some((*c, distribution.packaged(*c)?)))
+        .collect();
+    for setting in settings(&table) {
+        let items: Vec<String> = table
+            .iter()
+            .filter(|(_, p)| p.setting == setting)
+            .map(|(_, p)| p.item.to_owned())
+            .collect();
+        yaml_list(out, setting, &items);
     }
 }
 
-/// The `disable` list: `always`, then the components an earlier install turned off.
-pub(crate) fn disable_list(out: &mut String, always: &[&str], kept: &[String]) {
-    let mut items: Vec<String> = always.iter().map(|&item| item.to_owned()).collect();
-    let earlier: Vec<String> = kept
+/// The objects that the server has not removed yet for the components in `disable`.
+///
+/// The result has `addon/<name>` and `helmchart/<name>` items. `addons` and `charts` are the
+/// API's lists of the Addons and the `HelmCharts` in `kube-system`; `exists` tells whether a file
+/// exists on the host.
+///
+/// The server keeps an Addon for each manifest, with the checksum of the manifest, and applies a
+/// manifest only when its checksum changes. To turn a component off, K3s deletes the manifest,
+/// and RKE2 empties the manifest of an ingress controller. The server then deletes the
+/// `HelmCharts` that the manifest made, which uninstalls them, and K3s also deletes the Addon.
+///
+/// When the server restarts before the removal completes and `disable` turns the component on
+/// again, the Addon of a deleted manifest gets the checksum again while the uninstall deletes the
+/// `HelmChart`. The server then does not apply the manifest again, and the component does not
+/// come back. An Addon whose manifest exists has the checksum of the emptied manifest, which
+/// changes when the component is turned on again.
+#[must_use]
+pub fn left_to_remove(
+    rancher: Rancher,
+    disable: &[Component],
+    addons: &Value,
+    charts: &Value,
+    exists: impl Fn(&str) -> bool,
+) -> Vec<String> {
+    let manifests = rancher.manifests_dir();
+    let names: Vec<&str> = disable
         .iter()
-        .filter(|item| !item.is_empty() && !items.contains(item))
-        .cloned()
+        .filter_map(|c| Some(Distribution::from(rancher).packaged(*c)?.manifest))
         .collect();
-    if !earlier.is_empty() {
-        out.push_str("# Kept off from the earlier install, which runs its own: ");
-        out.push_str(&earlier.join(", "));
-        out.push('\n');
-    }
-    items.extend(earlier);
-    yaml_list(out, "disable", &items);
+    let items = |list: &'_ Value| -> Vec<Value> {
+        list.get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let text = |object: &Value, pointer: &str| -> String {
+        object
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let addons = items(addons).into_iter().filter(|addon| {
+        let source = text(addon, "/spec/source");
+        !exists(&source)
+            && names.iter().any(|name| {
+                source == format!("{manifests}/{name}.yaml")
+                    || source.starts_with(&format!("{manifests}/{name}/"))
+            })
+    });
+    let charts = items(charts).into_iter().filter(|chart| {
+        let owner = text(
+            chart,
+            "/metadata/annotations/objectset.rio.cattle.io~1owner-name",
+        );
+        names.contains(&owner.as_str())
+    });
+    addons
+        .map(|addon| format!("addon/{}", text(&addon, "/metadata/name")))
+        .chain(charts.map(|chart| format!("helmchart/{}", text(&chart, "/metadata/name"))))
+        .collect()
 }
 
 pub(crate) const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n\
@@ -691,10 +838,7 @@ mod tests {
                 .into_iter()
                 .find(|f| f.path.ends_with("/zeatend-servicelb-policy.yaml"))
                 .unwrap();
-            assert!(file.path.starts_with(match rancher {
-                Rancher::K3s => crate::k3s::MANIFESTS_DIR,
-                Rancher::Rke2 => crate::rke2::MANIFESTS_DIR,
-            }));
+            assert!(file.path.starts_with(rancher.manifests_dir()));
             assert_eq!(file.mode, 0o600);
             let policy: Value = serde_saphyr::from_str(&file.content).unwrap();
             assert_eq!(policy["kind"], "NetworkPolicy");
@@ -819,5 +963,118 @@ mod tests {
                 "{rule}"
             );
         }
+    }
+
+    #[test]
+    fn an_earlier_install_reads_back_as_the_components_it_turned_off() {
+        use crate::config::Component;
+        for distribution in [Distribution::K3s, Distribution::Rke2] {
+            let packaged: Vec<Component> = Component::ALL
+                .into_iter()
+                .filter(|c| distribution.packaged(*c).is_some())
+                .collect();
+            let mut config = String::new();
+            turn_off(&mut config, distribution, &packaged);
+            assert_eq!(
+                disabled_components(distribution, &config).unwrap(),
+                packaged,
+                "{distribution:?}"
+            );
+        }
+        // What zeabur-installer v0.2.0 writes.
+        assert_eq!(
+            disabled_components(
+                Distribution::K3s,
+                "disable: traefik, local-storage, metrics-server\n"
+            )
+            .unwrap(),
+            Component::ALL
+        );
+        assert_eq!(
+            disabled_components(
+                Distribution::Rke2,
+                "ingress-controller: none\ndisable:\n  - rke2-metrics-server\n"
+            )
+            .unwrap(),
+            [Component::Traefik, Component::MetricsServer]
+        );
+        assert_eq!(
+            disabled_components(
+                Distribution::K3s,
+                "{}
+"
+            )
+            .unwrap(),
+            []
+        );
+        assert!(disabled_components(Distribution::K3s, "disable: [servicelb]\n").is_err());
+        assert!(disabled_components(Distribution::Rke2, "disable: [traefik]\n").is_err());
+        // zeatend writes the setting again and would deploy Traefik instead.
+        assert!(
+            disabled_components(Distribution::Rke2, "ingress-controller: ingress-nginx\n").is_err()
+        );
+    }
+
+    #[test]
+    fn left_to_remove_are_the_turned_off_manifests_addons_and_charts() {
+        let addon = |name: &str, source: &str| serde_json::json!({"metadata": {"name": name}, "spec": {"source": source}});
+        let chart = |name: &str, owner: &str| {
+            serde_json::json!({"metadata": {
+                "name": name,
+                "annotations": {"objectset.rio.cattle.io/owner-name": owner},
+            }})
+        };
+        let k3s = crate::k3s::MANIFESTS_DIR;
+        let addons = serde_json::json!({"items": [
+            addon("traefik", &format!("{k3s}/traefik.yaml")),
+            addon("metrics-apiservice", &format!("{k3s}/metrics-server/metrics-apiservice.yaml")),
+            addon("coredns", &format!("{k3s}/coredns.yaml")),
+            addon("local-storage", &format!("{k3s}/local-storage.yaml")),
+        ]});
+        let charts = serde_json::json!({"items": [
+            chart("traefik-crd", "traefik"),
+            chart("gateway-api-crd", "gateway-api-crd"),
+        ]});
+        let disable = [Component::Traefik, Component::MetricsServer];
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &disable, &addons, &charts, |_| false),
+            [
+                "addon/traefik",
+                "addon/metrics-apiservice",
+                "helmchart/traefik-crd"
+            ]
+        );
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &[], &addons, &charts, |_| false),
+            Vec::<String>::new()
+        );
+        let none = serde_json::json!({"items": []});
+        assert_eq!(
+            left_to_remove(Rancher::K3s, &disable, &none, &charts, |_| false),
+            ["helmchart/traefik-crd"]
+        );
+
+        let rke2 = crate::rke2::MANIFESTS_DIR;
+        let addons = serde_json::json!({"items": [
+            addon("rke2-traefik", &format!("{rke2}/rke2-traefik.yaml")),
+            addon("rke2-traefik-crd", &format!("{rke2}/rke2-traefik-crd.yaml")),
+        ]});
+        assert_eq!(
+            left_to_remove(Rancher::Rke2, &[Component::Traefik], &addons, &none, |_| {
+                true
+            }),
+            Vec::<String>::new()
+        );
+        let charts = serde_json::json!({"items": [chart("rke2-traefik", "rke2-traefik")]});
+        assert_eq!(
+            left_to_remove(
+                Rancher::Rke2,
+                &[Component::Traefik],
+                &addons,
+                &charts,
+                |_| true
+            ),
+            ["helmchart/rke2-traefik"]
+        );
     }
 }

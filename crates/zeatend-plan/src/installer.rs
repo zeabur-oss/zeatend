@@ -8,8 +8,8 @@
 use serde_json::{Map, Value};
 
 use crate::PlanError;
-use crate::cluster::{Distribution, Rancher};
-use crate::config::{Config, Document, JoinConfig};
+use crate::cluster::{Distribution, Rancher, disabled_components};
+use crate::config::{Config, Document, JoinConfig, Role};
 
 /// The installer's configuration file.
 pub const CONFIG_FILE: &str = "/etc/zeabur-installer/config.yaml";
@@ -105,6 +105,30 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
     Ok(Document::Join(config))
 }
 
+/// `document` with `disable` set to what the installer's cluster turns off.
+///
+/// `rancher_config` is the installer's K3s or RKE2 configuration; `apply` then keeps its
+/// components off. A worker deploys no packaged components and keeps none.
+///
+/// # Errors
+///
+/// When `rancher_config` does not parse, or turns off a component zeatend cannot name.
+pub fn keep_disabled(mut document: Document, rancher_config: &str) -> Result<Document, PlanError> {
+    let error = |e: PlanError| PlanError::Config(format!("the installer's cluster: {e}"));
+    match &mut document {
+        Document::Install(config) => {
+            config.disable =
+                disabled_components(config.distribution, rancher_config).map_err(error)?;
+        }
+        Document::Join(config) if config.join.role == Role::Server => {
+            config.disable =
+                disabled_components(config.distribution, rancher_config).map_err(error)?;
+        }
+        Document::Join(_) => {}
+    }
+    Ok(document)
+}
+
 /// Copies the values of `keys` that `from` has into `to`.
 fn keep(to: &mut Map<String, Value>, from: &Value, keys: &[&str]) {
     for key in keys {
@@ -175,5 +199,31 @@ mod tests {
     fn an_invalid_value_is_refused() {
         assert!(document("distribution: nomad\n").is_err());
         assert!(document("k3sVersion: latest\n").is_err());
+    }
+
+    #[test]
+    fn the_installers_cluster_keeps_off_what_it_turned_off() {
+        use crate::config::Component;
+        let rke2 = keep_disabled(
+            document("distribution: rke2\n").unwrap(),
+            "ingress-controller: none\ndisable:\n  - rke2-metrics-server\n",
+        )
+        .unwrap();
+        let Document::Install(config) = rke2 else {
+            panic!("an install");
+        };
+        assert_eq!(
+            config.disable,
+            [Component::Traefik, Component::MetricsServer]
+        );
+        let worker = document(
+            "join:\n  server: https://10.0.0.5:6443\n  tokenFile: /etc/zeatend/join-token\n",
+        )
+        .unwrap();
+        assert_eq!(
+            keep_disabled(worker.clone(), "disable: [traefik]\n").unwrap(),
+            worker
+        );
+        assert!(keep_disabled(document("{}\n").unwrap(), "disable: [servicelb]\n").is_err());
     }
 }

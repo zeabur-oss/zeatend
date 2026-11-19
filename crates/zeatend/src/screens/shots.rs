@@ -10,7 +10,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use zeatend_host::preflight::{Check, Finding};
 use zeatend_host::progress::Event;
 use zeatend_plan::cluster::Distribution;
-use zeatend_plan::config::Config;
+use zeatend_plan::config::{Component, Config};
 use zeatend_plan::plan::Facts;
 
 use super::app::{Action, App, Choices};
@@ -32,7 +32,6 @@ fn facts() -> Facts {
         kubernetes: None,
         apparmor_restricts_unconfined: false,
         k3s_own_network: false,
-        disabled_components: Vec::new(),
         installer_webhook: false,
     }
 }
@@ -306,6 +305,28 @@ fn another_distribution_drops_the_release_override() {
     press(&mut app, KeyCode::Up);
     let config = app.choices.as_ref().unwrap().config();
     assert_eq!(config.k3s_version.as_deref(), Some("v1.37.1+k3s1"));
+}
+
+#[test]
+fn another_distribution_drops_the_components_it_does_not_package() {
+    let config = Config {
+        disable: vec![Component::Traefik, Component::LocalStorage],
+        ..Config::default()
+    };
+    let mut choices = Choices::new(host(), config, "/etc/zeatend/config.yaml".to_owned(), true);
+    for (distribution, disable) in [
+        (Distribution::Rke2, vec![Component::Traefik]),
+        (Distribution::KubeSolo, vec![]),
+        (
+            Distribution::K3s,
+            vec![Component::Traefik, Component::LocalStorage],
+        ),
+    ] {
+        choices.distribution = distribution;
+        let config = choices.config();
+        assert_eq!(config.disable, disable, "{distribution:?}");
+        assert!(config.check().is_ok(), "{distribution:?}");
+    }
 }
 
 #[test]
