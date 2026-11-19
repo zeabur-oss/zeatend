@@ -6,12 +6,13 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde_json::Value;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::preflight::Node;
 use zeatend_host::{archive, cmd, download, facts, files, systemd};
 use zeatend_plan::config::Config;
-use zeatend_plan::kubesolo::{ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, STATE_DIR, UNIT};
+use zeatend_plan::kubesolo::{
+    ADMIN_KUBECONFIG, BINARY, KUBECONFIG, KUBECTL, Kubeconfig, STATE_DIR, UNIT,
+};
 use zeatend_plan::plan::{self, KubeSoloPlan, Plan, Release};
 use zeatend_plan::record::Record;
 use zeatend_plan::upgrade::release_tag;
@@ -220,7 +221,7 @@ fn io(path: &Path) -> impl Fn(std::io::Error) -> InstallError {
 fn write_kubeconfig(name: &str) -> Result<(), InstallError> {
     let path = Path::new(ADMIN_KUBECONFIG);
     let text = fs::read_to_string(path).map_err(io(path))?;
-    let admin: Value = serde_saphyr::from_str(&text)
+    let admin: Kubeconfig = serde_saphyr::from_str(&text)
         .map_err(|e| InstallError::Message(format!("{ADMIN_KUBECONFIG}: {e}")))?;
     let config = zeatend_plan::kubesolo::kubeconfig(&admin, name)?;
     let yaml =

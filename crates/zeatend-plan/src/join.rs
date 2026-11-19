@@ -380,7 +380,10 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
 
     let tuning = HostTuning::new(distribution.into(), MemoryTier::of(facts.facts.memory_mib));
     let (mut host_files, unit) = match join.role {
-        Role::Worker => (distribution.agent_files(&tuning), distribution.agent_unit()),
+        Role::Worker => (
+            distribution.agent_files(&tuning)?,
+            distribution.agent_unit(),
+        ),
         Role::Server if !distribution.takes_servers() => return Err(PlanError::SecondServer),
         Role::Server => (
             distribution.server_files(&cluster::Options {
@@ -389,13 +392,13 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
                 // Only RKE2 takes a second server, and it always runs Canal.
                 own_network: false,
                 disable: config.disable.clone(),
-            }),
+            })?,
             distribution.server_unit(),
         ),
     };
-    host_files.push(distribution.join_file(&join.server));
-    host_files.push(distribution.node_name_file(&node_name));
-    host_files.extend(distribution.node_ip_file(&facts.facts.node_ips));
+    host_files.push(distribution.join_file(&join.server)?);
+    host_files.push(distribution.node_name_file(&node_name)?);
+    host_files.extend(distribution.node_ip_file(&facts.facts.node_ips)?);
     host_files.extend(facts.facts.apparmor_profile());
 
     warnings.push(same_region());
@@ -614,7 +617,8 @@ mod tests {
             .iter()
             .find(|f| f.path.ends_with("/config.yaml"))
             .unwrap();
-        assert!(config.content.contains("tls-san:\n  - k8s.example.com\n"));
+        let config: serde_json::Value = serde_saphyr::from_str(&config.content).unwrap();
+        assert_eq!(config["tls-san"], serde_json::json!(["k8s.example.com"]));
         assert!(p.ports.iter().any(|port| port.number == 2380));
     }
 

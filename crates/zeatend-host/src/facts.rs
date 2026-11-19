@@ -75,11 +75,11 @@ pub fn installed_node_name(root: &Path) -> Option<String> {
         files.extend(drop_ins);
         files
             .iter()
-            .filter_map(|f| yaml_string(f, &["node-name"]))
+            .filter_map(|f| rancher_node_name(f))
             .next_back()
     });
     configured
-        .or_else(|| yaml_string(&at(kubesolo::CONFIG_FILE), &["kubernetes", "nodeName"]))
+        .or_else(|| kubesolo_node_name(&at(kubesolo::CONFIG_FILE)))
         .or_else(|| {
             Rancher::ALL
                 .into_iter()
@@ -91,12 +91,19 @@ pub fn installed_node_name(root: &Path) -> Option<String> {
         .filter(|name| !name.is_empty())
 }
 
-fn yaml_string(path: &Path, keys: &[&str]) -> Option<String> {
-    let value: serde_json::Value = serde_saphyr::from_str(&fs::read_to_string(path).ok()?).ok()?;
-    keys.iter()
-        .try_fold(&value, |v, k| v.get(k))?
-        .as_str()
-        .map(str::to_owned)
+fn rancher_node_name(path: &Path) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "kebab-case")]
+    struct NodeName {
+        node_name: Option<String>,
+    }
+    let config: NodeName = serde_saphyr::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    config.node_name
+}
+
+fn kubesolo_node_name(path: &Path) -> Option<String> {
+    let config: kubesolo::Config = serde_saphyr::from_str(&fs::read_to_string(path).ok()?).ok()?;
+    config.kubernetes.node_name
 }
 
 /// The node in a kubelet certificate's `system:node:<name>` subject.

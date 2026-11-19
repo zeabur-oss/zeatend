@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use serde_json::Value;
+use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::{facts, files, network, preflight, systemd};
 use zeatend_plan::cluster::Rancher;
@@ -155,22 +155,21 @@ pub(crate) async fn node_ready(
     name: &str,
     since: Option<u64>,
 ) -> Result<bool, InstallError> {
-    let node = kubectl.get("node", name, None).await?;
+    let node: Option<Node> = kubectl.get("node", name, None).await?;
     Ok(node.as_ref().is_some_and(|n| ready_since(n, since)))
 }
 
-pub(crate) fn ready_since(node: &Value, since: Option<u64>) -> bool {
-    node.pointer("/status/conditions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+pub(crate) fn ready_since(node: &Node, since: Option<u64>) -> bool {
+    node.status
+        .iter()
+        .flat_map(|s| s.conditions.iter().flatten())
         .any(|c| {
-            c.get("type").and_then(Value::as_str) == Some("Ready")
-                && c.get("status").and_then(Value::as_str) == Some("True")
+            c.type_ == "Ready"
+                && c.status == "True"
                 && since.is_none_or(|since| {
-                    c.get("lastHeartbeatTime")
-                        .and_then(Value::as_str)
-                        .and_then(kubectl::unix_seconds)
+                    c.last_heartbeat_time
+                        .as_ref()
+                        .and_then(|beat| u64::try_from(beat.0.as_second()).ok())
                         .is_some_and(|beat| beat > since)
                 })
         })
@@ -180,20 +179,23 @@ pub(crate) fn ready_since(node: &Value, since: Option<u64>) -> bool {
 mod tests {
     use super::*;
 
+    /// A node as `kubectl get node -o json` prints it, trimmed.
+    const NODE: &str = include_str!("../fixtures/node.json");
+
     #[test]
     fn ready_only_after_the_restart() {
-        let node = serde_json::json!({"status": {"conditions": [
-            {"type": "MemoryPressure", "status": "False", "lastHeartbeatTime": "2026-10-23T08:00:30Z"},
-            {"type": "Ready", "status": "True", "lastHeartbeatTime": "2026-10-23T08:00:30Z"},
-        ]}});
-        let at = kubectl::unix_seconds("2026-10-23T08:00:30Z").unwrap();
+        let node: Node = serde_json::from_str(NODE).unwrap();
+        let at = 1_792_742_430; // 2026-10-23T08:00:30Z
         assert!(ready_since(&node, None));
         assert!(ready_since(&node, Some(at - 1)));
         assert!(!ready_since(&node, Some(at)));
-        let not_ready = serde_json::json!({"status": {"conditions": [
-            {"type": "Ready", "status": "Unknown", "lastHeartbeatTime": "2026-10-23T08:00:30Z"},
-        ]}});
+        let not_ready: Node = serde_json::from_str(&NODE.replace(
+            r#""status": "True", "type": "Ready""#,
+            r#""status": "Unknown", "type": "Ready""#,
+        ))
+        .unwrap();
         assert!(!ready_since(&not_ready, None));
+        assert!(!ready_since(&Node::default(), None));
     }
 
     #[test]

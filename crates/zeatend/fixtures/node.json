@@ -1,0 +1,33 @@
+{
+    "apiVersion": "v1",
+    "kind": "Node",
+    "metadata": {
+        "name": "k3s-1",
+        "labels": {"kubernetes.io/hostname": "k3s-1", "node-role.kubernetes.io/control-plane": "true"},
+        "creationTimestamp": "2026-10-23T07:58:02Z"
+    },
+    "spec": {"podCIDR": "10.42.0.0/24", "providerID": "k3s://k3s-1"},
+    "status": {
+        "addresses": [
+            {"address": "10.0.0.5", "type": "InternalIP"},
+            {"address": "fd00::5", "type": "InternalIP"},
+            {"address": "k3s-1", "type": "Hostname"}
+        ],
+        "allocatable": {"cpu": "2", "ephemeral-storage": "38411316405", "memory": "1334400Ki", "pods": "110"},
+        "capacity": {"cpu": "2", "ephemeral-storage": "39485628Ki", "memory": "2000000Ki", "pods": "110"},
+        "conditions": [
+            {"lastHeartbeatTime": "2026-10-23T08:00:30Z", "lastTransitionTime": "2026-10-23T07:58:02Z",
+             "message": "kubelet has sufficient memory available", "reason": "KubeletHasSufficientMemory",
+             "status": "False", "type": "MemoryPressure"},
+            {"lastHeartbeatTime": "2026-10-23T08:00:30Z", "lastTransitionTime": "2026-10-23T07:58:12Z",
+             "message": "kubelet is posting ready status", "reason": "KubeletReady",
+             "status": "True", "type": "Ready"}
+        ],
+        "nodeInfo": {
+            "architecture": "arm64", "bootID": "b0d4", "containerRuntimeVersion": "containerd://2.1.4-k3s1",
+            "kernelVersion": "6.8.0-85-generic", "kubeProxyVersion": "v1.37.1+k3s1",
+            "kubeletVersion": "v1.37.1+k3s1", "machineID": "6a1f", "operatingSystem": "linux",
+            "osImage": "Ubuntu 24.04.3 LTS", "systemUUID": "6a1f"
+        }
+    }
+}

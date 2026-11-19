@@ -12,6 +12,7 @@ zeatend-host.workspace = true
 zeatend-plan.workspace = true
 
 clap.workspace = true
+k8s-openapi.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true

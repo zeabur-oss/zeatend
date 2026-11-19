@@ -8,7 +8,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use serde_json::Value;
+use k8s_openapi::List;
+use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
 use zeatend_plan::cluster::{self, Rancher};
@@ -50,13 +51,8 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     }
     let layout = distribution.layout();
     let kubectl = Kubectl::admin(distribution);
-    let nodes = kubectl.raw("/api/v1/nodes").await?;
-    let nodes: Vec<&Value> = nodes
-        .get("items")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .collect();
+    let nodes: List<Node> = kubectl.raw("/api/v1/nodes").await?;
+    let nodes = nodes.items;
     let address = if let Some(address) = &options.address {
         address.clone()
     } else {
@@ -65,8 +61,8 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         })?;
         nodes
             .iter()
-            .find(|n| n.pointer("/metadata/name").and_then(Value::as_str) == Some(&name))
-            .and_then(|n| internal_ip(n))
+            .find(|n| n.metadata.name.as_ref() == Some(&name))
+            .and_then(internal_ip)
             .ok_or_else(|| {
                 InstallError::Message(format!(
                     "node {name} has no InternalIP; name the address with --address"
@@ -118,7 +114,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         version: record.as_ref().and_then(|r| r.version.as_deref()),
         node_names: &nodes
             .iter()
-            .filter_map(|n| n.pointer("/metadata/name").and_then(Value::as_str))
+            .filter_map(|n| n.metadata.name.as_deref())
             .collect::<Vec<_>>(),
         disable: &disable,
         ttl: options.ttl,
@@ -136,14 +132,14 @@ fn server_url(address: &str, port: u16) -> String {
     }
 }
 
-fn internal_ip(node: &Value) -> Option<String> {
-    node.pointer("/status/addresses")?
-        .as_array()?
+fn internal_ip(node: &Node) -> Option<String> {
+    node.status
+        .as_ref()?
+        .addresses
+        .as_ref()?
         .iter()
-        .find(|a| a.get("type").and_then(Value::as_str) == Some("InternalIP"))?
-        .get("address")?
-        .as_str()
-        .map(str::to_owned)
+        .find(|a| a.type_ == "InternalIP")
+        .map(|a| a.address.clone())
 }
 
 /// The token a new node joins with.
@@ -310,6 +306,13 @@ mod tests {
     use super::*;
 
     const HASH: &str = "8a3f0e0c4b2d9a1e7f6c5b4a39281706f5e4d3c2b1a09f8e7d6c5b4a39281706";
+
+    #[test]
+    fn the_address_is_the_first_internal_ip_of_the_node() {
+        let node: Node = serde_json::from_str(include_str!("../fixtures/node.json")).unwrap();
+        assert_eq!(internal_ip(&node).as_deref(), Some("10.0.0.5"));
+        assert_eq!(internal_ip(&Node::default()), None);
+    }
 
     fn worker_token() -> Token {
         Token::Bootstrap(format!("K10{HASH}::abcdef.0123456789abcdef"))

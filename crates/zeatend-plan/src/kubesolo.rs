@@ -4,7 +4,7 @@
 //! `NetworkPolicy`, so it isolates nothing between namespaces. It reads `/etc/kubesolo/config.yaml`
 //! (`kubesolo --print-config` shows every key) and keeps its state in `/var/lib/kubesolo`.
 
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 
 use crate::PlanError;
 use crate::cluster::{HostFile, PortUse};
@@ -75,40 +75,77 @@ pub struct Options {
 
 const HEADER: &str = "# Written by zeatend; `zeatend apply` writes it again.\n";
 
+/// The keys zeatend writes and reads in the configuration file.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Config {
+    /// `kubesolo.io/v1alpha1`.
+    #[serde(default)]
+    pub api_version: String,
+    /// `Config`.
+    #[serde(default)]
+    pub kind: String,
+    /// The node's address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<Network>,
+    /// The node and the API server.
+    #[serde(default)]
+    pub kubernetes: Kubernetes,
+}
+
+/// The `network` keys of [`Config`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Network {
+    /// The address the node registers with.
+    #[serde(rename = "nodeIP", default)]
+    pub node_ip: String,
+}
+
+/// The `kubernetes` keys of [`Config`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Kubernetes {
+    /// The node's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_name: Option<String>,
+    /// Extra API server certificate names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_server: Option<ApiServer>,
+}
+
+/// The `kubernetes.apiServer` keys of [`Config`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApiServer {
+    /// Extra API server certificate names.
+    #[serde(rename = "extraSANs", default)]
+    pub extra_sans: Vec<String>,
+}
+
 /// The configuration file and the unit, in the order to write them.
-#[must_use]
-pub fn host_files(options: &Options) -> Vec<HostFile> {
-    let mut lines = vec![
-        HEADER.trim_end().to_owned(),
-        "apiVersion: kubesolo.io/v1alpha1".to_owned(),
-        "kind: Config".to_owned(),
-    ];
-    if let Some(ip) = &options.node_ip {
-        lines.extend(["network:".to_owned(), format!("  nodeIP: {}", json!(ip))]);
-    }
-    lines.extend([
-        "kubernetes:".to_owned(),
-        format!("  nodeName: {}", json!(options.node_name)),
-    ]);
-    if !options.tls_san.is_empty() {
-        lines.extend([
-            "  apiServer:".to_owned(),
-            format!("    extraSANs: {}", json!(options.tls_san)),
-        ]);
-    }
-    let config = lines.join("\n") + "\n";
-    vec![
-        HostFile {
-            path: CONFIG_FILE.to_owned(),
-            mode: 0o600,
-            content: config,
+///
+/// # Errors
+///
+/// When the configuration cannot be serialised.
+pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
+    let config = Config {
+        api_version: "kubesolo.io/v1alpha1".to_owned(),
+        kind: "Config".to_owned(),
+        network: options.node_ip.clone().map(|node_ip| Network { node_ip }),
+        kubernetes: Kubernetes {
+            node_name: Some(options.node_name.clone()),
+            api_server: (!options.tls_san.is_empty()).then(|| ApiServer {
+                extra_sans: options.tls_san.clone(),
+            }),
         },
+    };
+    Ok(vec![
+        HostFile::yaml(CONFIG_FILE.to_owned(), HEADER, &config)?,
         HostFile {
             path: UNIT_FILE.to_owned(),
             mode: 0o644,
             content: unit(options),
         },
-    ]
+    ])
 }
 
 /// The unit of `KubeSolo`'s own installer, without its environment file, with the
@@ -158,49 +195,140 @@ OOMScoreAdjust=-500
 WantedBy=multi-user.target
 ";
 
+/// The fields zeatend reads and writes of a kubeconfig file (`kind: Config`, `apiVersion: v1`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Kubeconfig {
+    /// `v1`.
+    #[serde(rename = "apiVersion", default)]
+    pub api_version: String,
+    /// `Config`.
+    #[serde(default)]
+    pub kind: String,
+    /// The clusters by name.
+    #[serde(default)]
+    pub clusters: Vec<NamedCluster>,
+    /// The users by name.
+    #[serde(default)]
+    pub users: Vec<NamedUser>,
+    /// The contexts by name.
+    #[serde(default)]
+    pub contexts: Vec<NamedContext>,
+    /// The context `kubectl` uses.
+    #[serde(default)]
+    pub current_context: String,
+}
+
+/// A cluster of a [`Kubeconfig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamedCluster {
+    /// Its name.
+    pub name: String,
+    /// Where the API server is.
+    pub cluster: Cluster,
+}
+
+/// The API server and its certificate authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Cluster {
+    /// The API server's URL.
+    pub server: String,
+    /// The certificate authority, base64-encoded PEM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_authority_data: Option<String>,
+}
+
+/// A user of a [`Kubeconfig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamedUser {
+    /// Its name.
+    pub name: String,
+    /// Its credentials.
+    #[serde(default)]
+    pub user: User,
+}
+
+/// A client certificate and its key, base64-encoded PEM. zeatend reads no other credentials.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct User {
+    /// The client certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_certificate_data: Option<String>,
+    /// The client key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_key_data: Option<String>,
+}
+
+/// A context of a [`Kubeconfig`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NamedContext {
+    /// Its name.
+    pub name: String,
+    /// The cluster and user it names.
+    pub context: Context,
+}
+
+/// The cluster and user of a context.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Context {
+    /// The cluster's name.
+    pub cluster: String,
+    /// The user's name.
+    pub user: String,
+}
+
 /// The admin kubeconfig as a file for the person's computer: only the certificate user, with the
 /// cluster, user and context all named `name`.
 ///
 /// # Errors
 ///
 /// When the file has no context with a client certificate.
-pub fn kubeconfig(admin: &Value, name: &str) -> Result<Value, PlanError> {
-    let bad = |reason: &str| PlanError::Kubeconfig(format!("{ADMIN_KUBECONFIG}: {reason}"));
-    let named = |list: &str, key: &str| -> Option<Value> {
-        admin
-            .get(list)?
-            .as_array()?
-            .iter()
-            .find(|e| e.get("name").and_then(Value::as_str) == Some(key))
-            .cloned()
-    };
-    let contexts = admin
-        .get("contexts")
-        .and_then(Value::as_array)
-        .ok_or_else(|| bad("no contexts"))?;
-    let (cluster, user) = contexts
+pub fn kubeconfig(admin: &Kubeconfig, name: &str) -> Result<Kubeconfig, PlanError> {
+    let (cluster, user) = admin
+        .contexts
         .iter()
         .find_map(|c| {
-            let ctx = c.get("context")?;
-            let cluster = named("clusters", ctx.get("cluster")?.as_str()?)?;
-            let user = named("users", ctx.get("user")?.as_str()?)?;
-            user.pointer("/user/client-certificate-data")?;
+            let cluster = admin
+                .clusters
+                .iter()
+                .find(|n| n.name == c.context.cluster)?;
+            let user = admin.users.iter().find(|n| n.name == c.context.user)?;
+            user.user.client_certificate_data.as_ref()?;
             Some((cluster, user))
         })
-        .ok_or_else(|| bad("no context with a client certificate"))?;
-    let cluster = cluster.get("cluster").cloned().unwrap_or_default();
-    Ok(json!({
-        "apiVersion": "v1",
-        "kind": "Config",
-        "clusters": [{"name": name, "cluster": cluster}],
-        "users": [{"name": name, "user": user.get("user").cloned().unwrap_or_default()}],
-        "contexts": [{"name": name, "context": {"cluster": name, "user": name}}],
-        "current-context": name,
-    }))
+        .ok_or_else(|| {
+            PlanError::Kubeconfig(format!(
+                "{ADMIN_KUBECONFIG}: no context with a client certificate"
+            ))
+        })?;
+    Ok(Kubeconfig {
+        api_version: "v1".to_owned(),
+        kind: "Config".to_owned(),
+        clusters: vec![NamedCluster {
+            name: name.to_owned(),
+            cluster: cluster.cluster.clone(),
+        }],
+        users: vec![NamedUser {
+            name: name.to_owned(),
+            user: user.user.clone(),
+        }],
+        contexts: vec![NamedContext {
+            name: name.to_owned(),
+            context: Context {
+                cluster: name.to_owned(),
+                user: name.to_owned(),
+            },
+        }],
+        current_context: name.to_owned(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::*;
     use crate::cluster::Distribution;
     use crate::tuning::MemoryTier;
@@ -217,7 +345,8 @@ mod tests {
             tls_san: vec!["solo.example.com".to_owned()],
             tuning: tuning(),
             installer_webhook: false,
-        });
+        })
+        .unwrap();
         let config = files.iter().find(|f| f.path == CONFIG_FILE).unwrap();
         assert_eq!(config.mode, 0o600);
         let value: Value = serde_saphyr::from_str(&config.content).unwrap();
@@ -234,7 +363,8 @@ mod tests {
             tls_san: Vec::new(),
             tuning: tuning(),
             installer_webhook: false,
-        });
+        })
+        .unwrap();
         let value: Value = serde_saphyr::from_str(&bare[0].content).unwrap();
         assert!(value.get("network").is_none());
         assert_eq!(value["kubernetes"], json!({"nodeName": "solo"}));
@@ -259,6 +389,7 @@ mod tests {
                 tuning: tuning(),
                 installer_webhook,
             })
+            .unwrap()
             .into_iter()
             .find(|f| f.path == UNIT_FILE)
             .unwrap()
@@ -272,30 +403,51 @@ mod tests {
 
     #[test]
     fn the_kubeconfig_keeps_only_the_certificate_user() {
-        let admin = json!({
-            "clusters": [{"name": "kubesolo", "cluster": {"server": "https://10.0.0.5:6443", "certificate-authority-data": "Q0E="}}],
-            "users": [
-                {"name": "kubernetes-admin", "user": {"client-certificate-data": "Q0VSVA==", "client-key-data": "S0VZ"}},
-                {"name": "admin-token", "user": {"tokenFile": "/nowhere"}},
-            ],
-            "contexts": [
-                {"name": "admin-token@kubesolo", "context": {"cluster": "kubesolo", "user": "admin-token"}},
-                {"name": "kubernetes-admin@kubesolo", "context": {"cluster": "kubesolo", "user": "kubernetes-admin"}},
-            ],
-            "current-context": "admin-token@kubesolo",
-        });
+        // The shape of the admin kubeconfig KubeSolo writes.
+        let admin: Kubeconfig = serde_saphyr::from_str(
+            "apiVersion: v1
+kind: Config
+clusters:
+- name: kubesolo
+  cluster:
+    server: https://10.0.0.5:6443
+    certificate-authority-data: Q0E=
+users:
+- name: kubernetes-admin
+  user:
+    client-certificate-data: Q0VSVA==
+    client-key-data: S0VZ
+- name: admin-token
+  user:
+    tokenFile: /nowhere
+contexts:
+- name: admin-token@kubesolo
+  context: {cluster: kubesolo, user: admin-token}
+- name: kubernetes-admin@kubesolo
+  context: {cluster: kubesolo, user: kubernetes-admin}
+current-context: admin-token@kubesolo
+",
+        )
+        .unwrap();
         let config = kubeconfig(&admin, "solo").unwrap();
-        assert_eq!(config["current-context"], "solo");
-        assert!(!config.to_string().contains("admin-token"));
-        assert_eq!(config["users"][0]["user"]["client-key-data"], "S0VZ");
+        let yaml = serde_saphyr::to_string(&config).unwrap();
+        assert!(!yaml.contains("admin-token"), "{yaml}");
+        let value: Value = serde_saphyr::from_str(&yaml).unwrap();
+        assert_eq!(value["current-context"], "solo");
+        assert_eq!(value["contexts"][0]["context"]["user"], "solo");
+        assert_eq!(value["users"][0]["user"]["client-key-data"], "S0VZ");
         assert_eq!(
-            config["clusters"][0]["cluster"]["server"],
+            value["users"][0]["user"]["client-certificate-data"],
+            "Q0VSVA=="
+        );
+        assert_eq!(
+            value["clusters"][0]["cluster"]["server"],
             "https://10.0.0.5:6443"
         );
         assert_eq!(
-            config["clusters"][0]["cluster"]["certificate-authority-data"],
+            value["clusters"][0]["cluster"]["certificate-authority-data"],
             "Q0E="
         );
-        assert!(kubeconfig(&json!({"contexts": []}), "solo").is_err());
+        assert!(kubeconfig(&Kubeconfig::default(), "solo").is_err());
     }
 }

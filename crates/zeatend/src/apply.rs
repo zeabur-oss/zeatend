@@ -5,10 +5,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use k8s_openapi::apimachinery::pkg::version::Info;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::preflight::{self, Status};
 use zeatend_host::{HostError, archive, cmd, download, facts, files, systemd};
-use zeatend_plan::cluster::{self, APPARMOR_PROFILE, HostFile, Rancher};
+use zeatend_plan::cluster::{
+    self, APPARMOR_PROFILE, Addon, HelmChart, HostFile, ObjectList, Rancher,
+};
 use zeatend_plan::config::{Component, Config};
 use zeatend_plan::k3s;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
@@ -178,17 +181,21 @@ async fn wait_removed(
             rancher.title()
         ),
         async || {
-            let addons = kubectl
+            let addons: Result<ObjectList<Addon>, _> = kubectl
                 .raw("/apis/k3s.cattle.io/v1/namespaces/kube-system/addons")
                 .await;
-            let charts = kubectl
+            let charts: Result<ObjectList<HelmChart>, _> = kubectl
                 .raw("/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts")
                 .await;
             addons.is_ok_and(|addons| {
                 charts.is_ok_and(|charts| {
-                    cluster::left_to_remove(rancher, disable, &addons, &charts, |file| {
-                        Path::new(file).exists()
-                    })
+                    cluster::left_to_remove(
+                        rancher,
+                        disable,
+                        &addons.items,
+                        &charts.items,
+                        |file| Path::new(file).exists(),
+                    )
                     .is_empty()
                 })
             })
@@ -200,8 +207,8 @@ async fn wait_removed(
 
 /// The Kubernetes version the API server behind `kubectl` reports; `None` when it does not answer.
 pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> {
-    let version = kubectl.raw("/version").await.ok()?;
-    Kubernetes::parse(version.get("gitVersion")?.as_str()?)
+    let version: Info = kubectl.raw("/version").await.ok()?;
+    Kubernetes::parse(&version.git_version)
 }
 
 /// The plan, with the install record and the running Kubernetes version read from the host.

@@ -7,8 +7,15 @@
 //! RKE2 brings Canal, Calico's policy engine on flannel. `KubeSolo` is one node with no workers,
 //! for hosts with little memory.
 
+use std::collections::BTreeMap;
+
+use k8s_openapi::api::networking::v1::{
+    NetworkPolicy, NetworkPolicyIngressRule, NetworkPolicySpec,
+};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
+    LabelSelector, LabelSelectorRequirement, ObjectMeta,
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::PlanError;
 use crate::config::Component;
@@ -55,16 +62,22 @@ impl Distribution {
     #[must_use]
     pub const fn packaged(self, component: Component) -> Option<Packaged> {
         let (manifest, setting, item) = match (self, component) {
-            (Self::K3s, Component::Traefik) => ("traefik", "disable", "traefik"),
+            (Self::K3s, Component::Traefik) => ("traefik", Setting::Disable, "traefik"),
             (Self::K3s, Component::MetricsServer) => {
-                ("metrics-server", "disable", "metrics-server")
+                ("metrics-server", Setting::Disable, "metrics-server")
             }
-            (Self::K3s, Component::LocalStorage) => ("local-storage", "disable", "local-storage"),
+            (Self::K3s, Component::LocalStorage) => {
+                ("local-storage", Setting::Disable, "local-storage")
+            }
             // RKE2 chooses its ingress controller, and `traefik` is not an item of `disable`.
-            (Self::Rke2, Component::Traefik) => ("rke2-traefik", "ingress-controller", "none"),
-            (Self::Rke2, Component::MetricsServer) => {
-                ("rke2-metrics-server", "disable", "rke2-metrics-server")
+            (Self::Rke2, Component::Traefik) => {
+                ("rke2-traefik", Setting::IngressController, "none")
             }
+            (Self::Rke2, Component::MetricsServer) => (
+                "rke2-metrics-server",
+                Setting::Disable,
+                "rke2-metrics-server",
+            ),
             (Self::Rke2, Component::LocalStorage) | (Self::KubeSolo, _) => return None,
         };
         Some(Packaged {
@@ -358,27 +371,25 @@ impl Rancher {
 
     /// The kubelet's arguments. With the reserves, the pods' cgroup ends short of the OS and the
     /// distribution, so memory running out kills or evicts a pod, and not `k3s-server`. A worker
-    /// has no control plane and reserves only the OS. None when `tuning` has no reserves.
-    pub(crate) fn kubelet_args(tuning: &HostTuning, server: bool) -> String {
+    /// has no control plane and reserves only the OS. Empty when `tuning` has no reserves.
+    pub(crate) fn kubelet_args(tuning: &HostTuning, server: bool) -> Vec<String> {
         let Some(reserves) = tuning.kubelet else {
-            return String::new();
+            return Vec::new();
         };
-        let kube = if server {
-            format!("  - kube-reserved=memory={}Mi\n", reserves.kube)
-        } else {
-            String::new()
-        };
-        let soft = reserves.eviction_soft.map_or_else(String::new, |soft| {
-            format!(
-                "  - eviction-soft=memory.available<{soft}Mi\n  \
-                 - eviction-soft-grace-period=memory.available=30s\n"
-            )
-        });
-        format!(
-            "{KUBELET_ARGS}  - system-reserved=memory={}Mi\n{kube}  \
-             - eviction-hard=memory.available<{}Mi,{DISK_EVICTION_HARD}\n{soft}",
-            reserves.system, reserves.eviction_hard
-        )
+        let mut args: Vec<String> = KUBELET_ARGS.iter().map(|&a| a.to_owned()).collect();
+        args.push(format!("system-reserved=memory={}Mi", reserves.system));
+        if server {
+            args.push(format!("kube-reserved=memory={}Mi", reserves.kube));
+        }
+        args.push(format!(
+            "eviction-hard=memory.available<{}Mi,{DISK_EVICTION_HARD}",
+            reserves.eviction_hard
+        ));
+        if let Some(soft) = reserves.eviction_soft {
+            args.push(format!("eviction-soft=memory.available<{soft}Mi"));
+            args.push("eviction-soft-grace-period=memory.available=30s".to_owned());
+        }
+        args
     }
 
     /// The least memory a server needs.
@@ -438,14 +449,17 @@ impl Rancher {
     }
 
     /// The files of a server, in the order to write them.
-    #[must_use]
-    pub fn server_files(self, options: &Options) -> Vec<HostFile> {
+    ///
+    /// # Errors
+    ///
+    /// When a file cannot be serialised.
+    pub fn server_files(self, options: &Options) -> Result<Vec<HostFile>, PlanError> {
         let mut files = match self {
-            Self::K3s => crate::k3s::host_files(options),
-            Self::Rke2 => crate::rke2::host_files(options),
+            Self::K3s => crate::k3s::host_files(options)?,
+            Self::Rke2 => crate::rke2::host_files(options)?,
         };
-        files.push(self.servicelb_policy());
-        files
+        files.push(self.servicelb_policy()?);
+        Ok(files)
     }
 
     /// The `NetworkPolicy` that lets outside traffic into the `ServiceLB` pods, as a manifest the
@@ -454,37 +468,37 @@ impl Rancher {
     /// `kube-system/default-network-policy` lets in only pods of `kube-system`: RKE2's `cis`
     /// profile adds it, and zeatend adds it on K3s. Without this policy, a `ServiceLB` pod on a
     /// worker gets no outside requests. Each distribution labels the pods with its own prefix.
-    fn servicelb_policy(self) -> HostFile {
-        let manifests = self.manifests_dir();
-        let policy = serde_json::json!({
-            "apiVersion": "networking.k8s.io/v1",
-            "kind": "NetworkPolicy",
-            "metadata": {
-                "name": "zeatend-servicelb",
-                "namespace": "kube-system",
-                "labels": {"app.kubernetes.io/managed-by": crate::plan::MANAGER},
-            },
-            "spec": {
-                "podSelector": {"matchExpressions": [
-                    {"key": self.servicelb_label(), "operator": "Exists"},
-                ]},
-                "policyTypes": ["Ingress"],
-                "ingress": [{}],
-            },
-        });
-        HostFile {
-            path: format!("{manifests}/zeatend-servicelb-policy.yaml"),
-            mode: 0o600,
-            content: format!(
-                "# Written by zeatend; {} applies it on every start.\n---\n{policy}\n",
-                self.title()
-            ),
-        }
+    fn servicelb_policy(self) -> Result<HostFile, PlanError> {
+        let policy = NetworkPolicy {
+            metadata: managed("zeatend-servicelb", "kube-system"),
+            spec: Some(NetworkPolicySpec {
+                pod_selector: Some(LabelSelector {
+                    match_expressions: Some(vec![LabelSelectorRequirement {
+                        key: self.servicelb_label().to_owned(),
+                        operator: "Exists".to_owned(),
+                        values: None,
+                    }]),
+                    match_labels: None,
+                }),
+                policy_types: Some(vec!["Ingress".to_owned()]),
+                ingress: Some(vec![NetworkPolicyIngressRule::default()]),
+                egress: None,
+            }),
+        };
+        let path = format!("{}/zeatend-servicelb-policy.yaml", self.manifests_dir());
+        let header = format!(
+            "# Written by zeatend; {} applies it on every start.\n",
+            self.title()
+        );
+        manifest(path, &header, &[policy])
     }
 
     /// The files of a worker.
-    #[must_use]
-    pub fn agent_files(self, tuning: &HostTuning) -> Vec<HostFile> {
+    ///
+    /// # Errors
+    ///
+    /// When a file cannot be serialised.
+    pub fn agent_files(self, tuning: &HostTuning) -> Result<Vec<HostFile>, PlanError> {
         match self {
             Self::K3s => crate::k3s::agent_files(tuning),
             Self::Rke2 => crate::rke2::agent_files(tuning),
@@ -507,34 +521,37 @@ impl Rancher {
     }
 
     /// The drop-in naming the server to join and the token file.
-    #[must_use]
-    pub fn join_file(self, server: &str) -> HostFile {
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be serialised.
+    pub fn join_file(self, server: &str) -> Result<HostFile, PlanError> {
         let layout = self.layout();
-        HostFile {
-            path: format!("{}/config.yaml.d/10-join.yaml", layout.config_dir),
-            mode: 0o600,
-            content: format!(
-                "{HEADER}server: {server}\ntoken-file: {}\n",
-                layout.join_token_file
-            ),
+        RancherConfig {
+            server: Some(server.to_owned()),
+            token_file: Some(layout.join_token_file),
+            ..RancherConfig::default()
         }
+        .file(self.join_path())
     }
 
     /// The drop-in naming the node, so a later change of the host name does not register a
     /// second node.
-    #[must_use]
-    pub fn node_name_file(self, name: &str) -> HostFile {
-        HostFile {
-            path: self.node_name_path(),
-            mode: 0o600,
-            // Quoted, so names like `on` or `001` stay strings for K3s's YAML parser.
-            content: format!("{HEADER}node-name: {}\n", serde_json::json!(name)),
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be serialised.
+    pub fn node_name_file(self, name: &str) -> Result<HostFile, PlanError> {
+        RancherConfig {
+            node_name: Some(name.to_owned()),
+            ..RancherConfig::default()
         }
+        .file(self.node_name_path())
     }
 
     /// Where [`Self::node_name_file`] goes.
     #[must_use]
-    fn node_name_path(self) -> String {
+    pub fn node_name_path(self) -> String {
         format!(
             "{}/config.yaml.d/15-node-name.yaml",
             self.layout().config_dir
@@ -543,22 +560,32 @@ impl Rancher {
 
     /// The drop-in naming the addresses the node registers with, so it does not pick a temporary
     /// IPv6 address. `None` when the host's addresses could not be read.
-    #[must_use]
-    pub fn node_ip_file(self, addresses: &[String]) -> Option<HostFile> {
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be serialised.
+    pub fn node_ip_file(self, addresses: &[String]) -> Result<Option<HostFile>, PlanError> {
         if addresses.is_empty() {
-            return None;
+            return Ok(None);
         }
-        let mut content = format!("{HEADER}node-ip:\n");
-        for address in addresses {
-            for part in ["  - ", address, "\n"] {
-                content.push_str(part);
-            }
+        RancherConfig {
+            node_ip: addresses.to_vec(),
+            ..RancherConfig::default()
         }
-        Some(HostFile {
-            path: format!("{}/config.yaml.d/20-node-ip.yaml", self.layout().config_dir),
-            mode: 0o600,
-            content,
-        })
+        .file(self.node_ip_path())
+        .map(Some)
+    }
+
+    /// Where [`Self::node_ip_file`] goes.
+    #[must_use]
+    pub fn node_ip_path(self) -> String {
+        format!("{}/config.yaml.d/20-node-ip.yaml", self.layout().config_dir)
+    }
+
+    /// Where [`Self::join_file`] goes.
+    #[must_use]
+    pub fn join_path(self) -> String {
+        format!("{}/config.yaml.d/10-join.yaml", self.layout().config_dir)
     }
 }
 
@@ -573,6 +600,64 @@ pub struct HostFile {
     pub content: String,
 }
 
+impl HostFile {
+    /// `value` as YAML after `header`, readable by root only. Long strings stay on one line.
+    pub(crate) fn yaml<T: Serialize>(
+        path: String,
+        header: &str,
+        value: &T,
+    ) -> Result<Self, PlanError> {
+        let options = serde_saphyr::ser_options! { prefer_block_scalars: false };
+        let yaml = serde_saphyr::to_string_with_options(value, options).map_err(|e| {
+            PlanError::HostFile {
+                path: path.clone(),
+                reason: e.to_string(),
+            }
+        })?;
+        Ok(Self {
+            path,
+            mode: 0o600,
+            content: format!("{header}{yaml}"),
+        })
+    }
+}
+
+/// A manifest of `objects`, one JSON document each, that the server's deploy controller applies.
+pub(crate) fn manifest<T: Serialize>(
+    path: String,
+    header: &str,
+    objects: &[T],
+) -> Result<HostFile, PlanError> {
+    let mut content = header.to_owned();
+    for object in objects {
+        let json = serde_json::to_string(object).map_err(|e| PlanError::HostFile {
+            path: path.clone(),
+            reason: e.to_string(),
+        })?;
+        content.push_str("---\n");
+        content.push_str(&json);
+        content.push('\n');
+    }
+    Ok(HostFile {
+        path,
+        mode: 0o600,
+        content,
+    })
+}
+
+/// Metadata of an object that zeatend manages.
+pub(crate) fn managed(name: &str, namespace: &str) -> ObjectMeta {
+    ObjectMeta {
+        name: Some(name.to_owned()),
+        namespace: Some(namespace.to_owned()),
+        labels: Some(BTreeMap::from([(
+            "app.kubernetes.io/managed-by".to_owned(),
+            crate::plan::MANAGER.to_owned(),
+        )])),
+        ..ObjectMeta::default()
+    }
+}
+
 /// A component that K3s or RKE2 packages: the manifest the server deploys it from, and the item
 /// of a list setting in the server's configuration that turns it off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -580,9 +665,18 @@ pub struct Packaged {
     /// The manifest in the manifests directory, without `.yaml`; it names the Addon.
     pub manifest: &'static str,
     /// The list setting, such as `disable`.
-    pub setting: &'static str,
+    pub setting: Setting,
     /// The item of `setting` that turns the component off.
     pub item: &'static str,
+}
+
+/// A list setting of the K3s or RKE2 configuration that turns packaged components off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Setting {
+    /// `disable`: manifests the server does not deploy.
+    Disable,
+    /// RKE2's `ingress-controller`.
+    IngressController,
 }
 
 /// Server settings from the configuration and the host.
@@ -599,6 +693,108 @@ pub struct Options {
     pub disable: Vec<Component>,
 }
 
+/// The keys zeatend writes in a K3s or RKE2 configuration file.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) struct RancherConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) token_file: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) node_name: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) node_ip: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) profile: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) protect_kernel_defaults: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) secrets_encryption: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) write_kubeconfig_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) enable_servicelb: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) flannel_backend: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) disable_network_policy: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) audit_policy_file: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kube_apiserver_arg: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kube_controller_manager_arg: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kubelet_arg: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) control_plane_resource_requests: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) ingress_controller: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) disable: Vec<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tls_san: Vec<String>,
+}
+
+impl RancherConfig {
+    /// Adds the settings that turn off the components in `disable`.
+    pub(crate) fn turn_off(&mut self, distribution: Distribution, disable: &[Component]) {
+        for packaged in disable.iter().filter_map(|c| distribution.packaged(*c)) {
+            match packaged.setting {
+                Setting::Disable => self.disable.push(packaged.item),
+                Setting::IngressController => self.ingress_controller.push(packaged.item),
+            }
+        }
+    }
+
+    /// The configuration as a file at `path`.
+    pub(crate) fn file(&self, path: String) -> Result<HostFile, PlanError> {
+        HostFile::yaml(path, HEADER, self)
+    }
+}
+
+/// The list settings zeatend reads from the K3s or RKE2 configuration of an earlier install.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct ListSettings {
+    #[serde(default)]
+    disable: Items,
+    #[serde(default)]
+    ingress_controller: Items,
+}
+
+impl ListSettings {
+    fn items(&self, setting: Setting) -> Vec<String> {
+        match setting {
+            Setting::Disable => self.disable.list(),
+            Setting::IngressController => self.ingress_controller.list(),
+        }
+    }
+}
+
+/// The items of a list setting, which a configuration writes as a list or a comma-separated
+/// string.
+#[derive(Debug, Default, Deserialize)]
+#[serde(untagged)]
+enum Items {
+    List(Vec<String>),
+    Text(String),
+    #[default]
+    None,
+}
+
+impl Items {
+    fn list(&self) -> Vec<String> {
+        let items: Vec<String> = match self {
+            Self::List(items) => items.clone(),
+            Self::Text(items) => items.split(',').map(|i| i.trim().to_owned()).collect(),
+            Self::None => Vec::new(),
+        };
+        items.into_iter().filter(|item| !item.is_empty()).collect()
+    }
+}
+
 /// The packaged components that the K3s or RKE2 configuration `config` of an earlier install
 /// turns off, for zeatend's `disable`.
 ///
@@ -612,20 +808,26 @@ pub fn disabled_components(
     distribution: Distribution,
     config: &str,
 ) -> Result<Vec<Component>, PlanError> {
-    let value: Value =
+    let settings: ListSettings =
         serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
     let table: Vec<(Component, Packaged)> = Component::ALL
         .into_iter()
         .filter_map(|c| Some((c, distribution.packaged(c)?)))
         .collect();
     let mut off = Vec::new();
-    for setting in settings(&table) {
-        for item in list(value.get(setting)) {
+    for setting in [Setting::Disable, Setting::IngressController] {
+        if !table.iter().any(|(_, p)| p.setting == setting) {
+            continue;
+        }
+        for item in settings.items(setting) {
             let (component, _) = table
                 .iter()
                 .find(|(_, p)| p.setting == setting && p.item == item)
                 .ok_or_else(|| {
-                    PlanError::Config(format!("{setting}: zeatend has no component for {item}"))
+                    PlanError::Config(format!(
+                        "{}: zeatend has no component for {item}",
+                        setting.key()
+                    ))
                 })?;
             off.push(*component);
         }
@@ -636,52 +838,57 @@ pub fn disabled_components(
         .collect())
 }
 
-/// The list settings of `table`, each once, in the order of the table.
-fn settings(table: &[(Component, Packaged)]) -> Vec<&'static str> {
-    let mut settings: Vec<&'static str> = Vec::new();
-    for (_, packaged) in table {
-        if !settings.contains(&packaged.setting) {
-            settings.push(packaged.setting);
+impl Setting {
+    /// Its key in the configuration file.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::IngressController => "ingress-controller",
         }
     }
-    settings
 }
 
-/// The items of a list setting, which a configuration writes as a list or a comma-separated
-/// string.
-fn list(value: Option<&Value>) -> Vec<String> {
-    let items: Vec<String> = match value {
-        Some(Value::Array(items)) => items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        Some(Value::String(items)) => items.split(',').map(|i| i.trim().to_owned()).collect(),
-        _ => Vec::new(),
-    };
-    items.into_iter().filter(|item| !item.is_empty()).collect()
+/// The items of the API's list of objects.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ObjectList<T> {
+    /// The objects.
+    #[serde(default = "Vec::new")]
+    pub items: Vec<T>,
 }
 
-/// The settings that turn off the components in `disable`.
-pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[Component]) {
-    let table: Vec<(Component, Packaged)> = disable
-        .iter()
-        .filter_map(|c| Some((*c, distribution.packaged(*c)?)))
-        .collect();
-    for setting in settings(&table) {
-        let items: Vec<String> = table
-            .iter()
-            .filter(|(_, p)| p.setting == setting)
-            .map(|(_, p)| p.item.to_owned())
-            .collect();
-        yaml_list(out, setting, &items);
-    }
+/// The fields zeatend reads of a K3s or RKE2 `Addon` (`addons.k3s.cattle.io`), the record of a
+/// manifest the server deployed.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Addon {
+    /// Its name.
+    #[serde(default)]
+    pub metadata: ObjectMeta,
+    /// Its manifest.
+    #[serde(default)]
+    pub spec: AddonSpec,
+}
+
+/// The spec of an [`Addon`].
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AddonSpec {
+    /// The path of the manifest.
+    #[serde(default)]
+    pub source: String,
+}
+
+/// The fields zeatend reads of a `HelmChart` (`helmcharts.helm.cattle.io`).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HelmChart {
+    /// Its name and the annotation naming the manifest that made it.
+    #[serde(default)]
+    pub metadata: ObjectMeta,
 }
 
 /// The objects that the server has not removed yet for the components in `disable`.
 ///
 /// The result has `addon/<name>` and `helmchart/<name>` items. `addons` and `charts` are the
-/// API's lists of the Addons and the `HelmCharts` in `kube-system`; `exists` tells whether a file
+/// Addons and the `HelmCharts` in `kube-system`; `exists` tells whether a file
 /// exists on the host.
 ///
 /// The server keeps an Addon for each manifest, with the checksum of the manifest, and applies a
@@ -698,8 +905,8 @@ pub(crate) fn turn_off(out: &mut String, distribution: Distribution, disable: &[
 pub fn left_to_remove(
     rancher: Rancher,
     disable: &[Component],
-    addons: &Value,
-    charts: &Value,
+    addons: &[Addon],
+    charts: &[HelmChart],
     exists: impl Fn(&str) -> bool,
 ) -> Vec<String> {
     let manifests = rancher.manifests_dir();
@@ -707,37 +914,26 @@ pub fn left_to_remove(
         .iter()
         .filter_map(|c| Some(Distribution::from(rancher).packaged(*c)?.manifest))
         .collect();
-    let items = |list: &'_ Value| -> Vec<Value> {
-        list.get("items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default()
-    };
-    let text = |object: &Value, pointer: &str| -> String {
-        object
-            .pointer(pointer)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let addons = items(addons).into_iter().filter(|addon| {
-        let source = text(addon, "/spec/source");
-        !exists(&source)
+    let name = |metadata: &ObjectMeta| metadata.name.clone().unwrap_or_default();
+    let addons = addons.iter().filter(|addon| {
+        let source = &addon.spec.source;
+        !exists(source)
             && names.iter().any(|name| {
-                source == format!("{manifests}/{name}.yaml")
+                *source == format!("{manifests}/{name}.yaml")
                     || source.starts_with(&format!("{manifests}/{name}/"))
             })
     });
-    let charts = items(charts).into_iter().filter(|chart| {
-        let owner = text(
-            chart,
-            "/metadata/annotations/objectset.rio.cattle.io~1owner-name",
-        );
-        names.contains(&owner.as_str())
+    let charts = charts.iter().filter(|chart| {
+        chart
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get("objectset.rio.cattle.io/owner-name"))
+            .is_some_and(|owner| names.contains(&owner.as_str()))
     });
     addons
-        .map(|addon| format!("addon/{}", text(&addon, "/metadata/name")))
-        .chain(charts.map(|chart| format!("helmchart/{}", text(&chart, "/metadata/name"))))
+        .map(|addon| format!("addon/{}", name(&addon.metadata)))
+        .chain(charts.map(|chart| format!("helmchart/{}", name(&chart.metadata))))
         .collect()
 }
 
@@ -784,11 +980,14 @@ rules:
 /// The kubelet settings every node gets: a fork bomb in one pod cannot take the node's process
 /// table, an idle exec or log stream closes after five minutes, and the port serves only the cipher
 /// suites the CIS benchmark allows.
-const KUBELET_ARGS: &str = "kubelet-arg:\n  - pod-max-pids=4096\n  \
-     - streaming-connection-idle-timeout=5m\n  - tls-cipher-suites=\
-TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,\
-TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,\
-TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305\n";
+const KUBELET_ARGS: [&str; 3] = [
+    "pod-max-pids=4096",
+    "streaming-connection-idle-timeout=5m",
+    "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,\
+     TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,\
+     TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,\
+     TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
+];
 
 /// The disk thresholds K3s sets in its kubelet configuration, which RKE2 runs as its agent
 /// (<https://github.com/k3s-io/k3s/blob/3acf8db8f2096ae0ea34f4b4ce1048e6472b89be/pkg/daemons/agent/agent.go#L192-L195>).
@@ -797,30 +996,17 @@ TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305\n";
 const DISK_EVICTION_HARD: &str = "nodefs.available<5%,imagefs.available<5%";
 
 /// RKE2's `control-plane-resource-requests` for etcd and kube-controller-manager.
-pub(crate) fn control_plane_requests() -> String {
-    format!(
-        "control-plane-resource-requests:\n  \
-           - etcd-memory={RKE2_ETCD_REQUEST_MIB}Mi\n  \
-           - kube-controller-manager-memory={RKE2_CONTROLLER_MANAGER_REQUEST_MIB}Mi\n"
-    )
-}
-
-/// A YAML list under `key`, or nothing when it is empty.
-pub(crate) fn yaml_list(out: &mut String, key: &str, items: &[String]) {
-    if items.is_empty() {
-        return;
-    }
-    out.push_str(key);
-    out.push_str(":\n");
-    for item in items {
-        out.push_str("  - ");
-        out.push_str(item);
-        out.push('\n');
-    }
+pub(crate) fn control_plane_requests() -> Vec<String> {
+    vec![
+        format!("etcd-memory={RKE2_ETCD_REQUEST_MIB}Mi"),
+        format!("kube-controller-manager-memory={RKE2_CONTROLLER_MANAGER_REQUEST_MIB}Mi"),
+    ]
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::*;
 
     #[test]
@@ -835,6 +1021,7 @@ mod tests {
             };
             let file = rancher
                 .server_files(&options)
+                .unwrap()
                 .into_iter()
                 .find(|f| f.path.ends_with("/zeatend-servicelb-policy.yaml"))
                 .unwrap();
@@ -853,6 +1040,7 @@ mod tests {
             assert!(
                 rancher
                     .agent_files(&tuning)
+                    .unwrap()
                     .iter()
                     .all(|f| !f.path.ends_with("/zeatend-servicelb-policy.yaml"))
             );
@@ -884,8 +1072,8 @@ mod tests {
                 let args =
                     Rancher::kubelet_args(&HostTuning::new(distribution.into(), tier), server);
                 let hard = args
-                    .lines()
-                    .find_map(|l| l.trim().strip_prefix("- eviction-hard="))
+                    .iter()
+                    .find_map(|a| a.strip_prefix("eviction-hard="))
                     .unwrap();
                 for threshold in [
                     "memory.available<",
@@ -917,7 +1105,7 @@ mod tests {
     #[test]
     fn join_files_name_the_server_and_the_node_addresses() {
         for d in Rancher::ALL {
-            let join = d.join_file("https://10.0.0.5:6443");
+            let join = d.join_file("https://10.0.0.5:6443").unwrap();
             let value: Value = serde_saphyr::from_str(&join.content).unwrap();
             assert_eq!(value["server"], "https://10.0.0.5:6443");
             assert_eq!(value["token-file"], d.layout().join_token_file);
@@ -925,10 +1113,25 @@ mod tests {
             assert!(join.path.starts_with(d.layout().config_dir));
             let ip = d
                 .node_ip_file(&["10.0.0.6".to_owned(), "fd00::6".to_owned()])
+                .unwrap()
                 .unwrap();
             let value: Value = serde_saphyr::from_str(&ip.content).unwrap();
             assert_eq!(value["node-ip"], serde_json::json!(["10.0.0.6", "fd00::6"]));
-            assert_eq!(d.node_ip_file(&[]), None);
+            assert_eq!(d.node_ip_file(&[]).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn names_that_yaml_1_1_reads_as_booleans_or_numbers_stay_strings() {
+        // K3s and RKE2 read their configuration with YAML 1.1.
+        for name in ["on", "yes", "001"] {
+            let file = Rancher::K3s.node_name_file(name).unwrap();
+            assert!(
+                file.content
+                    .ends_with(&format!("\nnode-name: \"{name}\"\n")),
+                "{}",
+                file.content
+            );
         }
     }
 
@@ -973,8 +1176,9 @@ mod tests {
                 .into_iter()
                 .filter(|c| distribution.packaged(*c).is_some())
                 .collect();
-            let mut config = String::new();
-            turn_off(&mut config, distribution, &packaged);
+            let mut config = RancherConfig::default();
+            config.turn_off(distribution, &packaged);
+            let config = config.file(String::new()).unwrap().content;
             assert_eq!(
                 disabled_components(distribution, &config).unwrap(),
                 packaged,
@@ -1015,29 +1219,35 @@ mod tests {
         );
     }
 
+    fn list<T: serde::de::DeserializeOwned>(value: Value) -> ObjectList<T> {
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn left_to_remove_are_the_turned_off_manifests_addons_and_charts() {
-        let addon = |name: &str, source: &str| serde_json::json!({"metadata": {"name": name}, "spec": {"source": source}});
+        let addon = |name: &str, source: &str| json!({"metadata": {"name": name}, "spec": {"source": source}});
         let chart = |name: &str, owner: &str| {
-            serde_json::json!({"metadata": {
+            json!({"metadata": {
                 "name": name,
                 "annotations": {"objectset.rio.cattle.io/owner-name": owner},
             }})
         };
         let k3s = crate::k3s::MANIFESTS_DIR;
-        let addons = serde_json::json!({"items": [
+        let addons = list(json!({"items": [
             addon("traefik", &format!("{k3s}/traefik.yaml")),
             addon("metrics-apiservice", &format!("{k3s}/metrics-server/metrics-apiservice.yaml")),
             addon("coredns", &format!("{k3s}/coredns.yaml")),
             addon("local-storage", &format!("{k3s}/local-storage.yaml")),
-        ]});
-        let charts = serde_json::json!({"items": [
+        ]}));
+        let charts = list(json!({"items": [
             chart("traefik-crd", "traefik"),
             chart("gateway-api-crd", "gateway-api-crd"),
-        ]});
+        ]}));
         let disable = [Component::Traefik, Component::MetricsServer];
         assert_eq!(
-            left_to_remove(Rancher::K3s, &disable, &addons, &charts, |_| false),
+            left_to_remove(Rancher::K3s, &disable, &addons.items, &charts.items, |_| {
+                false
+            }),
             [
                 "addon/traefik",
                 "addon/metrics-apiservice",
@@ -1045,33 +1255,36 @@ mod tests {
             ]
         );
         assert_eq!(
-            left_to_remove(Rancher::K3s, &[], &addons, &charts, |_| false),
+            left_to_remove(Rancher::K3s, &[], &addons.items, &charts.items, |_| false),
             Vec::<String>::new()
         );
-        let none = serde_json::json!({"items": []});
         assert_eq!(
-            left_to_remove(Rancher::K3s, &disable, &none, &charts, |_| false),
+            left_to_remove(Rancher::K3s, &disable, &[], &charts.items, |_| false),
             ["helmchart/traefik-crd"]
         );
 
         let rke2 = crate::rke2::MANIFESTS_DIR;
-        let addons = serde_json::json!({"items": [
+        let addons = list(json!({"items": [
             addon("rke2-traefik", &format!("{rke2}/rke2-traefik.yaml")),
             addon("rke2-traefik-crd", &format!("{rke2}/rke2-traefik-crd.yaml")),
-        ]});
-        assert_eq!(
-            left_to_remove(Rancher::Rke2, &[Component::Traefik], &addons, &none, |_| {
-                true
-            }),
-            Vec::<String>::new()
-        );
-        let charts = serde_json::json!({"items": [chart("rke2-traefik", "rke2-traefik")]});
+        ]}));
         assert_eq!(
             left_to_remove(
                 Rancher::Rke2,
                 &[Component::Traefik],
-                &addons,
-                &charts,
+                &addons.items,
+                &[],
+                |_| { true }
+            ),
+            Vec::<String>::new()
+        );
+        let charts = list(json!({"items": [chart("rke2-traefik", "rke2-traefik")]}));
+        assert_eq!(
+            left_to_remove(
+                Rancher::Rke2,
+                &[Component::Traefik],
+                &addons.items,
+                &charts.items,
                 |_| true
             ),
             ["helmchart/rke2-traefik"]

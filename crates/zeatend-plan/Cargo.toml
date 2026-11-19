@@ -9,9 +9,10 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+k8s-openapi.workspace = true
 semver.workspace = true
 serde.workspace = true
-serde-saphyr.workspace = true
+serde-saphyr = { workspace = true, features = ["serialize"] }
 serde_json.workspace = true
 thiserror.workspace = true
 

@@ -17,7 +17,7 @@ use zeatend_host::{HostError, cmd, facts, files, systemd};
 use zeatend_plan::cluster::{APPARMOR_PROFILE, Distribution, Options, Rancher};
 use zeatend_plan::config::Role;
 use zeatend_plan::tuning::{HostTuning, MemoryTier};
-use zeatend_plan::{installer, k3s, kubesolo};
+use zeatend_plan::{PlanError, installer, k3s, kubesolo};
 
 use crate::{InstallError, apply, load, output};
 
@@ -103,9 +103,9 @@ impl Node {
     /// The paths zeatend left on the host for this node, removed after the distribution's
     /// uninstall. Many are in directories that uninstall removes; zeatend removes them all the
     /// same, so a failed or partial uninstall leaves none.
-    fn paths(self) -> Vec<Remove> {
+    fn paths(self) -> Result<Vec<Remove>, PlanError> {
         let Some(rancher) = self.distribution.rancher() else {
-            return vec![
+            return Ok(vec![
                 Remove::Tree(kubesolo::UNIT_FILE.to_owned()),
                 Remove::Tree(kubesolo::BINARY.to_owned()),
                 Remove::Tree(kubesolo::CONFIG_FILE.to_owned()),
@@ -120,7 +120,7 @@ impl Node {
                 Remove::EmptyDir(parent(kubesolo::CONFIG_FILE)),
                 Remove::EmptyDir(parent(kubesolo::KUBECONFIG)),
                 Remove::EmptyDir(parent(installer::KUBESOLO_KUBECONFIG)),
-            ];
+            ]);
         };
         let mut paths = vec![
             Remove::Tree(apply::STATE_DIR.to_owned()),
@@ -134,23 +134,22 @@ impl Node {
                     tuning,
                     own_network: false,
                     disable: Vec::new(),
-                }),
-                Role::Worker => rancher.agent_files(&tuning),
+                })?,
+                Role::Worker => rancher.agent_files(&tuning)?,
             };
             push_all(
                 &mut paths,
                 written.into_iter().map(|f| Remove::Tree(f.path)),
             );
         }
-        let mut more = vec![rancher.node_name_file("").path];
+        let mut more = vec![rancher.node_name_path(), rancher.node_ip_path()];
         if self.joined {
             more.extend([
-                rancher.join_file("").path,
+                rancher.join_path(),
                 rancher.layout().join_token_file.to_owned(),
                 installer::join_token_file(rancher),
             ]);
         }
-        more.extend(rancher.node_ip_file(&[String::new()]).map(|f| f.path));
         more.push(APPARMOR_PROFILE.to_owned());
         if (rancher, self.role) == (Rancher::K3s, Role::Server) {
             more.push(k3s::AUDIT_LOG_DIR.to_owned());
@@ -160,7 +159,7 @@ impl Node {
             paths.push(Remove::EmptyDir(parent(k3s::MEMORY_DROP_IN)));
         }
         paths.push(Remove::EmptyDir(parent(apply::STATE_DIR)));
-        paths
+        Ok(paths)
     }
 
     /// Where volumes may be on this node.
@@ -291,7 +290,7 @@ const ALL_NODES: [Node; 5] = [
 ];
 
 /// What `uninstall` removes and keeps for `nodes`.
-fn plan(nodes: Vec<Node>) -> Uninstall {
+fn plan(nodes: Vec<Node>) -> Result<Uninstall, PlanError> {
     let sources = if nodes.is_empty() {
         ALL_NODES.to_vec()
     } else {
@@ -300,16 +299,16 @@ fn plan(nodes: Vec<Node>) -> Uninstall {
     let mut remove = Vec::new();
     let mut volumes = Vec::new();
     for node in &sources {
-        push_all(&mut remove, node.paths());
+        push_all(&mut remove, node.paths()?);
         push_all(&mut volumes, node.volumes());
     }
     // Files and trees first, then directories that only they kept from being empty.
     remove.sort_by_key(|r| matches!(r, Remove::EmptyDir(_)));
-    Uninstall {
+    Ok(Uninstall {
         nodes,
         remove,
         volumes,
-    }
+    })
 }
 
 /// What `uninstall` shows before it asks.
@@ -421,7 +420,7 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         }
     }
     let root = Path::new("/");
-    let plan = plan(detect(|path| exists(root, path)));
+    let plan = plan(detect(|path| exists(root, path)))?;
     let remove: Vec<&str> = plan
         .remove
         .iter()
@@ -823,6 +822,7 @@ mod tests {
 
     fn tree_paths(node: Node) -> Vec<String> {
         node.paths()
+            .unwrap()
             .into_iter()
             .filter_map(|r| match r {
                 Remove::Tree(path) => Some(path),
@@ -917,7 +917,7 @@ mod tests {
             assert!(paths.contains(&path.to_owned()), "{path}");
         }
         assert!(!paths.iter().any(|p| p.contains("join")), "{paths:?}");
-        assert!(K3S_SERVER.paths().contains(&Remove::EmptyDir(
+        assert!(K3S_SERVER.paths().unwrap().contains(&Remove::EmptyDir(
             "/etc/systemd/system/k3s.service.d".to_owned()
         )));
     }
@@ -954,7 +954,7 @@ mod tests {
             assert!(solo.contains(&path.to_owned()), "{path}");
         }
         let text = describe(
-            &plan(vec![KUBESOLO]),
+            &plan(vec![KUBESOLO]).unwrap(),
             &[],
             &[],
             false,
@@ -1011,6 +1011,7 @@ mod tests {
         assert!(
             KUBESOLO
                 .paths()
+                .unwrap()
                 .contains(&Remove::EmptyDir("/etc/zeatend".to_owned()))
         );
     }
@@ -1040,7 +1041,7 @@ mod tests {
 
     #[test]
     fn a_host_without_a_node_is_checked_for_what_any_node_left() {
-        let leftovers = plan(Vec::new());
+        let leftovers = plan(Vec::new()).unwrap();
         assert_eq!(leftovers.nodes, Vec::new());
         for path in [apply::STATE_DIR, kubesolo::STATE_DIR] {
             assert!(leftovers.remove.contains(&Remove::Tree(path.to_owned())));
@@ -1060,7 +1061,7 @@ mod tests {
 
     #[test]
     fn the_description_names_what_goes_and_what_stays() {
-        let k3s = plan(vec![K3S_SERVER]);
+        let k3s = plan(vec![K3S_SERVER]).unwrap();
         let text = describe(
             &k3s,
             &[apply::STATE_DIR],
@@ -1092,9 +1093,9 @@ mod tests {
             "{deleting}"
         );
         assert!(!deleting.contains("These stay"), "{deleting}");
-        let rke2 = describe(&plan(vec![RKE2_FIRST]), &[], &[], false, &[]);
+        let rke2 = describe(&plan(vec![RKE2_FIRST]).unwrap(), &[], &[], false, &[]);
         assert!(rke2.contains("the etcd user"), "{rke2}");
-        let solo = describe(&plan(vec![KUBESOLO]), &[], &[], false, &[]);
+        let solo = describe(&plan(vec![KUBESOLO]).unwrap(), &[], &[], false, &[]);
         assert!(solo.contains("zeatend stops KubeSolo"), "{solo}");
     }
 
@@ -1238,7 +1239,7 @@ mod tests {
         touch(root, k3s::MEMORY_DROP_IN);
         touch(root, "/var/lib/rancher/k3s/server/db/state.db");
         touch(root, load::DEFAULT_CONFIG);
-        let k3s = plan(vec![K3S_SERVER]);
+        let k3s = plan(vec![K3S_SERVER]).unwrap();
         clean(root, &k3s, false, "/var/lib/rancher/k3s");
 
         assert!(exists(root, &volume));
@@ -1254,7 +1255,7 @@ mod tests {
             assert!(!exists(root, gone), "{gone}");
         }
         // A second run finds nothing to remove.
-        let again = plan(detect(|p| exists(root, p)));
+        let again = plan(detect(|p| exists(root, p))).unwrap();
         assert_eq!(again.nodes, Vec::new());
         assert!(!again.remove.iter().any(|r| r.pending(root)), "{again:?}");
     }
@@ -1269,7 +1270,7 @@ mod tests {
         touch(root, kubesolo::KUBECTL);
         touch(root, kubesolo::KUBECONFIG);
         touch(root, kubesolo::BINARY);
-        let solo = plan(vec![KUBESOLO]);
+        let solo = plan(vec![KUBESOLO]).unwrap();
         clean(root, &solo, true, kubesolo::DATA_DIR);
         for gone in [
             kubesolo::DATA_DIR,
@@ -1289,7 +1290,7 @@ mod tests {
         let volume = format!("{KUBESOLO_LOCAL_PATH}/pvc-1/data");
         touch(root, &volume);
         touch(root, "/var/lib/kubesolo/kine/state.db");
-        clean(root, &plan(vec![KUBESOLO]), false, "/nothing");
+        clean(root, &plan(vec![KUBESOLO]).unwrap(), false, "/nothing");
         assert!(exists(root, &volume));
         assert!(!exists(root, "/var/lib/kubesolo/kine"));
     }
@@ -1302,7 +1303,7 @@ mod tests {
             root,
             "/var/lib/rancher/.zeatend-kept-k3s-storage/pvc-1/data",
         );
-        let leftovers = plan(Vec::new());
+        let leftovers = plan(Vec::new()).unwrap();
         assert!(leftovers.volumes.iter().any(|v| v.present(root)));
         clean(root, &leftovers, false, "/nothing");
         assert!(exists(root, &format!("{K3S_LOCAL_PATH}/pvc-1/data")));
