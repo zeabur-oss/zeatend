@@ -1,0 +1,155 @@
+---
+title: Add nodes
+description: Run zeatend node add on a server, run the commands it prints on the new server, and revoke the join token when the node is Ready.
+---
+
+`zeatend node add` runs on a server of the cluster and prints what a new server needs to join: a configuration file with a join token, and the commands to run there. The new server's own `zeatend plan` checks the ports and the distance to the cluster before it joins.
+
+| Distribution | What you can add |
+| --- | --- |
+| K3s | Workers. K3s set up by Zeatend has one server. |
+| RKE2 | Workers, and more servers with `--role server`. |
+| KubeSolo | Nothing. KubeSolo runs one node. |
+
+## Let an agent do it
+
+Paste this prompt into Claude Code or Codex on a computer that reaches both servers over SSH, and tell it their addresses:
+
+```text
+Add my new server to my Zeatend cluster by following https://oss.zeabur.com/docs/zeatend/operations/add-nodes.md.
+```
+
+## Before you begin
+
+- **A new Linux server** that meets [Supported servers](../reference/hosts.mdx), with root through `sudo`.
+- **The same provider and region.** Keep every node with the same hosting provider and in the same region. Different availability zones in one region are fine. Between providers or regions, latency slows etcd, the Kubernetes API and storage.
+- **Open ports between the nodes.** Allow these in the firewall or security group:
+
+  | Direction | K3s | RKE2 |
+  | --- | --- | --- |
+  | To the servers | TCP 6443 | TCP 9345 and 6443 |
+  | Between all nodes | TCP 10250, UDP 8472 (flannel VXLAN) | TCP 10250 and 9099, UDP 8472 (Canal VXLAN) |
+  | Between servers | None | TCP 2379 to 2381 |
+
+  Keep UDP 8472 closed to the internet. If it is blocked between nodes, pods on different nodes can't reach each other.
+
+<Steps>
+<Step>
+
+### Print the join commands
+
+On a server of the cluster, run:
+
+```sh
+sudo zeatend node add
+```
+
+On RKE2, add `--role server` to add a server instead of a worker. The new server reaches this one at this node's `InternalIP`; to use another address, add `--address <address>`.
+
+It prints the commands for the new server:
+
+```text
+On the new VM, as root, with this zeatend copied to /usr/local/bin:
+
+install -d -m 0700 /etc/zeatend
+(umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
+distribution: k3s
+join:
+  server: https://10.0.1.10:6443
+  role: worker
+  token: K10…::abcdef.0123456789abcdef
+  nodeNames: [vps-1]
+EOF
+zeatend plan    # what it installs, the distance to this server, the ports and warnings
+zeatend apply   # installs K3s and waits until the node is Ready
+
+The token joins workers for 1h. Revoke it once the node is Ready; the node keeps working without it.
+
+When the node is Ready, here:
+  /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+  /usr/local/bin/k3s token delete abcdef   # revokes the token
+```
+
+A worker's token joins workers for one hour. Change that with `--ttl`, such as `--ttl 30m`, up to `24h`. Each run of `node add` makes a new token.
+
+An RKE2 server gets the cluster's server token instead, which doesn't expire and joins servers and workers. Its configuration also copies this server's `disable` list and `apiServer` settings, because every server runs an API server and deploys the packaged components. Keep the output out of chats and tickets.
+
+</Step>
+<Step>
+
+### Install the same Zeatend on the new server
+
+Check the version on the server:
+
+```sh
+zeatend --version
+```
+
+On the new server, run the download commands of [Download Zeatend](../get-started/install.mdx#download-zeatend) with the first line replaced by that version, such as `version=v0.2.0`.
+
+</Step>
+<Step>
+
+### Run the commands on the new server
+
+Open a root shell on the new server with `sudo -i`, and paste the commands that `node add` printed, from `install -d` to `zeatend apply`.
+
+`zeatend plan` shows the release, the files it writes, the round-trip time to the server and which of the server's ports it can reach:
+
+```text
+Distance         0.7 ms to the server (median of 5 TCP connects; 0.6 to 0.9)
+Ports on the server
+  open    TCP 6443  Kubernetes API and K3s supervisor
+  open    TCP 10250 kubelet
+  unknown UDP 8472  flannel VXLAN
+```
+
+A port shown as `CLOSED` is blocked between the two servers; open it before you go on. Zeatend can't check UDP ports, so `unknown` is expected for UDP 8472.
+
+`zeatend apply` installs the distribution, joins the cluster and waits until the node is `Ready`:
+
+```text
+vps-2 joined the cluster as a worker. List the nodes on a server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+==> Waiting for node vps-2 to be Ready
+==> Done
+```
+
+</Step>
+<Step>
+
+### Check the node and revoke the token
+
+On the first server, run the two commands that `node add` printed last. The first lists the nodes; the new one shows `Ready`:
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+```
+
+The second revokes the worker's token. Replace `abcdef` with the token ID it printed:
+
+```sh
+sudo /usr/local/bin/k3s token delete abcdef
+```
+
+On RKE2, the commands use `/var/lib/rancher/rke2/bin/kubectl`, `/etc/rancher/rke2/rke2.yaml` and `rke2 token delete`. The server token of an RKE2 server can't be revoked this way.
+
+Keep `/etc/zeatend/config.yaml` on the new server: `zeatend apply` reads it again when you upgrade. A revoked token in it joins nothing.
+
+</Step>
+</Steps>
+
+## How many RKE2 servers
+
+etcd needs a majority of the servers to run. With three servers, the cluster keeps running when one goes down. With two, losing either one stops the cluster, so add a third.
+
+## Remove a node
+
+Zeatend doesn't change objects in the cluster. On a server, move the pods off the node and delete it:
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+Then [uninstall](uninstall.mdx) Zeatend's cluster from that server. Pods with volumes on the default `local-path` storage class can't move to another node: the data stays on the node that created it.

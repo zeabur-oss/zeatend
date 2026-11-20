@@ -1,0 +1,80 @@
+---
+title: Uninstall
+description: Remove K3s, RKE2 or KubeSolo and Zeatend's files from a server, keep or delete the volumes, and remove the node from the cluster.
+---
+
+`zeatend uninstall` removes the distribution and the files Zeatend wrote from the server it runs on. It shows what it removes and what stays, and asks before it starts. The volumes stay unless you add `--delete-volumes`.
+
+Uninstall removes the cluster's data on that server. To keep services, back them up first: see [Back up](maintain.mdx#back-up). To remove only Zeabur and keep the cluster, see Zeabur's [Uninstall](https://oss.zeabur.com/docs/zeabur/leave/uninstall/) instead.
+
+<Steps>
+<Step>
+
+### Remove the node from the cluster
+
+Skip this step on the only server of a cluster.
+
+On a worker, or on one of several RKE2 servers, first move its pods away and delete the node. Run this on a server:
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+Zeatend makes no changes through the Kubernetes API, so the cluster still lists the node until you delete it. To keep the control plane of RKE2 running, keep three or more servers.
+
+</Step>
+<Step>
+
+### Run the uninstall
+
+On the server you remove, run:
+
+```sh
+sudo zeatend uninstall
+```
+
+It lists what it removes and what stays, then asks. On K3s:
+
+```text
+zeatend uninstall removes K3s (server) from this host.
+
+/usr/local/bin/k3s-uninstall.sh stops K3s and its pods and removes its service, its binary, /etc/rancher/k3s and /var/lib/rancher/k3s: the cluster's data, certificates and images on this host. zeatend then removes the routes into the pod network 10.42.0.0/16 that are left.
+
+zeatend removes the files it left:
+  /var/lib/rancher/zeatend
+  /etc/sysctl.d/60-k3s-cis.conf
+  /etc/rancher/k3s/config.yaml
+  …
+
+These stay:
+  /var/lib/rancher/k3s/storage  (volumes; --delete-volumes removes them)
+  /etc/zeatend/config.yaml  (zeatend's configuration)
+```
+
+`--yes` removes without the question, such as in a script. Without a terminal to ask on, `uninstall` removes nothing until you add `--yes`.
+
+The volumes that stay are the folders of the `local-path` storage class, `/var/lib/zeabur/storage` and `/var/lib/longhorn`, where they exist. Zeatend moves the `local-path` folders out of the way of the distribution's own uninstall and puts them back. To delete them too, add `--delete-volumes`.
+
+</Step>
+<Step>
+
+### Remove what stays
+
+`/etc/zeatend/config.yaml` stays, so you can install again with the same settings. On a node that joined a cluster, it holds the join token. When you won't install again, delete it:
+
+```sh
+sudo rm -r /etc/zeatend
+sudo rm /usr/local/bin/zeatend
+```
+
+</Step>
+</Steps>
+
+## If uninstall stops
+
+`uninstall` is safe to run again. It removes nothing and names the reason when:
+
+- An install runs in a `zeatend-install-*` unit. Wait for it to end, or stop it with `systemctl stop`, then run `uninstall` again.
+- The volumes are on a file system that the uninstall unmounts. Unmount it and run `uninstall` again; the volumes stay on that file system.
+- An earlier uninstall stopped after it moved the volumes. Keep one of the two folders it names and run `uninstall` again.

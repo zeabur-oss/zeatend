@@ -1,0 +1,12 @@
+# The pages the site publishes, in this order. index.md is the home page and is always published.
+# A group's pages are files in docs/<group>/, named without .md. The group id is stable: the
+# translations' nav.yaml refers to it, and it is part of each page's URL.
+- group: get-started
+  label: Get started
+  pages: [install]
+- group: operations
+  label: Operate
+  pages: [add-nodes, maintain, uninstall]
+- group: reference
+  label: Reference
+  pages: [commands, configuration, hosts]

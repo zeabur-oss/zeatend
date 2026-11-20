@@ -1,0 +1,122 @@
+---
+title: Maintain the cluster
+description: Upgrade Zeatend and the Kubernetes distribution, keep certificates current, back up the cluster's data, and check the cluster with zeatend doctor.
+---
+
+Zeatend upgrades the distribution and checks the cluster. Certificates and backups belong to the distribution; this page shows where each one keeps them.
+
+## Check the cluster
+
+Run this on any node:
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` runs the host checks of `zeatend plan`, then checks the cluster:
+
+| Check | What it reads |
+| --- | --- |
+| service | The distribution's systemd service runs. |
+| Kubernetes API | On a server, the API server answers `/readyz`. |
+| install record | Zeatend wrote the install record, and no newer Zeatend did. |
+| nodes | Every node is `Ready`. A worker reads its own node only. |
+| kubelet reserves | The kubelet keeps enough memory from pods for the system. |
+| Secrets encryption | On a K3s or RKE2 server, the API server stores Secrets encrypted. |
+
+Each line that isn't `ok` names what to do. `doctor` exits as monitoring plugins do: 0 when all is well, 1 for a warning, 2 for a failure and 3 when the checks can't run. Run it from a monitoring system or a systemd timer to hear about a problem early.
+
+## Upgrade
+
+Each Zeatend release pins a release of K3s, RKE2 and KubeSolo and checks their downloads against digests built into it. To upgrade Kubernetes, install a newer Zeatend and run `apply` again.
+
+<Steps>
+<Step>
+
+### Read the release notes
+
+Read the [release notes](https://github.com/zeabur-oss/zeatend/releases) of every version from yours to the new one. Check your version with `zeatend --version`.
+
+</Step>
+<Step>
+
+### Install the new Zeatend on every node
+
+On each node, run the commands of [Download Zeatend](../get-started/install.mdx#download-zeatend). Zeatend is one file; replacing it changes nothing in the cluster.
+
+</Step>
+<Step>
+
+### Upgrade the servers, one at a time
+
+On a server, check the plan and apply it:
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+The plan's first line names the release it installs. `apply` installs it, restarts the service and waits until the node is `Ready`. Wait for each server to be `Ready` before you upgrade the next.
+
+</Step>
+<Step>
+
+### Upgrade the workers
+
+Run the same two commands on each worker. A worker reads `/etc/zeatend/config.yaml`, which `node add` wrote, so keep that file.
+
+</Step>
+</Steps>
+
+`apply` stops before it changes anything when the upgrade breaks a Kubernetes rule:
+
+- **Older release.** Zeatend doesn't downgrade. The error names the installed release; use a Zeatend that installs that release or a newer one.
+- **More than one minor version.** A server moves Kubernetes one minor version at a time, such as 1.36 to 1.37. On K3s or RKE2, set `version` to a release of the next minor version, apply, then remove `version` and apply again. On KubeSolo, apply a Zeatend release that installs the next minor version first.
+- **Worker ahead of the servers.** A worker never runs a newer Kubernetes minor version than the API server. Upgrade the servers first.
+- **Record from a newer Zeatend.** The error names the Zeatend version to use.
+
+To install a K3s or RKE2 release other than the pinned one, set `version` in the configuration, such as `version: v1.37.1+k3s1`. Zeatend checks its downloads only against the release's own checksum list, so the plan marks it unsupported. KubeSolo takes no `version`.
+
+## Certificates
+
+The distributions make the cluster's certificates and renew them. Zeatend doesn't.
+
+**K3s and RKE2.** Client and server certificates last 365 days. Each time the service starts, it renews the certificates that expire within 120 days. A restart every few months, or an upgrade, keeps them current. To see when they expire, run on a server:
+
+```sh
+sudo k3s certificate check --output table
+```
+
+On RKE2, run `sudo rke2 certificate check --output table`. The certificate authorities last 10 years. See the [K3s](https://docs.k3s.io/cli/certificate) and [RKE2](https://docs.rke2.io/security/certificates) docs to rotate them by hand.
+
+**KubeSolo.** Its certificates last 365 days. When KubeSolo starts and finds the API server's certificate expired, it makes new ones, except the certificate authorities. Then restart it:
+
+```sh
+sudo systemctl restart kubesolo
+```
+
+After that, copy the kubeconfig to your computer again: the old one holds the expired client certificate.
+
+## Back up
+
+Zeatend doesn't take backups. Back up two things: the cluster's datastore, and the volumes of your services. In Zeabur, [backups](https://oss.zeabur.com/docs/zeabur/cluster/backups/) cover the volumes and databases of services.
+
+| Distribution | Datastore | Back up |
+| --- | --- | --- |
+| K3s | SQLite in `/var/lib/rancher/k3s/server/db/` | That folder and the token `/var/lib/rancher/k3s/server/token`. |
+| RKE2 | etcd. Each server takes a snapshot at 00:00 and 12:00 and keeps 5, in `/var/lib/rancher/rke2/server/db/snapshots/`. | Copy the snapshots and the token `/var/lib/rancher/rke2/server/token` off the server. `sudo rke2 etcd-snapshot save` takes one now. |
+| KubeSolo | SQLite in `/var/lib/kubesolo/kine/db/` | `/var/lib/kubesolo`, which also holds the certificates, with KubeSolo stopped. |
+
+A backup without its token can't be restored. Keep both off the server, and keep them as secret as the admin kubeconfig. The [K3s](https://docs.k3s.io/datastore/backup-restore) and [RKE2](https://docs.rke2.io/datastore/backup_restore) docs show how to restore.
+
+Volumes on the default `local-path` storage class are folders on the node that created them, such as `/var/lib/rancher/k3s/storage`. See [Files Zeatend writes](../reference/hosts.mdx#files-zeatend-writes).
+
+## Before a reboot
+
+On a node with workloads, stop new pods from starting there first:
+
+```sh
+kubectl cordon <node>
+```
+
+After the reboot, run `kubectl uncordon <node>` and `sudo zeatend doctor`. The services start with systemd.

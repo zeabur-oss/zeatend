@@ -1,0 +1,74 @@
+---
+title: Configuration file
+description: Every setting of /etc/zeatend/config.yaml, for the first server of a cluster and for a node that joins one.
+---
+
+Zeatend reads one YAML file, `/etc/zeatend/config.yaml` by default; `--config` names another. Without the file, Zeatend installs K3s with the defaults. An unknown key is an error, so a typo doesn't pass unnoticed.
+
+A file with a top-level `join` section joins a cluster. Without one, it sets up the first server of a new cluster.
+
+## First server
+
+```yaml
+distribution: k3s
+disable: [traefik]
+host:
+  tlsSan: [k8s.example.com]
+apiServer:
+  authenticationConfig:
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://identity.example.com
+          audiences: [kubernetes]
+        claimMappings:
+          username: {claim: preferred_username, prefix: "zeabur:"}
+          groups: {claim: groups, prefix: "zeabur:"}
+```
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `distribution` | `k3s` | `k3s`, `rke2` or `kubesolo`. |
+| `version` | The release Zeatend pins | A K3s or RKE2 release, such as `v1.37.1+k3s1` or `v1.37.1+rke2r1`. Zeatend checks its downloads only against the release's own checksum list, so the plan marks it unsupported. KubeSolo takes none. |
+| `disable` | Nothing | Packaged components that K3s or RKE2 doesn't deploy: `traefik`, `metrics-server`, and on K3s `local-storage`, its local-path storage class. KubeSolo packages none of them. |
+| `apiServer.authenticationConfig` | None | The API server's [authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration), written as Kubernetes describes it. |
+| `host.tlsSan` | None | More names and addresses for the API server's certificate, such as a DNS name. |
+| `host.nodeName` | The host name | The node's name in Kubernetes. |
+| `host.requireEncryptedDisk` | `false` | Stop the install when the cluster's data isn't on an encrypted disk. |
+
+### The node name
+
+Without `host.nodeName`, the node takes the host name in lower case. On K3s and RKE2, a host name made from the server's address, such as `ip-10-0-1-5`, becomes `node-` and six hex digits instead. Once installed, a node keeps its name.
+
+KubeSolo always takes the host name, so `host.nodeName` can only repeat it. To name a KubeSolo node, set the host name before you install.
+
+### The authentication configuration
+
+Zeatend checks only `apiVersion` and `kind`, writes the rest to a file unchanged, and gives the file to the API server. Kubernetes checks the other fields when the API server starts. On K3s and RKE2, a configuration without an `anonymous` section gets `anonymous: {enabled: false}`, so anonymous requests stay off. A change takes effect on the next `apply`.
+
+Zeabur's [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) writes this section with `zeabur-identityctl kube-config`, so the API server accepts sign-ins from Zeabur Identity.
+
+## A node that joins
+
+`zeatend node add` prints this file for you; see [Add nodes](../operations/add-nodes.mdx).
+
+```yaml
+distribution: k3s
+join:
+  server: https://10.0.0.5:6443
+  role: worker
+  tokenFile: /etc/zeatend/join-token
+```
+
+| Key | Meaning |
+| --- | --- |
+| `distribution` | `k3s` or `rke2`, the cluster's distribution. |
+| `version` | The cluster's release, when it isn't the one Zeatend pins. |
+| `join.server` | `https://<address>:6443` on K3s, `https://<address>:9345` on RKE2. |
+| `join.role` | `worker`, the default, or on RKE2 `server`. |
+| `join.token` | The join token. The file must then be mode 0600. |
+| `join.tokenFile` | A file, mode 0600, that holds the join token. Use it instead of `join.token`. |
+| `join.nodeNames` | The names of the cluster's nodes, so this node takes another. |
+| `disable`, `apiServer` | RKE2 servers only. Give every server the same values, because each one deploys the packaged components and runs an API server. |
+| `host` | As for the first server. `tlsSan` applies to servers only. |
