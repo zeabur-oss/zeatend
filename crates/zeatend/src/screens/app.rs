@@ -169,7 +169,12 @@ impl Choices {
             .cloned()
             .unwrap_or_default();
         let node = config.host.node_name.clone().unwrap_or_default();
-        let default_node = node_name::choose(None, &host.facts, &[]).unwrap_or_default();
+        let default_node = if config.distribution == Distribution::KubeSolo {
+            node_name::kubesolo(None, &host.facts)
+        } else {
+            node_name::choose(None, &host.facts, &[])
+        }
+        .unwrap_or_default();
         Self {
             distribution: config.distribution,
             fields: [
