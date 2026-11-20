@@ -233,6 +233,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             tuning,
             own_network: rancher == Rancher::K3s && facts.k3s_own_network,
             disable: config.disable.clone(),
+            api_server: config.api_server.clone(),
         })?;
         files.push(rancher.node_name_file(&node_name)?);
         files.extend(rancher.node_ip_file(&facts.node_ips)?);
@@ -257,6 +258,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             node_name: node_name.clone(),
             node_ip: facts.node_ips.first().cloned(),
             tls_san: config.host.tls_san.clone(),
+            api_server: config.api_server.clone(),
             tuning,
             installer_webhook: facts.installer_webhook,
         })?;

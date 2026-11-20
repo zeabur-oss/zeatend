@@ -468,6 +468,7 @@ mod tests {
                 "",
                 "disable: [traefik, metrics-server]\n",
                 "disable: [traefik, metrics-server, local-storage]\n",
+                "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n",
             ] {
                 // Not every distribution takes every component.
                 let Ok(Document::Install(config)) =
@@ -504,7 +505,12 @@ mod tests {
         for (distribution, role) in [("k3s", "worker"), ("rke2", "worker"), ("rke2", "server")] {
             let yaml = format!(
                 "distribution: {distribution}\njoin:\n  server: https://10.0.0.5:9345\n  \
-                 role: {role}\n  tokenFile: /etc/zeatend/join-token\n"
+                 role: {role}\n  tokenFile: /etc/zeatend/join-token\n{}",
+                if role == "server" {
+                    "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n"
+                } else {
+                    ""
+                }
             );
             let Document::Join(config) = Document::parse(&yaml).unwrap() else {
                 panic!("not a join");

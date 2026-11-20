@@ -12,6 +12,7 @@ use k8s_openapi::List;
 use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
+use zeatend_plan::authentication::{self, ApiServer};
 use zeatend_plan::cluster::{self, Rancher};
 use zeatend_plan::config::{Component, Role};
 use zeatend_plan::token::JoinToken;
@@ -92,14 +93,24 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         }
     };
     let record = crate::installer::read_record(distribution.into()).await?;
-    // A server turns off what this one turns off. A worker deploys no packaged components.
-    let disable = match options.role {
+    // A server turns off what this one turns off and trusts the issuers this one trusts. A
+    // worker deploys no packaged components and serves no Kubernetes API.
+    let (disable, api_server) = match options.role {
         Role::Server => {
             let path = format!("{}/config.yaml", layout.config_dir);
             let config = std::fs::read_to_string(&path).map_err(InstallError::io(&path))?;
-            cluster::disabled_components(distribution.into(), &config)?
+            let api_server = match cluster::authentication_config(&config)? {
+                Some(path) => authentication::read(
+                    &std::fs::read_to_string(&path).map_err(InstallError::io(&path))?,
+                )?,
+                None => ApiServer::default(),
+            };
+            (
+                cluster::disabled_components(distribution.into(), &config)?,
+                api_server,
+            )
         }
-        Role::Worker => Vec::new(),
+        Role::Worker => (Vec::new(), ApiServer::default()),
     };
     let text = instructions(&Instructions {
         distribution,
@@ -112,8 +123,9 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             .filter_map(|n| n.metadata.name.as_deref())
             .collect::<Vec<_>>(),
         disable: &disable,
+        api_server: &api_server,
         ttl: options.ttl,
-    });
+    })?;
     output::line(text.trim_end());
     Ok(())
 }
@@ -171,6 +183,8 @@ struct Instructions<'a> {
     node_names: &'a [&'a str],
     /// The packaged components that a new server turns off, as this one does.
     disable: &'a [Component],
+    /// The `apiServer` section of a new server, the same as this one's.
+    api_server: &'a ApiServer,
     ttl: Duration,
 }
 
@@ -180,7 +194,11 @@ fn push(text: &mut String, line: &str) {
 }
 
 /// The text `node add` prints.
-fn instructions(i: &Instructions<'_>) -> String {
+///
+/// # Errors
+///
+/// When the `apiServer` section cannot be serialised.
+fn instructions(i: &Instructions<'_>) -> Result<String, PlanError> {
     let mut text = String::new();
     push(
         &mut text,
@@ -204,7 +222,7 @@ fn instructions(i: &Instructions<'_>) -> String {
         "On the new VM, as root, with this zeatend copied to /usr/local/bin:",
     );
     push(&mut text, "");
-    text.push_str(&commands(i));
+    text.push_str(&commands(i)?);
     push(&mut text, "");
     match i.token {
         Token::Bootstrap(_) => push(
@@ -240,7 +258,7 @@ fn instructions(i: &Instructions<'_>) -> String {
             ),
         );
     }
-    text
+    Ok(text)
 }
 
 /// `30m`, `1h` or `1h30m`.
@@ -254,7 +272,7 @@ fn duration(ttl: Duration) -> String {
 }
 
 /// The shell commands that write the join configuration and run zeatend.
-fn commands(i: &Instructions<'_>) -> String {
+fn commands(i: &Instructions<'_>) -> Result<String, PlanError> {
     let distribution = i.distribution.distribution();
     let mut lines = vec![format!("distribution: {}", distribution.id())];
     if let Some(version) = i.version.filter(|v| *v != distribution.pinned_version()) {
@@ -273,8 +291,9 @@ fn commands(i: &Instructions<'_>) -> String {
     if !i.node_names.is_empty() {
         lines.push(format!("  nodeNames: [{}]", i.node_names.join(", ")));
     }
+    lines.extend(i.api_server.yaml_lines()?);
     let yaml = lines.join("\n");
-    format!(
+    Ok(format!(
         "install -d -m 0700 /etc/zeatend\n\
          (umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'\n\
          {yaml}\n\
@@ -282,7 +301,7 @@ fn commands(i: &Instructions<'_>) -> String {
          zeatend plan    # what it installs, the distance to this server, the ports and warnings\n\
          zeatend apply   # installs {} and waits until the node is Ready\n",
         i.distribution.distribution().title()
-    )
+    ))
 }
 
 #[cfg(test)]
@@ -328,8 +347,10 @@ mod tests {
             version: Some("v1.37.1+k3s1"),
             node_names: &["vps-1"],
             disable: &[],
+            api_server: &ApiServer::default(),
             ttl: Duration::from_hours(1),
-        });
+        })
+        .unwrap();
         assert_eq!(text, include_str!("../fixtures/node-add-worker.txt"));
     }
 
@@ -343,8 +364,10 @@ mod tests {
             version: Some("v1.37.1+rke2r1"),
             node_names: &["vps-1", "vps-2"],
             disable: &[],
+            api_server: &ApiServer::default(),
             ttl: Duration::from_mins(30),
-        });
+        })
+        .unwrap();
         let config = pasted(&text);
         assert_eq!(config.join.server, "https://10.0.1.10:9345");
         assert_eq!(config.join.role, Role::Worker);
@@ -360,6 +383,14 @@ mod tests {
 
     #[test]
     fn a_server_gets_the_server_token_and_no_revoke_line() {
+        let api_server = authentication::read(
+            "apiVersion: apiserver.config.k8s.io/v1\nkind: AuthenticationConfiguration\njwt:\n  \
+             - issuer:\n      url: https://identity.example.com\n      audiences: [kubernetes]\n      \
+             certificateAuthority: |\n        -----BEGIN CERTIFICATE-----\n        MIIB\n        \
+             -----END CERTIFICATE-----\n    claimMappings:\n      username: {claim: preferred_username, \
+             prefix: \"zeabur:\"}\n      groups: {claim: groups, prefix: \"zeabur:\"}\n",
+        )
+        .unwrap();
         let token = Token::Server(format!("K10{HASH}::server:0123456789abcdef"));
         let text = instructions(&Instructions {
             distribution: Rancher::Rke2,
@@ -369,9 +400,12 @@ mod tests {
             version: None,
             node_names: &["vps-1"],
             disable: &[Component::Traefik, Component::MetricsServer],
+            api_server: &api_server,
             ttl: Duration::from_hours(1),
-        });
+        })
+        .unwrap();
         let config = pasted(&text);
+        assert_eq!(config.api_server, api_server);
         assert_eq!(config.join.role, Role::Server);
         assert_eq!(config.version.as_deref(), None);
         assert_eq!(
@@ -394,8 +428,10 @@ mod tests {
             version: Some(Distribution::K3s.pinned_version()),
             node_names: &["vps-1"],
             disable: &[],
+            api_server: &ApiServer::default(),
             ttl: Duration::from_hours(1),
-        });
+        })
+        .unwrap();
         assert_eq!(pasted(&text).version.as_deref(), None, "{text}");
     }
 

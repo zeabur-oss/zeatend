@@ -34,6 +34,24 @@ K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安装 Kubernetes 1.37。Ku
 
 K3s 和 RKE2 按上游的默认设置，部署自带的组件，例如 Traefik。要改用自己安装的版本，就用 `disable` 关闭，例如 `disable: [traefik, metrics-server]`。`local-storage` 会关闭 K3s 的 local-path 存储类。KubeSolo 没有这些组件。由 zeabur-installer 安装的集群，`disable` 一开始就是 installer 关闭的那些组件。
 
+`apiServer.authenticationConfig` 是 API 服务器的[认证配置](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，按 Kubernetes 文档的格式写，例如让 API 服务器接受某个 OpenID Connect 签发者的令牌：
+
+```yaml
+apiServer:
+  authenticationConfig:
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://identity.example.com
+          audiences: [kubernetes]
+        claimMappings:
+          username: {claim: preferred_username, prefix: "zeabur:"}
+          groups: {claim: groups, prefix: "zeabur:"}
+```
+
+在服务器节点上，zeatend 会把它写成文件交给 API 服务器。字段由 Kubernetes 在 API 服务器启动或重新读取文件时检查。在 K3s 和 RKE2 上，如果配置中没有 `anonymous`，zeatend 会加上 `anonymous: {enabled: false}`，匿名请求就保持关闭。修改配置后，下一次 `apply` 就会生效。
+
 - `zeatend plan` 显示 `apply` 会安装哪些内容，并运行主机检查；加上 `--json` 会以 JSON 输出计划。
 - `zeatend apply` 负责安装，或让现有的安装与配置文件一致。重复运行也没有问题。`apply --plan <文件>` 会应用 `plan --json` 写入文件的计划；如果计划要写入的文件、安装的版本或安装记录在那之后发生了变化，就不会做任何更改。
 - `zeatend uninstall` 删除 K3s、RKE2 或 KubeSolo，以及 zeatend 写入的文件。它会先列出要删除和保留的内容，并询问是否继续（`--yes` 跳过询问）。除非加上 `--delete-volumes`，存储卷都会保留。

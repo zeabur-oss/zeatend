@@ -44,6 +44,30 @@ your own instead, turn them off with `disable`, such as `disable: [traefik, metr
 `local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these. On a
 cluster that zeabur-installer installed, `disable` starts as the list the installer turned off.
 
+`apiServer.authenticationConfig` is the API server's
+[authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration),
+written as Kubernetes describes it, such as an OpenID Connect issuer whose tokens the API server
+accepts:
+
+```yaml
+apiServer:
+  authenticationConfig:
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://identity.example.com
+          audiences: [kubernetes]
+        claimMappings:
+          username: {claim: preferred_username, prefix: "zeabur:"}
+          groups: {claim: groups, prefix: "zeabur:"}
+```
+
+On a server, zeatend writes it to a file and gives the file to the API server. Kubernetes checks
+the fields when the API server starts or reads the file again. On K3s and RKE2, a configuration
+without an `anonymous` section gets `anonymous: {enabled: false}`, so anonymous requests stay
+off. A changed configuration takes effect on the next `apply`.
+
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to

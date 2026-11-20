@@ -10,13 +10,13 @@
 //! Each key here is set in exactly one file, so a person's own `config.yaml.d/90-*.yaml`
 //! overrides it cleanly.
 
-use crate::PlanError;
 use crate::cluster::{
     AUDIT_POLICY, Distribution, HostFile, Options, Rancher, RancherConfig, control_plane_requests,
 };
 use crate::config::Role;
 use crate::tuning::HostTuning;
 use crate::uninstall::Remove;
+use crate::{PlanError, authentication};
 
 /// Where the tarball installs.
 pub const PREFIX: &str = "/usr/local";
@@ -27,6 +27,9 @@ pub const MANIFESTS_DIR: &str = "/var/lib/rancher/rke2/server/manifests";
 /// The audit policy of a server.
 const AUDIT_POLICY_FILE: &str = "/etc/rancher/rke2/audit-policy.yaml";
 
+/// The directory of the authentication file of a server, mounted into kube-apiserver's pod.
+pub const AUTHENTICATION_DIR: &str = "/etc/rancher/rke2/authentication";
+
 const RKE2: Rancher = Rancher::Rke2;
 
 /// The files to write, in the order to write them.
@@ -36,15 +39,22 @@ const RKE2: Rancher = Rancher::Rke2;
 /// When a file cannot be serialised.
 pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
     let dir = RKE2.distribution().layout().config_dir;
-    Ok(vec![
+    let mut files = vec![
         RKE2.sysctl(),
         HostFile {
             path: AUDIT_POLICY_FILE.to_owned(),
             mode: 0o600,
             content: AUDIT_POLICY.to_owned(),
         },
-        config(options).file(format!("{dir}/config.yaml"))?,
-    ])
+    ];
+    // Before the configuration that mounts its directory.
+    files.extend(authentication::file(
+        AUTHENTICATION_DIR,
+        &options.api_server,
+        true,
+    )?);
+    files.push(config(options).file(format!("{dir}/config.yaml"))?);
+    Ok(files)
 }
 
 /// What an RKE2 node of `role` leaves on the host for `uninstall` to remove.
@@ -52,7 +62,9 @@ pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
 pub fn footprint(role: Role, joined: bool) -> Vec<Remove> {
     let mut paths = RKE2.footprint(role, joined);
     if role == Role::Server {
-        paths.push(Remove::Tree(AUDIT_POLICY_FILE.to_owned()));
+        paths.extend(
+            [AUDIT_POLICY_FILE, AUTHENTICATION_DIR].map(|path| Remove::Tree(path.to_owned())),
+        );
     }
     paths
 }
@@ -92,6 +104,15 @@ fn config(options: &Options) -> RancherConfig {
         tls_san: options.tls_san.clone(),
         ..RancherConfig::default()
     };
+    if !options.api_server.is_empty() {
+        config.kube_apiserver_arg.push(format!(
+            "authentication-config={}",
+            authentication::path(AUTHENTICATION_DIR)
+        ));
+        config
+            .kube_apiserver_extra_mount
+            .push(format!("{AUTHENTICATION_DIR}:{AUTHENTICATION_DIR}:ro"));
+    }
     config.turn_off(Distribution::Rke2, &options.disable);
     config
 }
@@ -128,6 +149,7 @@ mod tests {
             tuning: tuning(),
             own_network: false,
             disable: Vec::new(),
+            api_server: authentication::ApiServer::default(),
         }
     }
 
@@ -179,6 +201,33 @@ mod tests {
         assert_eq!(config["tls-san"], serde_json::json!(["k8s.example.com"]));
         assert_eq!(config["enable-servicelb"], true);
         assert_eq!(config["write-kubeconfig-mode"], "0600");
+    }
+
+    #[test]
+    fn an_authentication_config_is_mounted_into_the_api_server() {
+        let files = host_files(&Options {
+            api_server: authentication::example(),
+            ..options(Vec::new())
+        })
+        .unwrap();
+        let path = format!("{AUTHENTICATION_DIR}/config.yaml");
+        let at = |p: &str| files.iter().position(|f| f.path.ends_with(p)).unwrap();
+        assert!(
+            at(&path) < at("/rke2/config.yaml"),
+            "written before the mount"
+        );
+        let file: serde_json::Value = serde_saphyr::from_str(&files[at(&path)].content).unwrap();
+        assert_eq!(file["anonymous"]["enabled"], false);
+        let config: serde_json::Value =
+            serde_saphyr::from_str(&files[at("/rke2/config.yaml")].content).unwrap();
+        assert_eq!(
+            config["kube-apiserver-arg"],
+            serde_json::json!([format!("authentication-config={path}")])
+        );
+        assert_eq!(
+            config["kube-apiserver-extra-mount"],
+            serde_json::json!([format!("{AUTHENTICATION_DIR}:{AUTHENTICATION_DIR}:ro")])
+        );
     }
 
     #[test]

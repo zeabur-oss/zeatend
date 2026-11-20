@@ -17,6 +17,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::authentication::ApiServer;
 use crate::config::{Component, Role};
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -794,6 +795,8 @@ pub struct Options {
     pub own_network: bool,
     /// Packaged components that the configuration turns off.
     pub disable: Vec<Component>,
+    /// The JWT issuers the API server trusts.
+    pub api_server: ApiServer,
 }
 
 /// The keys zeatend writes in a K3s or RKE2 configuration file.
@@ -826,6 +829,8 @@ pub(crate) struct RancherConfig {
     pub(crate) audit_policy_file: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kube_apiserver_arg: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kube_apiserver_extra_mount: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kube_controller_manager_arg: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -865,6 +870,8 @@ struct ListSettings {
     disable: Items,
     #[serde(default)]
     ingress_controller: Items,
+    #[serde(default)]
+    kube_apiserver_arg: Items,
 }
 
 impl ListSettings {
@@ -939,6 +946,27 @@ pub fn disabled_components(
         .into_iter()
         .filter(|c| off.contains(c))
         .collect())
+}
+
+/// The authentication file that the K3s or RKE2 configuration `config` passes to the API server.
+///
+/// A file left on disk after `apiServer.authenticationConfig` was removed is not passed, so it is
+/// not used.
+///
+/// # Errors
+///
+/// When the configuration does not parse.
+pub fn authentication_config(config: &str) -> Result<Option<String>, PlanError> {
+    let settings: ListSettings =
+        serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
+    Ok(settings
+        .kube_apiserver_arg
+        .list()
+        .into_iter()
+        .find_map(|arg| {
+            arg.strip_prefix("authentication-config=")
+                .map(str::to_owned)
+        }))
 }
 
 impl Setting {
@@ -1115,6 +1143,7 @@ mod tests {
                 tuning,
                 own_network: false,
                 disable: Vec::new(),
+                api_server: ApiServer::default(),
             };
             let file = rancher
                 .server_files(&options)
@@ -1314,6 +1343,42 @@ mod tests {
         assert!(
             disabled_components(Distribution::Rke2, "ingress-controller: ingress-nginx\n").is_err()
         );
+    }
+
+    #[test]
+    fn the_authentication_file_is_the_one_the_api_server_is_given() {
+        for rancher in Rancher::ALL {
+            let config = |api_server: ApiServer| {
+                let options = Options {
+                    tls_san: Vec::new(),
+                    tuning: HostTuning::new(rancher.into(), MemoryTier::Standard),
+                    own_network: false,
+                    disable: Vec::new(),
+                    api_server,
+                };
+                let main = format!("{}/config.yaml", rancher.distribution().layout().config_dir);
+                rancher
+                    .server_files(&options)
+                    .unwrap()
+                    .into_iter()
+                    .find(|f| f.path == main)
+                    .unwrap()
+                    .content
+            };
+            let path = crate::authentication::path(match rancher {
+                Rancher::K3s => crate::k3s::AUTHENTICATION_DIR,
+                Rancher::Rke2 => crate::rke2::AUTHENTICATION_DIR,
+            });
+            assert_eq!(
+                authentication_config(&config(crate::authentication::example())).unwrap(),
+                Some(path)
+            );
+            // After the configuration is removed the file may stay on disk, but no flag names it.
+            assert_eq!(
+                authentication_config(&config(ApiServer::default())).unwrap(),
+                None
+            );
+        }
     }
 
     fn list<T: serde::de::DeserializeOwned>(value: Value) -> ObjectList<T> {

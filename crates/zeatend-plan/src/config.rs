@@ -8,6 +8,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
 use crate::PlanError;
+use crate::authentication::ApiServer;
 use crate::cluster::Distribution;
 use crate::token::JoinToken;
 
@@ -28,6 +29,9 @@ pub struct Config {
     /// defaults.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disable: Vec<Component>,
+    /// The API server's settings.
+    #[serde(default, skip_serializing_if = "ApiServer::is_empty")]
+    pub api_server: ApiServer,
     /// Host settings.
     #[serde(default)]
     pub host: Host,
@@ -144,6 +148,10 @@ pub struct JoinConfig {
     /// same list, as each one deploys the packaged components.
     #[serde(default)]
     pub disable: Vec<Component>,
+    /// Servers only: the API server's settings. Give each server the same, as each one runs an
+    /// API server.
+    #[serde(default)]
+    pub api_server: ApiServer,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
@@ -269,7 +277,13 @@ impl JoinConfig {
                 "disable applies to servers; a worker deploys no packaged components".to_owned(),
             ));
         }
+        if join.role == Role::Worker && !self.api_server.is_empty() {
+            return Err(PlanError::Config(
+                "apiServer applies to servers; a worker serves no Kubernetes API".to_owned(),
+            ));
+        }
         check_disable(self.distribution, &self.disable)?;
+        self.api_server.check()?;
         self.host.check()
     }
 }
@@ -384,6 +398,7 @@ impl Config {
     pub fn check(&self) -> Result<(), PlanError> {
         check_version(self.distribution, self.version.as_deref())?;
         check_disable(self.distribution, &self.disable)?;
+        self.api_server.check()?;
         self.host.check()
     }
 }
@@ -539,5 +554,26 @@ mod tests {
             "distribution: rke2\njoin:\n  server: https://10.0.0.5:9345\n  role: server\n  token: K10{HASH}::server:x\ndisable: [traefik]\n"
         ));
         assert!(matches!(server, Ok(Document::Join(c)) if c.disable == [Component::Traefik]));
+    }
+
+    const AUTHENTICATION: &str = "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n";
+
+    #[test]
+    fn an_authentication_config_applies_to_servers() {
+        for distribution in ["k3s", "rke2", "kubesolo"] {
+            let c =
+                Config::parse(&format!("distribution: {distribution}\n{AUTHENTICATION}")).unwrap();
+            assert!(!c.api_server.is_empty());
+        }
+        assert!(
+            Config::parse(&AUTHENTICATION.replace("config.k8s.io/v1", "config.k8s.io/v1beta1"))
+                .is_err()
+        );
+        let err = join(AUTHENTICATION).unwrap_err();
+        assert!(err.to_string().contains("applies to servers"), "{err}");
+        let server = Document::parse(&format!(
+            "distribution: rke2\njoin:\n  server: https://10.0.0.5:9345\n  role: server\n  token: K10{HASH}::server:x\n{AUTHENTICATION}"
+        ));
+        assert!(matches!(server, Ok(Document::Join(c)) if !c.api_server.is_empty()));
     }
 }

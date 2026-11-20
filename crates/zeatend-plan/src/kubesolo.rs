@@ -18,6 +18,9 @@ pub const CONFIG_FILE: &str = "/etc/kubesolo/config.yaml";
 pub const UNIT_FILE: &str = "/etc/systemd/system/kubesolo.service";
 /// The kubeconfig zeatend writes for the person's own computer.
 pub const KUBECONFIG: &str = "/etc/zeatend/kubeconfig.yaml";
+/// The directory of the authentication file that `kubernetes.apiServer.authenticationConfigFile`
+/// names.
+pub const AUTHENTICATION_DIR: &str = "/etc/kubesolo/authentication";
 /// The CNI configuration `KubeSolo` writes on every start.
 pub const CNI_CONFIG: &str = "/etc/cni/net.d/10-bridge.conflist";
 
@@ -51,6 +54,8 @@ pub struct Options {
     pub node_ip: Option<String>,
     /// Extra API server certificate names.
     pub tls_san: Vec<String>,
+    /// The JWT issuers the API server trusts.
+    pub api_server: crate::authentication::ApiServer,
     /// The host's memory settings; the unit sets their `GOMEMLIMIT`.
     pub tuning: HostTuning,
     /// The unit runs zeabur-installer's webhook script after each start, as the installer's unit
@@ -104,10 +109,14 @@ pub struct Kubernetes {
 
 /// The `kubernetes.apiServer` keys of [`Config`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApiServer {
     /// Extra API server certificate names.
     #[serde(rename = "extraSANs", default)]
     pub extra_sans: Vec<String>,
+    /// The file kube-apiserver's `--authentication-config` names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authentication_config_file: Option<String>,
 }
 
 /// What `KubeSolo`, zeatend and zeabur-installer leave on the host for `uninstall` to remove.
@@ -120,6 +129,7 @@ pub fn footprint() -> Vec<Remove> {
         layout.binary,
         CONFIG_FILE,
         CNI_CONFIG,
+        AUTHENTICATION_DIR,
         layout.data_dir,
         layout.state_dir,
         KUBECONFIG,
@@ -142,25 +152,33 @@ pub fn footprint() -> Vec<Remove> {
 ///
 /// When the configuration cannot be serialised.
 pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
+    // KubeSolo passes no --anonymous-auth, so anonymous requests stay as they were.
+    let authentication =
+        crate::authentication::file(AUTHENTICATION_DIR, &options.api_server, false)?;
+    let api_server = ApiServer {
+        extra_sans: options.tls_san.clone(),
+        authentication_config_file: authentication.as_ref().map(|f| f.path.clone()),
+    };
     let config = Config {
         api_version: "kubesolo.io/v1alpha1".to_owned(),
         kind: "Config".to_owned(),
         network: options.node_ip.clone().map(|node_ip| Network { node_ip }),
         kubernetes: Kubernetes {
             node_name: Some(options.node_name.clone()),
-            api_server: (!options.tls_san.is_empty()).then(|| ApiServer {
-                extra_sans: options.tls_san.clone(),
-            }),
+            api_server: (api_server != ApiServer::default()).then_some(api_server),
         },
     };
-    Ok(vec![
-        HostFile::yaml(CONFIG_FILE.to_owned(), HEADER, &config)?,
-        HostFile {
-            path: UNIT_FILE.to_owned(),
-            mode: 0o644,
-            content: unit(options),
-        },
-    ])
+    Ok(authentication
+        .into_iter()
+        .chain([
+            HostFile::yaml(CONFIG_FILE.to_owned(), HEADER, &config)?,
+            HostFile {
+                path: UNIT_FILE.to_owned(),
+                mode: 0o644,
+                content: unit(options),
+            },
+        ])
+        .collect())
 }
 
 /// The unit of `KubeSolo`'s own installer, without its environment file, with the
@@ -358,6 +376,7 @@ mod tests {
             node_name: "solo".to_owned(),
             node_ip: Some("10.0.0.5".to_owned()),
             tls_san: vec!["solo.example.com".to_owned()],
+            api_server: crate::authentication::ApiServer::default(),
             tuning: tuning(),
             installer_webhook: false,
         })
@@ -376,6 +395,7 @@ mod tests {
             node_name: "solo".to_owned(),
             node_ip: None,
             tls_san: Vec::new(),
+            api_server: crate::authentication::ApiServer::default(),
             tuning: tuning(),
             installer_webhook: false,
         })
@@ -395,12 +415,39 @@ mod tests {
     }
 
     #[test]
+    fn an_authentication_config_is_named_in_the_config() {
+        let files = host_files(&Options {
+            node_name: "solo".to_owned(),
+            node_ip: None,
+            tls_san: Vec::new(),
+            api_server: crate::authentication::example(),
+            tuning: tuning(),
+            installer_webhook: false,
+        })
+        .unwrap();
+        let authentication = format!("{AUTHENTICATION_DIR}/config.yaml");
+        assert_eq!(files[0].path, authentication);
+        let file: Value = serde_saphyr::from_str(&files[0].content).unwrap();
+        assert!(
+            file.get("anonymous").is_none(),
+            "KubeSolo keeps its default"
+        );
+        let config = files.iter().find(|f| f.path == CONFIG_FILE).unwrap();
+        let value: Value = serde_saphyr::from_str(&config.content).unwrap();
+        assert_eq!(
+            value["kubernetes"]["apiServer"],
+            json!({"extraSANs": [], "authenticationConfigFile": authentication})
+        );
+    }
+
+    #[test]
     fn the_unit_keeps_the_webhook_script_of_an_earlier_install() {
         let unit = |installer_webhook| {
             host_files(&Options {
                 node_name: "solo".to_owned(),
                 node_ip: None,
                 tls_san: Vec::new(),
+                api_server: crate::authentication::ApiServer::default(),
                 tuning: tuning(),
                 installer_webhook,
             })
