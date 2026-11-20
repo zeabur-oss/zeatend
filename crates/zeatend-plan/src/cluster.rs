@@ -652,15 +652,6 @@ impl Rancher {
         )
     }
 
-    /// The directory of a server's authentication file.
-    #[must_use]
-    pub const fn authentication_dir(self) -> &'static str {
-        match self {
-            Self::K3s => crate::k3s::AUTHENTICATION_DIR,
-            Self::Rke2 => crate::rke2::AUTHENTICATION_DIR,
-        }
-    }
-
     /// Where [`Self::join_file`] goes.
     #[must_use]
     pub fn join_path(self) -> String {
@@ -879,6 +870,8 @@ struct ListSettings {
     disable: Items,
     #[serde(default)]
     ingress_controller: Items,
+    #[serde(default)]
+    kube_apiserver_arg: Items,
 }
 
 impl ListSettings {
@@ -953,6 +946,25 @@ pub fn disabled_components(
         .into_iter()
         .filter(|c| off.contains(c))
         .collect())
+}
+
+/// The authentication file that the K3s or RKE2 configuration `config` passes to the API server,
+/// if any. A file left on disk after `apiServer.jwt` was removed is not passed, so it is not used.
+///
+/// # Errors
+///
+/// When the configuration does not parse.
+pub fn authentication_config(config: &str) -> Result<Option<String>, PlanError> {
+    let settings: ListSettings =
+        serde_saphyr::from_str(config).map_err(|e| PlanError::Config(e.to_string()))?;
+    Ok(settings
+        .kube_apiserver_arg
+        .list()
+        .into_iter()
+        .find_map(|arg| {
+            arg.strip_prefix("authentication-config=")
+                .map(str::to_owned)
+        }))
 }
 
 impl Setting {
@@ -1329,6 +1341,48 @@ mod tests {
         assert!(
             disabled_components(Distribution::Rke2, "ingress-controller: ingress-nginx\n").is_err()
         );
+    }
+
+    #[test]
+    fn the_authentication_file_is_the_one_the_api_server_is_given() {
+        for rancher in Rancher::ALL {
+            let config = |jwt: Vec<crate::authentication::JwtIssuer>| {
+                let options = Options {
+                    tls_san: Vec::new(),
+                    tuning: HostTuning::new(rancher.into(), MemoryTier::Standard),
+                    own_network: false,
+                    disable: Vec::new(),
+                    api_server: ApiServer { jwt },
+                };
+                let main = format!("{}/config.yaml", rancher.distribution().layout().config_dir);
+                rancher
+                    .server_files(&options)
+                    .unwrap()
+                    .into_iter()
+                    .find(|f| f.path == main)
+                    .unwrap()
+                    .content
+            };
+            let issuer = crate::authentication::JwtIssuer {
+                issuer: "https://identity.example.com".to_owned(),
+                audiences: vec!["kubernetes".to_owned()],
+                certificate_authority: None,
+                username_claim: None,
+                username_prefix: "zeabur:".to_owned(),
+                groups_claim: None,
+                groups_prefix: None,
+            };
+            let path = crate::authentication::path(match rancher {
+                Rancher::K3s => crate::k3s::AUTHENTICATION_DIR,
+                Rancher::Rke2 => crate::rke2::AUTHENTICATION_DIR,
+            });
+            assert_eq!(
+                authentication_config(&config(vec![issuer])).unwrap(),
+                Some(path)
+            );
+            // After apiServer.jwt is removed the file may stay on disk, but no flag names it.
+            assert_eq!(authentication_config(&config(Vec::new())).unwrap(), None);
+        }
     }
 
     fn list<T: serde::de::DeserializeOwned>(value: Value) -> ObjectList<T> {

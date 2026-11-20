@@ -99,11 +99,11 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
         Role::Server => {
             let path = format!("{}/config.yaml", layout.config_dir);
             let config = std::fs::read_to_string(&path).map_err(InstallError::io(&path))?;
-            let path = authentication::path(distribution.authentication_dir());
-            let api_server = match std::fs::read_to_string(&path) {
-                Ok(text) => authentication::read(&text)?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => ApiServer::default(),
-                Err(e) => return Err(InstallError::io(&path)(e)),
+            let api_server = match cluster::authentication_config(&config)? {
+                Some(path) => authentication::read(
+                    &std::fs::read_to_string(&path).map_err(InstallError::io(&path))?,
+                )?,
+                None => ApiServer::default(),
             };
             (
                 cluster::disabled_components(distribution.into(), &config)?,
