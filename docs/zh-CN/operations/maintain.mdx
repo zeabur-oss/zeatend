@@ -20,7 +20,7 @@ sudo zeatend doctor
 | 服务 | 发行版的 systemd 服务正在运行。 |
 | Kubernetes API | 在服务器节点上，API 服务器响应 `/readyz`。 |
 | 安装记录 | Zeatend 已写入安装记录，且记录并非来自更新版本的 Zeatend。 |
-| 节点 | 每个节点都处于 `Ready` 状态。工作节点只读取自身节点。 |
+| 节点 | 每个节点都处于 `Ready` 状态。工作节点只检查自身节点。 |
 | kubelet 预留资源 | kubelet 为系统预留足够的内存，不分配给副本。 |
 | 机密变量加密 | 在 K3s 或 RKE2 服务器节点上，API 服务器加密存储机密变量。 |
 

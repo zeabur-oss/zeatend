@@ -25,7 +25,7 @@ Installs, or brings an install in line with the configuration. It's safe to run 
 
 | Flag | Meaning |
 | --- | --- |
-| `--plan <file>` | Apply the plan that `plan --json` wrote to the file. Nothing changes when a file the plan writes, the installed release or the install record changed since then. |
+| `--plan <file>` | Apply the plan that `plan --json` wrote to the file. Nothing changes if, since then, a file the plan writes, the installed release or the install record has changed. |
 | `--foreground` | Run the install in this process, not in a systemd unit. It stops when the session ends. |
 | `--json` | Print the progress as JSON lines. |
 

@@ -52,7 +52,7 @@ These stay:
   /etc/zeatend/config.yaml  (zeatend's configuration)
 ```
 
-`--yes` removes without the question, such as in a script. Without a terminal to ask on, `uninstall` removes nothing until you add `--yes`.
+`--yes` removes without the prompt, such as in a script. Without a terminal to ask on, `uninstall` removes nothing until you add `--yes`.
 
 The volumes that stay are the folders of the `local-path` storage class, `/var/lib/zeabur/storage` and `/var/lib/longhorn`, where they exist. Zeatend moves the `local-path` folders out of the way of the distribution's own uninstall and puts them back. To delete them too, add `--delete-volumes`.
 

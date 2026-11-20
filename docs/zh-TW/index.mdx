@@ -32,7 +32,7 @@ Kubernetes 開始執行後，Zeatend 的工作就完成了。Zeatend 不會安�
 
 ## Zeatend 的限制
 
-- Zeatend 在要設定的伺服器上執行。你需要把 Zeatend 複製到每台伺服器，再以 root 身分執行。
+- Zeatend 不會從一台電腦設定其他伺服器：要把 Zeatend 複製到每台伺服器，在那台伺服器上以 root 身分執行。
 - Zeatend 不會備份叢集，也不會把叢集搬到另一台伺服器。各發行版的資料位置見[維護叢集](operations/maintain.mdx)。
 - Zeatend 不會用 Kubernetes API 修改叢集內的物件。要從叢集移除節點，需要自行執行 `kubectl delete node`。
 - 伺服器需要連上網際網路，才能從 GitHub 下載發行版。

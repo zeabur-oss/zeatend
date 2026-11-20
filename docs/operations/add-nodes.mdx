@@ -3,7 +3,7 @@ title: Add nodes
 description: Run zeatend node add on a server, run the commands it prints on the new server, and revoke the join token when the node is Ready.
 ---
 
-`zeatend node add` runs on a server of the cluster and prints what a new server needs to join: a configuration file with a join token, and the commands to run there. The new server's own `zeatend plan` checks the ports and the distance to the cluster before it joins.
+`zeatend node add` runs on a server of the cluster and prints what a new server needs to join: a configuration file with a join token, and the commands to run there. The new server's own `zeatend plan` checks the ports and the round-trip time to the cluster before it joins.
 
 | Distribution | What you can add |
 | --- | --- |

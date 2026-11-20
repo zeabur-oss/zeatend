@@ -46,7 +46,7 @@ sudo zeatend node add
 
 使用 RKE2 时，添加 `--role server` 可以加入服务器节点，而非工作节点。新服务器会通过当前节点的 `InternalIP` 连接；要使用其他地址，添加 `--address <address>`。
 
-命令会输出供新服务器运行的命令：
+输出如下，其中的命令要在新服务器上运行：
 
 ```text
 On the new VM, as root, with this zeatend copied to /usr/local/bin:

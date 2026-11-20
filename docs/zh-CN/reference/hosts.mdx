@@ -11,7 +11,7 @@ description: Zeatend 支持安装的服务器、固定的版本、所需端口�
 | CPU | x86-64（`amd64`）或 ARM64（`arm64`）。 |
 | 访问权限 | 通过 `sudo` 获取 root 权限。 |
 | 内存 | K3s 至少需要 1900 MiB，2 GiB 服务器可以满足；KubeSolo 至少需要 1400 MiB。RKE2 需要更多内存。内存不足时，主机检查会发出警告。 |
-| 磁盘 | 存放集群数据的文件系统至少需要 10 GiB 可用空间；建议预留 30 GiB 或更多空间，用于存放镜像、日志和卷。 |
+| 磁盘 | 存放集群数据的文件系统至少需要 10 GiB 可用空间；30 GiB 以上才放得下镜像、日志和卷。 |
 | 网络 | 服务器能连接 GitHub；KubeSolo 还需要连接 `dl.k8s.io`。 |
 | Docker | KubeSolo 主机不能安装 Docker。 |
 

@@ -19,8 +19,8 @@ sudo zeatend doctor
 | --- | --- |
 | service | The distribution's systemd service runs. |
 | Kubernetes API | On a server, the API server answers `/readyz`. |
-| install record | Zeatend wrote the install record, and no newer Zeatend did. |
-| nodes | Every node is `Ready`. A worker reads its own node only. |
+| install record | Zeatend wrote the install record, and the record isn't from a newer Zeatend. |
+| nodes | Every node is `Ready`. A worker checks its own node only. |
 | kubelet reserves | The kubelet keeps enough memory from pods for the system. |
 | Secrets encryption | On a K3s or RKE2 server, the API server stores Secrets encrypted. |
 
@@ -71,7 +71,7 @@ Run the same two commands on each worker. A worker reads `/etc/zeatend/config.ya
 `apply` stops before it changes anything when the upgrade breaks a Kubernetes rule:
 
 - **Older release.** Zeatend doesn't downgrade. The error names the installed release; use a Zeatend that installs that release or a newer one.
-- **More than one minor version.** A server moves Kubernetes one minor version at a time, such as 1.36 to 1.37. On K3s or RKE2, set `version` to a release of the next minor version, apply, then remove `version` and apply again. On KubeSolo, apply a Zeatend release that installs the next minor version first.
+- **More than one minor version.** A server upgrades Kubernetes one minor version at a time, such as 1.36 to 1.37. On K3s or RKE2, set `version` to a release of the next minor version, apply, then remove `version` and apply again. On KubeSolo, apply a Zeatend release that installs the next minor version first.
 - **Worker ahead of the servers.** A worker never runs a newer Kubernetes minor version than the API server. Upgrade the servers first.
 - **Record from a newer Zeatend.** The error names the Zeatend version to use.
 

@@ -20,7 +20,7 @@ sudo zeatend doctor
 | 服務 | 發行版的 systemd 服務是否運作。 |
 | Kubernetes API | 在伺服器上，API 伺服器是否回應 `/readyz`。 |
 | 安裝紀錄 | Zeatend 是否已寫入安裝紀錄，且紀錄並非來自更新版本的 Zeatend。 |
-| 節點 | 所有節點是否都是 `Ready`。工作節點只讀取自己的節點。 |
+| 節點 | 所有節點是否都是 `Ready`。工作節點只檢查自己的節點。 |
 | kubelet 保留量 | kubelet 是否為系統保留足夠記憶體，不讓副本使用。 |
 | 機密變數加密 | 在 K3s 或 RKE2 伺服器上，API 伺服器是否加密儲存機密變數。 |
 

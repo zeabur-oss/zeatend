@@ -21,7 +21,7 @@ kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
 kubectl delete node <node>
 ```
 
-Zeatend 不會透過 Kubernetes API 修改物件，所以在你刪除節點之前，叢集仍會列出該節點。要讓 RKE2 控制平面持續運作，請保留至少三台伺服器。
+Zeatend 不會用 Kubernetes API 修改物件，所以在你刪除節點之前，叢集仍會列出該節點。要讓 RKE2 控制平面持續運作，請保留至少三台伺服器。
 
 </Step>
 <Step>
@@ -52,7 +52,7 @@ These stay:
   /etc/zeatend/config.yaml  (zeatend's configuration)
 ```
 
-加上 `--yes` 就會略過詢問直接移除，例如在指令稿中使用。沒有終端機可供詢問時，必須加上 `--yes`，`uninstall` 才會移除項目。
+加上 `--yes` 就會略過詢問直接移除，例如在指令碼中使用。沒有終端機可供詢問時，必須加上 `--yes`，`uninstall` 才會移除項目。
 
 如果伺服器上有 `local-path` 儲存類別的資料夾、`/var/lib/zeabur/storage` 和 `/var/lib/longhorn`，這些磁碟區都會保留。執行發行版本身的解除安裝之前，Zeatend 會先移開 `local-path` 資料夾，完成後再移回原處。要一併刪除，請加上 `--delete-volumes`。
 

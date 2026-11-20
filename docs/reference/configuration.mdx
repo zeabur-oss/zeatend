@@ -69,6 +69,6 @@ join:
 | `join.role` | `worker`, the default, or on RKE2 `server`. |
 | `join.token` | The join token. The file must then be mode 0600. |
 | `join.tokenFile` | A file, mode 0600, that holds the join token. Use it instead of `join.token`. |
-| `join.nodeNames` | The names of the cluster's nodes, so this node takes another. |
+| `join.nodeNames` | The names of the cluster's nodes, so this node takes a different name. |
 | `disable`, `apiServer` | RKE2 servers only. Give every server the same values, because each one deploys the packaged components and runs an API server. |
 | `host` | As for the first server. `tlsSan` applies to servers only. |

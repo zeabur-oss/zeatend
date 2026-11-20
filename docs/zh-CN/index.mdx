@@ -32,10 +32,10 @@ Kubernetes 运行起来后，Zeatend 的工作就完成了。Zeatend 不安装 Z
 
 ## Zeatend 的限制
 
-- Zeatend 在需要配置的服务器上运行。将 Zeatend 复制到每台服务器，再以 root 身份运行。
-- 不备份集群，也不将集群迁移到其他服务器。各发行版的数据位置见[维护集群](operations/maintain.mdx)。
-- 不通过 Kubernetes API 修改集群中的对象。要从集群移除节点，需要自行运行 `kubectl delete node`。
-- 需要连接互联网：服务器从 GitHub 下载发行版。
+- Zeatend 不会从一台电脑配置其他服务器：要把 Zeatend 复制到每台服务器，在那台服务器上以 root 身份运行。
+- Zeatend 不备份集群，也不将集群迁移到其他服务器。各发行版的数据位置见[维护集群](operations/maintain.mdx)。
+- Zeatend 不通过 Kubernetes API 修改集群中的对象。要从集群移除节点，需要自行运行 `kubectl delete node`。
+- 服务器需要连接互联网，才能从 GitHub 下载发行版。
 
 ## 开始使用
 
