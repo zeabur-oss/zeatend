@@ -34,15 +34,13 @@ Zeatend 由 Zeabur 项目开发，目前还处在早期开发阶段。
 ```sh
 version=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/zeatend/releases/latest)")
 arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz"
-curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend
-sudo install -m 0755 zeatend /usr/local/bin/zeatend
-zeatend --version
+curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz" &&
+  curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend &&
+  sudo install -m 0755 zeatend /usr/local/bin/zeatend &&
+  zeatend --version
 ```
-```sh
-sudo zeatend plan
 
 `sha256sum` 输出 `OK`，说明下载的文件和 release 一致。`zeatend` 是静态可执行文件，不需要再安装其他软件包。
 

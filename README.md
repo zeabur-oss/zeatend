@@ -38,15 +38,13 @@ replace the first line with `version=v0.1.0` or the version you want.
 ```sh
 version=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/zeatend/releases/latest)")
 arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz"
-curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS"
-sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend
-sudo install -m 0755 zeatend /usr/local/bin/zeatend
-zeatend --version
+curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz" &&
+  curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend &&
+  sudo install -m 0755 zeatend /usr/local/bin/zeatend &&
+  zeatend --version
 ```
-```sh
-sudo zeatend plan
 
 `sha256sum` prints `OK` when the download matches the release. `zeatend` is a static executable
 and needs no other packages.
