@@ -1,7 +1,8 @@
 name: CI
 
-# Each job runs scripts/ci/<job>.sh in the Nix dev shell, the same as locally. The nightly run
-# keeps main's caches current for the merge queue.
+# Each job runs scripts/ci/<job>.sh in the Nix dev shell, the same as locally, except docs, which
+# runs the website's check of docs/ (locally: bun scripts/docs-check.ts <this checkout> in the
+# website). The nightly run keeps main's caches current for the merge queue.
 on:
   push:
     branches: [main]
@@ -80,11 +81,17 @@ jobs:
           sudo iptables -P FORWARD ACCEPT
       - run: nix develop -c scripts/ci/cluster.sh ${{ matrix.distribution }}
 
+  docs:
+    runs-on: instabox-small
+    timeout-minutes: 10
+    steps:
+      - uses: zeabur-oss/website/.github/actions/docs-check@c27d70f71fa537b6f06748a87bdbdc474206319e # main
+
   # The check rulesets require.
   ok:
     name: ci / ok
     if: always()
-    needs: [lint, test, cluster]
+    needs: [lint, test, cluster, docs]
     runs-on: instabox-small
     timeout-minutes: 5
     steps:
