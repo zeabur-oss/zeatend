@@ -39,7 +39,41 @@ trap on_exit EXIT
 cargo build --locked -p zeatend
 zeatend="$PWD/target/debug/zeatend"
 config="$(mktemp -d)/config.yaml"
-echo "distribution: $distribution" >"$config"
+
+# A test JWT issuer: crates/zeatend/tests/kubernetes.rs serves it on 127.0.0.1:8943 with this
+# certificate, and the API server trusts it through apiServer.jwt.
+issuer="$(mktemp -d)"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
+  -subj /CN=zeatend-test-issuer-ca -keyout "$issuer/ca.key" -out "$issuer/ca.pem" 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=127.0.0.1 \
+  -keyout "$issuer/server.key" -out "$issuer/server.csr" 2>/dev/null
+openssl x509 -req -in "$issuer/server.csr" -CA "$issuer/ca.pem" -CAkey "$issuer/ca.key" \
+  -CAcreateserial -days 1 -out "$issuer/server.pem" \
+  -extfile <(printf 'subjectAltName=IP:127.0.0.1\nextendedKeyUsage=serverAuth\n') 2>/dev/null
+openssl x509 -in "$issuer/server.pem" -outform DER -out "$issuer/server.der"
+openssl pkcs8 -topk8 -nocrypt -in "$issuer/server.key" -outform DER -out "$issuer/server.key.der"
+export ZEATEND_TEST_ISSUER_DIR="$issuer" ZEATEND_TEST_DISTRIBUTION="$distribution"
+
+# Writes the configuration with the issuer for the audiences in $1, such as `[kubernetes]`.
+write_config() {
+  {
+    echo "distribution: $distribution"
+    echo "apiServer:"
+    echo "  jwt:"
+    echo "    - issuer: https://127.0.0.1:8943"
+    echo "      certificateAuthority: |"
+    sed 's/^/        /' "$issuer/ca.pem"
+    echo "      audiences: $1"
+    echo "      usernamePrefix: \"zeabur:\""
+    echo "      groupsClaim: groups"
+    echo "      groupsPrefix: \"zeabur:\""
+  } >"$config"
+}
+jwt_test() {
+  ZEATEND_TEST_AUDIENCE="$1" cargo nextest run --locked --run-ignored only \
+    -E 'binary(kubernetes) and test(trusted_issuer)'
+}
+write_config "[kubernetes]"
 
 sudo "$zeatend" --config "$config" plan
 sudo "$zeatend" --config "$config" apply --foreground
@@ -55,11 +89,18 @@ sudo "$zeatend" --config "$config" doctor || status=$?
 # KubeSolo enforces no NetworkPolicy (crates/zeatend-plan/src/kubesolo.rs), so it has no
 # isolation to test.
 if [[ "$distribution" != kubesolo ]]; then
-  cargo nextest run --locked --run-ignored only -E 'binary(kubernetes)'
+  cargo nextest run --locked --run-ignored only -E 'binary(kubernetes) and not test(trusted_issuer)'
 fi
+jwt_test kubernetes
 
 # A second apply changes nothing and succeeds.
 sudo "$zeatend" --config "$config" apply --foreground
+
+# A changed issuer list is written again: the issuer's tokens are now for another audience.
+write_config "[zeatend-test]"
+sudo "$zeatend" --config "$config" plan
+sudo "$zeatend" --config "$config" apply --foreground
+jwt_test zeatend-test
 sudo "$zeatend" --config "$config" uninstall --yes --delete-volumes
 if sudo systemctl is-active --quiet "$distribution" "$distribution-server" 2>/dev/null; then
   echo "$distribution still runs after uninstall" >&2

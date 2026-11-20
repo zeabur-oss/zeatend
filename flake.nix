@@ -62,6 +62,8 @@
 
               # The cluster tests (scripts/ci/cluster.sh)
               kubectl
+              # The test JWT issuer's certificates
+              openssl
             ];
 
             env = {

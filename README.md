@@ -44,6 +44,26 @@ your own instead, turn them off with `disable`, such as `disable: [traefik, metr
 `local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these. On a
 cluster that zeabur-installer installed, `disable` starts as the list the installer turned off.
 
+`apiServer.jwt` makes the API server accept tokens from OpenID Connect issuers. Zeatend writes them
+to the API server's
+[authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)
+on a server:
+
+```yaml
+apiServer:
+  jwt:
+    - issuer: https://identity.example.com
+      audiences: [kubernetes]
+      usernameClaim: preferred_username # sub by default
+      usernamePrefix: "zeabur:"
+      groupsClaim: groups # optional, with groupsPrefix
+      groupsPrefix: "zeabur:"
+```
+
+`certificateAuthority` takes a PEM certificate when the issuer's certificate is not from a public
+authority. A user or group with the `system:` prefix is refused. A changed list takes effect on
+the next `apply`.
+
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.
 - `zeatend apply` installs, or brings an install in line with the configuration. It is safe to

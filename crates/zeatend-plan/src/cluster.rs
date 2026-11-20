@@ -17,6 +17,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::authentication::ApiServer;
 use crate::config::{Component, Role};
 use crate::pins::{K3S, KUBESOLO, RKE2};
 use crate::tuning::{HostTuning, MemoryTier};
@@ -651,6 +652,15 @@ impl Rancher {
         )
     }
 
+    /// The directory of a server's authentication file.
+    #[must_use]
+    pub const fn authentication_dir(self) -> &'static str {
+        match self {
+            Self::K3s => crate::k3s::AUTHENTICATION_DIR,
+            Self::Rke2 => crate::rke2::AUTHENTICATION_DIR,
+        }
+    }
+
     /// Where [`Self::join_file`] goes.
     #[must_use]
     pub fn join_path(self) -> String {
@@ -794,6 +804,8 @@ pub struct Options {
     pub own_network: bool,
     /// Packaged components that the configuration turns off.
     pub disable: Vec<Component>,
+    /// The JWT issuers the API server trusts.
+    pub api_server: ApiServer,
 }
 
 /// The keys zeatend writes in a K3s or RKE2 configuration file.
@@ -826,6 +838,8 @@ pub(crate) struct RancherConfig {
     pub(crate) audit_policy_file: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kube_apiserver_arg: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) kube_apiserver_extra_mount: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) kube_controller_manager_arg: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1115,6 +1129,7 @@ mod tests {
                 tuning,
                 own_network: false,
                 disable: Vec::new(),
+                api_server: ApiServer::default(),
             };
             let file = rancher
                 .server_files(&options)

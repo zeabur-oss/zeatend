@@ -317,6 +317,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
                 // Only RKE2 takes a second server, and it always runs Canal.
                 own_network: false,
                 disable: config.disable.clone(),
+                api_server: config.api_server.clone(),
             })?,
             distribution.distribution().layout().server_unit,
         ),

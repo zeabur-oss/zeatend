@@ -31,7 +31,7 @@ use crate::cluster::{
 use crate::config::{Component, Role};
 use crate::tuning::HostTuning;
 use crate::uninstall::{Remove, parent};
-use crate::{PlanError, ports};
+use crate::{PlanError, authentication, ports};
 
 /// The binary; `install.sh` expects it here.
 pub const BINARY: &str = "/usr/local/bin/k3s";
@@ -48,6 +48,8 @@ pub const MEMORY_DROP_IN: &str = "/etc/systemd/system/k3s.service.d/zeatend-memo
 const AUDIT_POLICY_FILE: &str = "/etc/rancher/k3s/audit-policy.yaml";
 /// The admission plugins' settings of a server.
 const ADMISSION_FILE: &str = "/etc/rancher/k3s/admission.yaml";
+/// The directory of the authentication file of a server.
+pub const AUTHENTICATION_DIR: &str = "/etc/rancher/k3s/authentication";
 /// The manifest of [`system_objects`].
 const SYSTEM_OBJECTS_FILE: &str = "/var/lib/rancher/k3s/server/manifests/zeabur-cis.yaml";
 
@@ -76,6 +78,11 @@ pub fn host_files(options: &Options) -> Result<Vec<HostFile>, PlanError> {
     ];
     Ok(files
         .into_iter()
+        .chain(authentication::file(
+            AUTHENTICATION_DIR,
+            &options.api_server,
+            true,
+        )?)
         .chain(memory_drop_in(&options.tuning))
         .collect())
 }
@@ -92,6 +99,7 @@ pub fn footprint(role: Role, joined: bool) -> Vec<Remove> {
                 SYSTEM_OBJECTS_FILE,
                 MEMORY_DROP_IN,
                 AUDIT_LOG_DIR,
+                AUTHENTICATION_DIR,
             ]
             .map(|path| Remove::Tree(path.to_owned())),
         );
@@ -161,6 +169,12 @@ fn config(options: &Options) -> RancherConfig {
         tls_san: options.tls_san.clone(),
         ..RancherConfig::default()
     };
+    if !options.api_server.is_empty() {
+        config.kube_apiserver_arg.push(format!(
+            "authentication-config={}",
+            authentication::path(AUTHENTICATION_DIR)
+        ));
+    }
     // An existing cluster keeps the network plugin of its earlier install: changing it would cut
     // off every pod.
     if options.own_network {
@@ -338,6 +352,7 @@ mod tests {
             tuning: tuning(MemoryTier::Small),
             own_network: false,
             disable: Vec::new(),
+            api_server: authentication::ApiServer::default(),
         }
     }
 
@@ -372,6 +387,40 @@ mod tests {
         // K3s's own defaults: Traefik, metrics-server, local-path and ServiceLB all run.
         assert!(config.get("disable").is_none());
         assert_eq!(config["tls-san"], json!(["k8s.example.com"]));
+    }
+
+    #[test]
+    fn jwt_issuers_get_an_authentication_file() {
+        assert!(
+            host_files(&options())
+                .unwrap()
+                .iter()
+                .all(|f| !f.path.starts_with(AUTHENTICATION_DIR))
+        );
+        let files = host_files(&Options {
+            api_server: authentication::ApiServer {
+                jwt: vec![authentication::JwtIssuer {
+                    issuer: "https://identity.example.com".to_owned(),
+                    audiences: vec!["kubernetes".to_owned()],
+                    certificate_authority: None,
+                    username_claim: None,
+                    username_prefix: "zeabur:".to_owned(),
+                    groups_claim: None,
+                    groups_prefix: None,
+                }],
+            },
+            ..options()
+        })
+        .unwrap();
+        let path = format!("{AUTHENTICATION_DIR}/config.yaml");
+        let file = files.iter().find(|f| f.path == path).unwrap();
+        assert_eq!(yaml(&file.content)["anonymous"], json!({"enabled": false}));
+        let args = config_of(&files)["kube-apiserver-arg"].clone();
+        assert!(
+            args.as_array()
+                .unwrap()
+                .contains(&json!(format!("authentication-config={path}")))
+        );
     }
 
     #[test]
