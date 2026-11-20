@@ -14,6 +14,69 @@ Zeatend 是管理 Kubernetes 叢集的工具，概念和 [k3sup](https://github.
 
 Zeatend 由 Zeabur 專案開發，目前還在早期開發階段。
 
+## 安裝
+
+### 需要的主機
+
+- 一台以 systemd 啟動的 Linux 主機，處理器是 x86-64（amd64）或 ARM64（arm64）。K3s、RKE2 和 KubeSolo 都以 systemd 服務執行，所以主機沒有 systemd 時，`zeatend apply` 不會開始安裝。
+- 能用 `sudo` 取得 root 權限。
+- 記憶體：K3s 至少 1900 MiB，2 GiB 的主機就夠；KubeSolo 至少 1400 MiB；RKE2 需要更多。記憶體不夠時，主機檢查會提醒。
+- 磁碟：叢集資料所在的檔案系統至少要有 10 GiB 可用空間，建議 30 GiB 以上。
+- 網路：主機要能連到 GitHub，下載 K3s、RKE2 或 KubeSolo。
+- Kubernetes 需要的連接埠沒有被占用。KubeSolo 的主機上不能有 Docker。
+
+主機檢查也會看時間是否同步、swap 是否關閉，以及先前安裝的 Kubernetes 有沒有留下檔案。
+
+### 下載 zeatend
+
+在主機上執行下面的指令。第一行從 [GitHub Releases](https://github.com/zeabur-oss/zeatend/releases) 取得最新版本，例如 `v0.1.0`；要裝其他版本，把第一行換成 `version=v0.1.0` 這樣的版本號。
+
+```sh
+version=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/zeatend/releases/latest)")
+arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz" &&
+  curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend &&
+  sudo install -m 0755 zeatend /usr/local/bin/zeatend &&
+  zeatend --version
+```
+
+`sha256sum` 印出 `OK`，代表下載的檔案和 release 一致。`zeatend` 是靜態執行檔，不需要再安裝其他套件。
+
+### 安裝叢集
+
+用安裝畫面或指令，兩種擇一：
+
+- 執行 `sudo zeatend`，依照畫面選擇發行版，填寫位址和節點名稱，確認安裝計畫後開始安裝。
+- 先執行 `sudo zeatend plan` 檢視要安裝的項目和主機檢查，再執行 `sudo zeatend apply` 安裝。沒有 `/etc/zeatend/config.yaml` 時，zeatend 會用預設值安裝 K3s；要改用 RKE2 或 KubeSolo，先寫好設定檔，寫法見下方〈使用方式〉。
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+`plan` 不會變更主機。主機檢查沒有通過時，`apply` 不會開始安裝，請先依照訊息修正再執行一次。
+
+### 安裝成功時
+
+安裝完成時，安裝畫面會顯示「叢集已經可以使用」，下方是接下來可以執行的指令：
+
+<img alt="繁體中文的安裝畫面：安裝完成，叢集已經可以使用。" src="docs/screens/80x24/zh_TW-done.svg" width="744">
+
+`zeatend apply` 結束時，會印出版本、節點和接下來的指令。K3s 的輸出像這樣：
+
+```text
+==> 等待節點 vps-1 就緒
+==> 完成
+K3s v1.37.2+k3s1 已經在 vps-1 上執行。
+
+在這台伺服器上列出節點：
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+```
+
+終端機接著會印出把 kubeconfig 複製到你電腦上的指令。之後隨時可以執行 `sudo zeatend doctor` 檢查主機和叢集；有項目沒通過時，那一行會寫出該執行的指令。
+
 ## 使用方式
 
 目前 `zeatend` 要以 root 身分，在它安裝的那台 Linux 主機上執行。不加指令執行 `sudo zeatend`，會開啟安裝畫面，可以選擇英文、繁體中文或簡體中文：

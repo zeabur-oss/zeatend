@@ -12,6 +12,84 @@ sets up and manages K3s, RKE2 and KubeSolo clusters on hosts over SSH, with a te
 
 Zeatend is made by the Zeabur project and is in early development.
 
+## Install
+
+### What you need
+
+- A Linux host that boots with systemd, on x86-64 (amd64) or ARM64 (arm64). K3s, RKE2 and KubeSolo
+  run as systemd services, so `zeatend apply` does not start an install on a host without systemd.
+- Root through `sudo`.
+- Memory: at least 1900 MiB for K3s, which a 2 GiB host has, and 1400 MiB for KubeSolo. RKE2 needs
+  more. The host checks warn when the memory is too low.
+- Disk: at least 10 GiB free on the file system that holds the cluster's data, and 30 GiB or more
+  to be comfortable.
+- Network: the host reaches GitHub to download K3s, RKE2 or KubeSolo.
+- The ports Kubernetes needs are free. A KubeSolo host must not have Docker.
+
+The host checks also look at whether the clock is synchronised, whether swap is off, and whether an
+earlier Kubernetes install left files on the host.
+
+### Download zeatend
+
+Run these commands on the host. The first line gets the latest version, such as `v0.1.0`, from
+[GitHub Releases](https://github.com/zeabur-oss/zeatend/releases); to install another version,
+replace the first line with `version=v0.1.0` or the version you want.
+
+```sh
+version=$(basename "$(curl -fsSLo /dev/null -w '%{url_effective}' https://github.com/zeabur-oss/zeatend/releases/latest)")
+arch=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/zeatend-$version-linux-$arch.tar.gz" &&
+  curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/SHA256SUMS" &&
+  sha256sum --ignore-missing -c SHA256SUMS &&
+  tar -xzf "zeatend-$version-linux-$arch.tar.gz" zeatend &&
+  sudo install -m 0755 zeatend /usr/local/bin/zeatend &&
+  zeatend --version
+```
+
+`sha256sum` prints `OK` when the download matches the release. `zeatend` is a static executable
+and needs no other packages.
+
+### Install the cluster
+
+Use the install screens or the commands:
+
+- Run `sudo zeatend`. The screens ask for the distribution, the address and the node name, show
+  the install plan, and start the install when you confirm it.
+- Run `sudo zeatend plan` to see what it installs and the host checks, then `sudo zeatend apply`
+  to install. Without `/etc/zeatend/config.yaml`, zeatend installs K3s with the defaults; for RKE2
+  or KubeSolo, write the configuration file first, as "Usage" below shows.
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+`plan` changes nothing on the host. When a host check fails, `apply` does not start the install;
+fix what the message names and run it again.
+
+### When it worked
+
+When the install is done, the install screen says "The cluster is ready." and shows the commands
+to go on with:
+
+<img alt="The Install screen: the install is done and the cluster is ready." src="docs/screens/80x24/en-done.svg" width="744">
+
+When `zeatend apply` ends, it prints the release, the node and the commands to go on with. On
+K3s:
+
+```text
+==> Waiting for node vps-1 to be Ready
+==> Done
+K3s v1.37.2+k3s1 runs on vps-1.
+
+List the nodes on this server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+```
+
+Then it prints the commands that copy the kubeconfig to your own computer. Later,
+`sudo zeatend doctor` checks the host and the cluster at any time; each line that is not `ok`
+names the command to run.
+
 ## Usage
 
 Today `zeatend` runs on the Linux host it installs, as root. `sudo zeatend` with no command opens
