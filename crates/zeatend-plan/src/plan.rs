@@ -211,7 +211,12 @@ impl From<pins::Asset> for Download {
 /// the release or skip a Kubernetes minor version (see [`upgrade`]).
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
-    let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
+    let configured = config.host.node_name.as_deref();
+    let node_name = if config.distribution == Distribution::KubeSolo {
+        node_name::kubesolo(configured, facts)?
+    } else {
+        node_name::choose(configured, facts, &[])?
+    };
     let mut findings = Vec::new();
     let memory_tier = MemoryTier::of(facts.memory_mib);
     let tuning = HostTuning::new(config.distribution, memory_tier);
@@ -551,8 +556,13 @@ mod tests {
             apparmor_restricts_unconfined: true,
             ..facts()
         };
-        for distribution in ["k3s", "rke2", "kubesolo"] {
-            let plan = plan(&config(&format!("distribution: {distribution}\n")), &named).unwrap();
+        // KubeSolo keeps the host name (node_name::kubesolo).
+        let solo = Facts {
+            hostname: "db-1".to_owned(),
+            ..named.clone()
+        };
+        for (distribution, facts) in [("k3s", &named), ("rke2", &named), ("kubesolo", &solo)] {
+            let plan = plan(&config(&format!("distribution: {distribution}\n")), facts).unwrap();
             assert_eq!(plan.node_name, "db-1");
             assert!(
                 plan.host_files.contains(&cluster::apparmor_profile()),

@@ -14,6 +14,27 @@ case "$distribution" in
   kubesolo) admin=/var/lib/kubesolo/pki/admin/admin.kubeconfig ;;
   *) echo "unknown distribution $distribution" >&2; exit 2 ;;
 esac
+unit="$distribution"
+[[ "$distribution" == rke2 ]] && unit=rke2-server
+
+# On failure, print what the cluster was doing, so the log explains it without a rerun.
+dump() {
+  echo "::group::$unit journal"
+  sudo journalctl -u "$unit" --no-pager -o short-precise | tail -n 2000 || true
+  echo "::endgroup::"
+  if sudo test -f "$admin"; then
+    echo "::group::pods, deployments and events"
+    sudo "$(command -v kubectl)" --kubeconfig "$admin" --request-timeout=10s get nodes,pods,deployments -A -o wide || true
+    sudo "$(command -v kubectl)" --kubeconfig "$admin" --request-timeout=10s get events -A --sort-by=.lastTimestamp || true
+    echo "::endgroup::"
+  fi
+}
+on_exit() {
+  local code=$?
+  ((code == 0)) || dump
+  exit "$code"
+}
+trap on_exit EXIT
 
 cargo build --locked -p zeatend
 zeatend="$PWD/target/debug/zeatend"
