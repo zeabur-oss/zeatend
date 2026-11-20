@@ -1,0 +1,80 @@
+---
+title: 卸载
+description: 从服务器移除 K3s、RKE2 或 KubeSolo 以及 Zeatend 写入的文件，保留或删除卷，并从集群移除节点。
+---
+
+`zeatend uninstall` 会从运行命令的服务器上移除发行版和 Zeatend 写入的文件。命令会列出要移除和保留的内容，开始前会询问确认。除非添加 `--delete-volumes`，否则会保留卷。
+
+卸载会移除该服务器上的集群数据。要保留服务，先按[备份](maintain.mdx#备份)中的说明备份。如果只想移除 Zeabur 开源版并保留集群，请参阅[移除 Zeabur，保留服务](https://oss.zeabur.com/zh-CN/docs/zeabur/leave/uninstall/)。
+
+<Steps>
+<Step>
+
+### 从集群移除节点
+
+如果这是集群中唯一的服务器节点，跳过此步骤。
+
+如果要卸载工作节点，或 RKE2 集群中多台服务器节点之一，先迁出副本并删除节点。在服务器节点上运行：
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+Zeatend 不通过 Kubernetes API 修改集群，所以删除节点前，集群仍会列出该节点。要让 RKE2 控制平面继续运行，至少保留三台服务器节点。
+
+</Step>
+<Step>
+
+### 运行卸载命令
+
+在要移除的服务器上运行：
+
+```sh
+sudo zeatend uninstall
+```
+
+命令会列出要移除和保留的内容，再询问确认。K3s 的输出如下：
+
+```text
+zeatend uninstall removes K3s (server) from this host.
+
+/usr/local/bin/k3s-uninstall.sh stops K3s and its pods and removes its service, its binary, /etc/rancher/k3s and /var/lib/rancher/k3s: the cluster's data, certificates and images on this host. zeatend then removes the routes into the pod network 10.42.0.0/16 that are left.
+
+zeatend removes the files it left:
+  /var/lib/rancher/zeatend
+  /etc/sysctl.d/60-k3s-cis.conf
+  /etc/rancher/k3s/config.yaml
+  …
+
+These stay:
+  /var/lib/rancher/k3s/storage  (volumes; --delete-volumes removes them)
+  /etc/zeatend/config.yaml  (zeatend's configuration)
+```
+
+添加 `--yes` 可以跳过确认直接移除，例如在脚本中使用。没有终端可供询问确认时，只有添加 `--yes`，`uninstall` 才会执行移除。
+
+如果存在 `local-path` 存储类的文件夹、`/var/lib/zeabur/storage` 和 `/var/lib/longhorn`，这些卷都会保留。发行版自带的卸载程序运行前，Zeatend 会先移走 `local-path` 文件夹，卸载后再放回原处。要同时删除这些卷，添加 `--delete-volumes`。
+
+</Step>
+<Step>
+
+### 移除保留的文件
+
+`/etc/zeatend/config.yaml` 会保留，方便用相同配置重新安装。对于加入集群的节点，这个文件包含加入令牌。不再安装时，删除配置和 Zeatend：
+
+```sh
+sudo rm -r /etc/zeatend
+sudo rm /usr/local/bin/zeatend
+```
+
+</Step>
+</Steps>
+
+## 卸载停止时
+
+可以安全地再次运行 `uninstall`。遇到以下情况，命令不会移除任何内容，并会说明原因：
+
+- 有安装正在 `zeatend-install-*` 单元中运行。等待安装结束，或用 `systemctl stop` 停止安装，再运行 `uninstall`。
+- 卷所在的文件系统会在卸载过程中卸载。先卸载该文件系统，再运行 `uninstall`；卷会留在该文件系统上。
+- 上一次卸载在移走卷后停止。保留命令指出的两个文件夹中的一个，再运行 `uninstall`。

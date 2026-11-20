@@ -1,0 +1,66 @@
+---
+title: 命令
+description: 各个 zeatend 命令的用途、选项和退出码。
+---
+
+在需要配置的服务器上，以 root 身份运行 `zeatend`。每个命令都会读取配置文件，默认路径是 `/etc/zeatend/config.yaml`，也可以用 `--config <file>`（`-c`）指定其他文件。`zeatend --help` 和 `zeatend <command> --help` 说明了相同的命令和选项。
+
+## zeatend
+
+不指定命令时，`sudo zeatend` 会打开安装界面。界面会显示服务器信息和检查结果，询问发行版、API 服务器的地址和 DNS 名称、节点名称，并显示安装计划。你的选择会写入配置文件，随后按 `zeatend apply` 的方式安装。界面根据区域设置显示英语、繁体中文或简体中文，按 F2 可以切换语言。终端无法显示中文时，例如 Linux 控制台，界面会使用英语。安装界面需要 root 权限和 systemd，只能配置第一台服务器。
+
+## zeatend plan
+
+显示 `apply` 将安装的内容，并运行主机检查，不做任何修改。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--json` | 以 JSON 格式输出安装计划，不运行主机检查。`apply --plan` 可以读取这份输出。 |
+
+对于加入集群的节点，`plan` 还会测量到服务器的往返时间，并检查当前服务器能连接对方的哪些端口。
+
+## zeatend apply
+
+安装集群，或根据配置调整已有安装。可以安全地重复运行。主机检查出现 `FAIL` 时，命令会在做任何修改前停止。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--plan <file>` | 应用 `plan --json` 写入文件的安装计划。如果安装计划要写入的文件、已安装的版本或安装记录在生成后发生变化，则不做任何修改。 |
+| `--foreground` | 在当前进程中安装，不使用 systemd 单元。会话结束时，安装也会停止。 |
+| `--json` | 以 JSON Lines 格式输出进度。 |
+
+主机有 systemd 时，安装会在 `zeatend-install-<id>.service` 单元中运行，会话结束后仍会继续。该单元运行期间，`apply` 只显示进度，不会启动新的安装。`journalctl -u 'zeatend-install-*'` 可以查看完整输出。
+
+## zeatend doctor
+
+检查服务器及其集群：主机检查、服务、API 服务器、安装记录、节点、kubelet 为系统预留的内存，以及 K3s 和 RKE2 服务器是否加密存储机密变量。每一行非 `ok` 的结果都会说明处理方法。参见[检查集群](../operations/maintain.mdx#检查集群)。
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 所有检查通过。 |
+| 1 | 有检查发出警告。 |
+| 2 | 有检查失败。 |
+| 3 | 无法运行检查，例如没有 root 权限。 |
+
+## zeatend node add
+
+输出将新服务器加入当前 K3s 或 RKE2 集群所需的配置和命令，其中包含加入令牌。在服务器节点上运行此命令。参见[添加节点](../operations/add-nodes.mdx)。
+
+| 选项 | 默认值 | 含义 |
+| --- | --- | --- |
+| `--role <role>` | `worker` | `worker`，RKE2 还支持 `server`。 |
+| `--address <address>` | 当前节点的 `InternalIP` | 新服务器连接当前服务器时使用的地址。 |
+| `--ttl <time>` | `1h` | 工作节点令牌允许节点加入的有效期，例如 `30m` 或 `2h`；范围是 `1m` 到 `24h`。 |
+
+## zeatend uninstall
+
+从当前服务器移除 K3s、RKE2 或 KubeSolo，以及 Zeatend 的文件。命令会显示要移除和保留的内容，并先询问确认。卷会保留，可以安全地重复运行。参见[卸载](../operations/uninstall.mdx)。
+
+| 选项 | 含义 |
+| --- | --- |
+| `--yes`、`-y` | 不询问确认，直接移除。没有终端时必须使用此选项。 |
+| `--delete-volumes` | 同时移除卷：K3s 和 KubeSolo 的 local-path 存储、`/var/lib/zeabur/storage` 和 `/var/lib/longhorn`。 |
+
+## 退出码
+
+`plan`、`apply`、`node add` 和 `uninstall` 成功时退出码为 0，出错时为 1。按 Ctrl-C 停止跟踪安装单元时，`apply` 的退出码为 130，安装仍会继续。

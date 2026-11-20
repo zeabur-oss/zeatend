@@ -1,0 +1,54 @@
+---
+title: 開始使用 Zeatend
+description: 用 Zeatend 在 Linux 伺服器上安裝 K3s、RKE2 或 KubeSolo，建立 Kubernetes 叢集、新增節點或移除叢集，再在叢集上安裝 Zeabur。
+---
+
+Zeatend 在你自己的 Linux 伺服器上安裝 Kubernetes。在伺服器上執行 Zeatend，就能用一份設定檔安裝 K3s、RKE2 或 KubeSolo，並依照 CIS 基準強化安全性。你也能把更多伺服器加入叢集、升級與檢查叢集，或從伺服器上移除叢集。
+
+## Zeatend 負責什麼
+
+Zeabur 開源版的各項產品各有分工：
+
+| 產品 | 用途 |
+| --- | --- |
+| Zeatend | 在你的伺服器上建立叢集：安裝 Kubernetes、新增節點、升級與移除叢集。 |
+| Zeabur | 在叢集上執行的平台，讓你部署與管理服務。 |
+| Zeabur Identity | 負責登入，讓每個人用自己的帳號登入 Zeabur 和 `kubectl`。 |
+| Zeabur Catalog | 提供元件與範本，讓你加入叢集並從 Zeabur 部署。 |
+
+Kubernetes 開始執行後，Zeatend 的工作就完成了。Zeatend 不會安裝 Zeabur；執行一個 `helm install` 就能安裝，指令見 Zeabur 的文件。你也可以讓 Claude Code 或 Codex 這類 Coding Agent 照這些文件操作。各個名稱的意思見[詞彙表](https://oss.zeabur.com/zh-TW/docs/glossary/)。
+
+## Zeatend 能做什麼
+
+- 在使用 systemd 的 Linux 伺服器上，安裝三種發行版之一：
+  - **K3s**：預設選項，一台伺服器加上你要新增的工作節點，工作節點數量不限。
+  - **RKE2**：用三台以上的伺服器組成控制平面，一台伺服器故障時，叢集仍能繼續執行。
+  - **KubeSolo**：適合單台小型伺服器，不能加入其他節點。
+- 先檢查伺服器。如果缺少 root 權限、沒有 systemd、KubeSolo 主機上有 Docker、連接埠已占用或磁碟空間不足，就會停止安裝。
+- 下載各發行版的檔案，並用 Zeatend 內建的雜湊摘要驗證。
+- 印出設定與加入權杖，讓另一台伺服器加入 K3s 或 RKE2 叢集。
+- 隨時用 `zeatend doctor` 檢查伺服器與叢集。
+- 從伺服器移除發行版與 Zeatend 自己寫入的檔案，除非你要求刪除，否則會保留磁碟區。
+
+## Zeatend 的限制
+
+- Zeatend 在要設定的伺服器上執行。你需要把 Zeatend 複製到每台伺服器，再以 root 身分執行。
+- Zeatend 不會備份叢集，也不會把叢集搬到另一台伺服器。各發行版的資料位置見[維護叢集](operations/maintain.mdx)。
+- Zeatend 不會用 Kubernetes API 修改叢集內的物件。要從叢集移除節點，需要自行執行 `kubectl delete node`。
+- 伺服器需要連上網際網路，才能從 GitHub 下載發行版。
+
+## 開始使用
+
+- [安裝叢集與 Zeabur](get-started/install.mdx)：在一台 Linux 伺服器上建立叢集，再安裝 Zeabur。
+
+## 維運
+
+- [新增節點](operations/add-nodes.mdx)：把工作節點加入叢集；RKE2 也能加入更多伺服器。
+- [維護叢集](operations/maintain.mdx)：升級 Zeatend 與 Kubernetes、更新憑證、備份資料與檢查叢集。
+- [解除安裝](operations/uninstall.mdx)：從伺服器上移除叢集。
+
+## 參考
+
+- [指令](reference/commands.mdx)
+- [設定檔](reference/configuration.mdx)
+- [支援的伺服器與檔案](reference/hosts.mdx)

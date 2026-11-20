@@ -1,0 +1,80 @@
+---
+title: 解除安裝
+description: 從伺服器移除 K3s、RKE2 或 KubeSolo 及 Zeatend 的檔案，選擇保留或刪除磁碟區，並從叢集移除節點。
+---
+
+`zeatend uninstall` 會從執行指令的伺服器移除發行版與 Zeatend 寫入的檔案。開始之前，會顯示要移除與保留的項目，並詢問是否繼續。除非加上 `--delete-volumes`，否則會保留磁碟區。
+
+解除安裝會移除該伺服器上的叢集資料。要保留服務，請先備份，見[備份](maintain.mdx#備份)。如果只想移除 Zeabur 開源版並保留叢集，請改看[移除 Zeabur，保留服務](https://oss.zeabur.com/zh-TW/docs/zeabur/leave/uninstall/)。
+
+<Steps>
+<Step>
+
+### 從叢集移除節點
+
+如果這是叢集唯一的伺服器，請略過這個步驟。
+
+如果要移除工作節點，或多台 RKE2 伺服器中的一台，請先把副本移走，再刪除節點。在伺服器上執行：
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+Zeatend 不會透過 Kubernetes API 修改物件，所以在你刪除節點之前，叢集仍會列出該節點。要讓 RKE2 控制平面持續運作，請保留至少三台伺服器。
+
+</Step>
+<Step>
+
+### 執行解除安裝
+
+在要移除的伺服器上執行：
+
+```sh
+sudo zeatend uninstall
+```
+
+指令會列出要移除與保留的項目，再詢問是否繼續。K3s 的輸出如下：
+
+```text
+zeatend uninstall removes K3s (server) from this host.
+
+/usr/local/bin/k3s-uninstall.sh stops K3s and its pods and removes its service, its binary, /etc/rancher/k3s and /var/lib/rancher/k3s: the cluster's data, certificates and images on this host. zeatend then removes the routes into the pod network 10.42.0.0/16 that are left.
+
+zeatend removes the files it left:
+  /var/lib/rancher/zeatend
+  /etc/sysctl.d/60-k3s-cis.conf
+  /etc/rancher/k3s/config.yaml
+  …
+
+These stay:
+  /var/lib/rancher/k3s/storage  (volumes; --delete-volumes removes them)
+  /etc/zeatend/config.yaml  (zeatend's configuration)
+```
+
+加上 `--yes` 就會略過詢問直接移除，例如在指令稿中使用。沒有終端機可供詢問時，必須加上 `--yes`，`uninstall` 才會移除項目。
+
+如果伺服器上有 `local-path` 儲存類別的資料夾、`/var/lib/zeabur/storage` 和 `/var/lib/longhorn`，這些磁碟區都會保留。執行發行版本身的解除安裝之前，Zeatend 會先移開 `local-path` 資料夾，完成後再移回原處。要一併刪除，請加上 `--delete-volumes`。
+
+</Step>
+<Step>
+
+### 移除保留的項目
+
+`/etc/zeatend/config.yaml` 會保留，方便用相同設定重新安裝。如果節點曾加入叢集，檔案內會有加入權杖。確定不會重新安裝時，請刪除：
+
+```sh
+sudo rm -r /etc/zeatend
+sudo rm /usr/local/bin/zeatend
+```
+
+</Step>
+</Steps>
+
+## 解除安裝中途停止時
+
+`uninstall` 可以安全地再次執行。遇到以下情況時，指令不會移除任何項目，並會說明原因：
+
+- 有安裝作業正在 `zeatend-install-*` 單元中執行。請等作業結束，或用 `systemctl stop` 停止，再重新執行 `uninstall`。
+- 磁碟區所在的檔案系統會在解除安裝時卸載。請先卸載該檔案系統，再重新執行 `uninstall`；磁碟區會留在該檔案系統上。
+- 上一次解除安裝在移開磁碟區後停止。請保留指令列出的兩個資料夾中的一個，再重新執行 `uninstall`。

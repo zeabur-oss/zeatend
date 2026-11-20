@@ -1,0 +1,54 @@
+---
+title: 开始使用 Zeatend
+description: 用 Zeatend 在 Linux 服务器上安装 K3s、RKE2 或 KubeSolo，创建 Kubernetes 集群、添加节点或卸载集群，再在集群上安装 Zeabur。
+---
+
+Zeatend 在你自己的 Linux 服务器上安装 Kubernetes。在服务器上运行 Zeatend，用一份配置文件就能安装按 CIS 基准加固的 K3s、RKE2 或 KubeSolo。之后还可以向集群添加服务器、升级和检查集群，或从服务器上卸载集群。
+
+## Zeatend 的分工
+
+Zeabur 开源版的各个产品各有分工：
+
+| 产品 | 用途 |
+| --- | --- |
+| Zeatend | 在你的服务器上创建集群：安装 Kubernetes、添加节点、升级和卸载。 |
+| Zeabur | 在集群上运行的平台，用来部署和管理服务。 |
+| Zeabur Identity | 负责登录，让用户用自己的账号登录 Zeabur 和 `kubectl`。 |
+| Zeabur Catalog | 提供可添加到集群的组件，以及可从 Zeabur 部署的模板。 |
+
+Kubernetes 运行起来后，Zeatend 的工作就完成了。Zeatend 不安装 Zeabur，运行一条 `helm install` 就能安装，命令见 Zeabur 的文档。Claude Code 或 Codex 这类 Coding Agent 也能按照这些文档替你操作。各个名称的含义见[术语表](https://oss.zeabur.com/zh-CN/docs/glossary/)。
+
+## Zeatend 能做什么
+
+- 在使用 systemd 的 Linux 服务器上安装以下三种发行版之一：
+  - **K3s**：默认选择，一台服务器，可以按需添加工作节点。
+  - **RKE2**：用三台或更多服务器组成控制平面，一台服务器停机后，集群仍能运行。
+  - **KubeSolo**：用于一台小型服务器，不能添加其他节点。
+- 先检查服务器。没有 root 权限、没有 systemd、KubeSolo 主机上装了 Docker、端口已占用或磁盘空间不足时，停止安装。
+- 下载各发行版的文件，并用 Zeatend 内置的摘要验证。
+- 输出配置和加入令牌，供另一台服务器加入 K3s 或 RKE2 集群。
+- 随时用 `zeatend doctor` 检查服务器和集群。
+- 从服务器上移除发行版和 Zeatend 写入的文件。除非你要求删除，否则保留卷。
+
+## Zeatend 的限制
+
+- Zeatend 在需要配置的服务器上运行。将 Zeatend 复制到每台服务器，再以 root 身份运行。
+- 不备份集群，也不将集群迁移到其他服务器。各发行版的数据位置见[维护集群](operations/maintain.mdx)。
+- 不通过 Kubernetes API 修改集群中的对象。要从集群移除节点，需要自行运行 `kubectl delete node`。
+- 需要连接互联网：服务器从 GitHub 下载发行版。
+
+## 开始使用
+
+- [安装集群和 Zeabur](get-started/install.mdx)：在一台 Linux 服务器上创建集群，再安装 Zeabur。
+
+## 运维
+
+- [添加节点](operations/add-nodes.mdx)：向集群添加工作节点；RKE2 还可以添加服务器。
+- [维护集群](operations/maintain.mdx)：升级 Zeatend 和 Kubernetes、更新证书、备份数据和检查集群。
+- [卸载](operations/uninstall.mdx)：从服务器上移除集群。
+
+## 参考
+
+- [命令](reference/commands.mdx)
+- [配置文件](reference/configuration.mdx)
+- [支持的服务器与文件](reference/hosts.mdx)

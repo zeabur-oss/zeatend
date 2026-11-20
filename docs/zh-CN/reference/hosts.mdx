@@ -1,0 +1,75 @@
+---
+title: 支持的服务器与文件
+description: Zeatend 支持安装的服务器、固定的版本、所需端口，以及在每台服务器上写入的文件。
+---
+
+## 支持的服务器
+
+| 要求 | 详情 |
+| --- | --- |
+| 系统 | 使用 systemd 启动的 Linux。K3s、RKE2 和 KubeSolo 都以 systemd 服务运行，因此主机没有 systemd 时，`apply` 不会安装。 |
+| CPU | x86-64（`amd64`）或 ARM64（`arm64`）。 |
+| 访问权限 | 通过 `sudo` 获取 root 权限。 |
+| 内存 | K3s 至少需要 1900 MiB，2 GiB 服务器可以满足；KubeSolo 至少需要 1400 MiB。RKE2 需要更多内存。内存不足时，主机检查会发出警告。 |
+| 磁盘 | 存放集群数据的文件系统至少需要 10 GiB 可用空间；建议预留 30 GiB 或更多空间，用于存放镜像、日志和卷。 |
+| 网络 | 服务器能连接 GitHub；KubeSolo 还需要连接 `dl.k8s.io`。 |
+| Docker | KubeSolo 主机不能安装 Docker。 |
+
+变更合并前，CI 会在 Ubuntu 26.04 runner 上安装每个发行版，并运行集群测试。
+
+时钟未同步、启用了 swap、内核为崩溃内核预留了内存、其他 Kubernetes 安装在主机上留下文件，或集群数据不在加密磁盘上时，主机检查也会发出警告。
+
+## 版本
+
+每个 Zeatend 版本都会为各发行版固定一个版本，并用 Zeatend 内置的摘要检查下载内容。`zeatend plan` 会输出将安装的版本。当前版本固定使用：
+
+| 发行版 | 版本 | Kubernetes |
+| --- | --- | --- |
+| K3s | `v1.37.2+k3s1` | 1.37 |
+| RKE2 | `v1.37.2+rke2r1` | 1.37 |
+| KubeSolo | `v1.3.0` | 1.36，因为 KubeSolo 尚未发布 1.37 版本 |
+
+Zeatend 安装的每个发行版都会按 CIS 基准加固。
+
+## 端口
+
+安装前，服务器上的以下端口必须空闲。`zeatend plan` 会检查这些端口。
+
+| 发行版 | 服务器节点 | 工作节点 |
+| --- | --- | --- |
+| K3s | TCP 80, 443, 6443, 10250 | TCP 80, 443, 10250 |
+| RKE2 | TCP 80, 443, 6443, 9345, 10250 | TCP 80, 443, 10250 |
+| KubeSolo | TCP 80, 443, 6443, 10250, 10443 | 无：不支持工作节点 |
+
+在 K3s 和 RKE2 上，ServiceLB 会在每个节点上为 LoadBalancer Service 占用端口 80 和 443。节点之间所需的端口见[添加节点](../operations/add-nodes.mdx#开始前)。
+
+## Zeatend 写入的文件
+
+`zeatend plan` 会列出将在当前服务器上写入的文件。`zeatend uninstall` 会移除这些文件，并保留 `/etc/zeatend/config.yaml`。
+
+| 文件 | K3s | RKE2 | KubeSolo |
+| --- | --- | --- | --- |
+| Zeatend 配置 | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` |
+| 发行版配置 | `/etc/rancher/k3s/config.yaml` 和 `config.yaml.d/` | `/etc/rancher/rke2/config.yaml` 和 `config.yaml.d/` | `/etc/kubesolo/config.yaml` |
+| CIS 基准所需的内核参数 | `/etc/sysctl.d/60-k3s-cis.conf` | `/etc/sysctl.d/60-rke2-cis.conf` | 无 |
+| 审计策略（服务器节点） | `/etc/rancher/k3s/audit-policy.yaml` | `/etc/rancher/rke2/audit-policy.yaml` | 无 |
+| 身份验证配置，设置了 `apiServer.authenticationConfig` 时写入 | `/etc/rancher/k3s/authentication/` | `/etc/rancher/rke2/authentication/` | `/etc/kubesolo/authentication/` |
+| 加入令牌（加入集群的节点，权限为 0600） | `/etc/rancher/k3s/zeatend-join-token` | `/etc/rancher/rke2/zeatend-join-token` | 无 |
+| 下载内容和安装记录 | `/var/lib/rancher/zeatend/` | `/var/lib/rancher/zeatend/` | `/var/lib/zeatend/` |
+| 供复制到电脑的管理员 kubeconfig | `/etc/rancher/k3s/k3s.yaml`，由 K3s 写入 | `/etc/rancher/rke2/rke2.yaml`，由 RKE2 写入 | `/etc/zeatend/kubeconfig.yaml` |
+
+K3s 服务器节点还会写入 `/etc/rancher/k3s/admission.yaml`，在 `/var/lib/rancher/k3s/server/manifests/` 中写入资源清单 `zeabur-cis.yaml` 和 `zeatend-servicelb-policy.yaml`，并写入内存设置 `/etc/systemd/system/k3s.service.d/zeatend-memory.conf`。RKE2 服务器节点会在 `/var/lib/rancher/rke2/server/manifests/` 中写入 `zeatend-servicelb-policy.yaml`。KubeSolo 会写入服务文件 `/etc/systemd/system/kubesolo.service`。
+
+如果系统使用 AppArmor 限制未受配置文件约束的程序，例如 Ubuntu 26.04，每个节点还会写入 containerd 的 AppArmor 配置文件 `/etc/apparmor.d/cri-containerd.apparmor.d`。
+
+安装记录是下载文件夹中的 `record.json`，记录了 Zeatend 版本、发行版和安装的版本。`zeatend doctor` 和升级操作会读取这份记录。
+
+## 集群数据的存放位置
+
+| 发行版 | 集群数据 | `local-path` 存储类的卷 |
+| --- | --- | --- |
+| K3s | `/var/lib/rancher/k3s` | `/var/lib/rancher/k3s/storage` |
+| RKE2 | `/var/lib/rancher/rke2` | 无：RKE2 没有 local-path 存储类 |
+| KubeSolo | `/var/lib/kubesolo` | `/var/lib/kubesolo/local-path-storage` |
+
+Zeabur 开源版的本地存储将卷保存在 `/var/lib/zeabur/storage`，Longhorn 将卷保存在 `/var/lib/longhorn`。
