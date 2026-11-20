@@ -1,13 +1,8 @@
 # Changelog
 
 All notable changes to Zeabur Zeatend. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (CONTRIBUTING.md, "Releases").
+
 ## 0.1.0 (2026-11-20)
-
-### Breaking Changes
-
-#### `version` replaces `k3sVersion` and `rke2Version`
-
-The configuration names a K3s or RKE2 release other than the pinned one with one key, `version`, such as `version: v1.37.1+k3s1` or `version: v1.37.1+rke2r1`. It must be a release tag of the configured distribution. `k3sVersion` and `rke2Version` are no longer read: rename the key in `/etc/zeatend/config.yaml`. A configuration that zeabur-installer wrote keeps working, as zeatend reads the installer's key for the installer's distribution.
 
 ### Features
 
@@ -32,6 +27,10 @@ K3s now runs its packaged Traefik, and RKE2 its default ingress controller, as u
 On a host where zeabur-installer installed K3s, RKE2 or KubeSolo, `zeatend plan`, `apply`, `doctor`, `node add` and `uninstall` work without a configuration of their own. With no `/etc/zeatend/config.yaml`, zeatend reads the distribution, the release, the host settings and the join section from `/etc/zeabur-installer/config.yaml`, and reads the installer's install record. `apply` keeps the components that the installer turned off, such as Traefik, local-storage and metrics-server, off. `uninstall` also removes the installer's state, kubeconfig and join token. What the installer put on the cluster, such as Zeabur, stays as it is.
 
 `doctor` now names what wrote the install record, and `apply` no longer reinstalls KubeSolo on every run, because it read the version only from standard output, where KubeSolo does not print it.
+
+#### `version` picks the K3s or RKE2 release
+
+The configuration names a K3s or RKE2 release other than the pinned one with one key, `version`, such as `version: v1.37.1+k3s1` or `version: v1.37.1+rke2r1`. It must be a release tag of the configured distribution. A configuration that zeabur-installer wrote keeps working, as zeatend reads the installer's key for the installer's distribution.
 
 #### Kubernetes 1.37 on K3s and RKE2
 
