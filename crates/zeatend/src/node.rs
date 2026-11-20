@@ -377,19 +377,14 @@ mod tests {
 
     #[test]
     fn a_server_gets_the_server_token_and_no_revoke_line() {
-        let api_server = ApiServer {
-            jwt: vec![authentication::JwtIssuer {
-                issuer: "https://identity.example.com".to_owned(),
-                audiences: vec!["kubernetes".to_owned()],
-                certificate_authority: Some(
-                    "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n".to_owned(),
-                ),
-                username_claim: Some("preferred_username".to_owned()),
-                username_prefix: "zeabur:".to_owned(),
-                groups_claim: Some("groups".to_owned()),
-                groups_prefix: Some("zeabur:".to_owned()),
-            }],
-        };
+        let api_server = authentication::read(
+            "apiVersion: apiserver.config.k8s.io/v1\nkind: AuthenticationConfiguration\njwt:\n  \
+             - issuer:\n      url: https://identity.example.com\n      audiences: [kubernetes]\n      \
+             certificateAuthority: |\n        -----BEGIN CERTIFICATE-----\n        MIIB\n        \
+             -----END CERTIFICATE-----\n    claimMappings:\n      username: {claim: preferred_username, \
+             prefix: \"zeabur:\"}\n      groups: {claim: groups, prefix: \"zeabur:\"}\n",
+        )
+        .unwrap();
         let token = Token::Server(format!("K10{HASH}::server:0123456789abcdef"));
         let text = instructions(&Instructions {
             distribution: Rancher::Rke2,

@@ -204,19 +204,9 @@ mod tests {
     }
 
     #[test]
-    fn jwt_issuers_get_an_authentication_file_mounted_into_the_api_server() {
+    fn an_authentication_config_is_mounted_into_the_api_server() {
         let files = host_files(&Options {
-            api_server: authentication::ApiServer {
-                jwt: vec![authentication::JwtIssuer {
-                    issuer: "https://identity.example.com".to_owned(),
-                    audiences: vec!["kubernetes".to_owned()],
-                    certificate_authority: None,
-                    username_claim: None,
-                    username_prefix: "zeabur:".to_owned(),
-                    groups_claim: None,
-                    groups_prefix: None,
-                }],
-            },
+            api_server: authentication::example(),
             ..options(Vec::new())
         })
         .unwrap();

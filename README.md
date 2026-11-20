@@ -44,25 +44,29 @@ your own instead, turn them off with `disable`, such as `disable: [traefik, metr
 `local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these. On a
 cluster that zeabur-installer installed, `disable` starts as the list the installer turned off.
 
-`apiServer.jwt` makes the API server accept tokens from OpenID Connect issuers. Zeatend writes them
-to the API server's
-[authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)
-on a server:
+`apiServer.authenticationConfig` is the API server's
+[authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration),
+written as Kubernetes describes it, such as an OpenID Connect issuer whose tokens the API server
+accepts:
 
 ```yaml
 apiServer:
-  jwt:
-    - issuer: https://identity.example.com
-      audiences: [kubernetes]
-      usernameClaim: preferred_username # sub by default
-      usernamePrefix: "zeabur:"
-      groupsClaim: groups # optional, with groupsPrefix
-      groupsPrefix: "zeabur:"
+  authenticationConfig:
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://identity.example.com
+          audiences: [kubernetes]
+        claimMappings:
+          username: {claim: preferred_username, prefix: "zeabur:"}
+          groups: {claim: groups, prefix: "zeabur:"}
 ```
 
-`certificateAuthority` takes a PEM certificate when the issuer's certificate is not from a public
-authority. A user or group with the `system:` prefix is refused. A changed list takes effect on
-the next `apply`.
+On a server, zeatend writes it to a file and gives the file to the API server. Kubernetes checks
+the fields when the API server starts or reads the file again. On K3s and RKE2, a configuration
+without an `anonymous` section gets `anonymous: {enabled: false}`, so anonymous requests stay
+off. A changed configuration takes effect on the next `apply`.
 
 - `zeatend plan` shows what `apply` would install and runs the host checks; `--json` prints the
   plan as JSON.

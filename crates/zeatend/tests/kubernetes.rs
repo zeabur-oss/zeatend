@@ -445,10 +445,11 @@ mod tests {
             .expect("kubectl runs")
     }
 
-    /// The API server trusts the issuer of `apiServer.jwt` that `scripts/ci/cluster.sh` sets: a
-    /// token it signs for `ZEATEND_TEST_AUDIENCE` signs in as `zeabur:<sub>` in `zeabur:<group>`,
-    /// and one for another audience does not. `ZEATEND_TEST_ISSUER_DIR` holds the issuer's
-    /// certificate and key. On K3s and RKE2, anonymous requests stay refused.
+    /// The API server trusts the issuer in `apiServer.authenticationConfig` that
+    /// `scripts/ci/cluster.sh` sets: a token it signs for `ZEATEND_TEST_AUDIENCE` signs in as
+    /// `zeabur:<sub>` in `zeabur:<group>`, and one for another audience does not.
+    /// `ZEATEND_TEST_ISSUER_DIR` holds the issuer's certificate and key. On K3s and RKE2, anonymous
+    /// requests stay refused.
     #[test]
     #[ignore = "needs a cluster that zeatend installed with a test issuer; see scripts/ci/cluster.sh"]
     fn a_token_of_a_trusted_issuer_signs_in_with_its_prefix() {

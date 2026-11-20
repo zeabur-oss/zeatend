@@ -556,20 +556,24 @@ mod tests {
         assert!(matches!(server, Ok(Document::Join(c)) if c.disable == [Component::Traefik]));
     }
 
-    const JWT: &str = "apiServer:\n  jwt:\n    - issuer: https://identity.example.com\n      audiences: [kubernetes]\n      usernamePrefix: \"zeabur:\"\n";
+    const AUTHENTICATION: &str = "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n";
 
     #[test]
-    fn api_server_jwt_applies_to_servers() {
+    fn an_authentication_config_applies_to_servers() {
         for distribution in ["k3s", "rke2", "kubesolo"] {
-            let c = Config::parse(&format!("distribution: {distribution}\n{JWT}")).unwrap();
-            assert_eq!(c.api_server.jwt[0].username_prefix, "zeabur:");
+            let c =
+                Config::parse(&format!("distribution: {distribution}\n{AUTHENTICATION}")).unwrap();
+            assert!(!c.api_server.is_empty());
         }
-        assert!(Config::parse("apiServer:\n  jwt:\n    - issuer: http://a\n      audiences: [k]\n      usernamePrefix: x\n").is_err());
-        let err = join(JWT).unwrap_err();
+        assert!(
+            Config::parse(&AUTHENTICATION.replace("config.k8s.io/v1", "config.k8s.io/v1beta1"))
+                .is_err()
+        );
+        let err = join(AUTHENTICATION).unwrap_err();
         assert!(err.to_string().contains("applies to servers"), "{err}");
         let server = Document::parse(&format!(
-            "distribution: rke2\njoin:\n  server: https://10.0.0.5:9345\n  role: server\n  token: K10{HASH}::server:x\n{JWT}"
+            "distribution: rke2\njoin:\n  server: https://10.0.0.5:9345\n  role: server\n  token: K10{HASH}::server:x\n{AUTHENTICATION}"
         ));
-        assert!(matches!(server, Ok(Document::Join(c)) if c.api_server.jwt.len() == 1));
+        assert!(matches!(server, Ok(Document::Join(c)) if !c.api_server.is_empty()));
     }
 }

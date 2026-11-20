@@ -41,7 +41,7 @@ zeatend="$PWD/target/debug/zeatend"
 config="$(mktemp -d)/config.yaml"
 
 # A test JWT issuer: crates/zeatend/tests/kubernetes.rs serves it on 127.0.0.1:8943 with this
-# certificate, and the API server trusts it through apiServer.jwt.
+# certificate, and the API server trusts it through apiServer.authenticationConfig.
 issuer="$(mktemp -d)"
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
   -subj /CN=zeatend-test-issuer-ca -keyout "$issuer/ca.key" -out "$issuer/ca.pem" 2>/dev/null
@@ -59,14 +59,18 @@ write_config() {
   {
     echo "distribution: $distribution"
     echo "apiServer:"
-    echo "  jwt:"
-    echo "    - issuer: https://127.0.0.1:8943"
-    echo "      certificateAuthority: |"
-    sed 's/^/        /' "$issuer/ca.pem"
-    echo "      audiences: $1"
-    echo "      usernamePrefix: \"zeabur:\""
-    echo "      groupsClaim: groups"
-    echo "      groupsPrefix: \"zeabur:\""
+    echo "  authenticationConfig:"
+    echo "    apiVersion: apiserver.config.k8s.io/v1"
+    echo "    kind: AuthenticationConfiguration"
+    echo "    jwt:"
+    echo "      - issuer:"
+    echo "          url: https://127.0.0.1:8943"
+    echo "          audiences: $1"
+    echo "          certificateAuthority: |"
+    sed 's/^/            /' "$issuer/ca.pem"
+    echo "        claimMappings:"
+    echo "          username: {claim: sub, prefix: \"zeabur:\"}"
+    echo "          groups: {claim: groups, prefix: \"zeabur:\"}"
   } >"$config"
 }
 jwt_test() {

@@ -415,22 +415,12 @@ mod tests {
     }
 
     #[test]
-    fn jwt_issuers_are_named_in_the_config() {
+    fn an_authentication_config_is_named_in_the_config() {
         let files = host_files(&Options {
             node_name: "solo".to_owned(),
             node_ip: None,
             tls_san: Vec::new(),
-            api_server: crate::authentication::ApiServer {
-                jwt: vec![crate::authentication::JwtIssuer {
-                    issuer: "https://identity.example.com".to_owned(),
-                    audiences: vec!["kubernetes".to_owned()],
-                    certificate_authority: None,
-                    username_claim: None,
-                    username_prefix: "zeabur:".to_owned(),
-                    groups_claim: None,
-                    groups_prefix: None,
-                }],
-            },
+            api_server: crate::authentication::example(),
             tuning: tuning(),
             installer_webhook: false,
         })

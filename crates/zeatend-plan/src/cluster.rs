@@ -948,8 +948,10 @@ pub fn disabled_components(
         .collect())
 }
 
-/// The authentication file that the K3s or RKE2 configuration `config` passes to the API server,
-/// if any. A file left on disk after `apiServer.jwt` was removed is not passed, so it is not used.
+/// The authentication file that the K3s or RKE2 configuration `config` passes to the API server.
+///
+/// A file left on disk after `apiServer.authenticationConfig` was removed is not passed, so it is
+/// not used.
 ///
 /// # Errors
 ///
@@ -1346,13 +1348,13 @@ mod tests {
     #[test]
     fn the_authentication_file_is_the_one_the_api_server_is_given() {
         for rancher in Rancher::ALL {
-            let config = |jwt: Vec<crate::authentication::JwtIssuer>| {
+            let config = |api_server: ApiServer| {
                 let options = Options {
                     tls_san: Vec::new(),
                     tuning: HostTuning::new(rancher.into(), MemoryTier::Standard),
                     own_network: false,
                     disable: Vec::new(),
-                    api_server: ApiServer { jwt },
+                    api_server,
                 };
                 let main = format!("{}/config.yaml", rancher.distribution().layout().config_dir);
                 rancher
@@ -1363,25 +1365,19 @@ mod tests {
                     .unwrap()
                     .content
             };
-            let issuer = crate::authentication::JwtIssuer {
-                issuer: "https://identity.example.com".to_owned(),
-                audiences: vec!["kubernetes".to_owned()],
-                certificate_authority: None,
-                username_claim: None,
-                username_prefix: "zeabur:".to_owned(),
-                groups_claim: None,
-                groups_prefix: None,
-            };
             let path = crate::authentication::path(match rancher {
                 Rancher::K3s => crate::k3s::AUTHENTICATION_DIR,
                 Rancher::Rke2 => crate::rke2::AUTHENTICATION_DIR,
             });
             assert_eq!(
-                authentication_config(&config(vec![issuer])).unwrap(),
+                authentication_config(&config(crate::authentication::example())).unwrap(),
                 Some(path)
             );
-            // After apiServer.jwt is removed the file may stay on disk, but no flag names it.
-            assert_eq!(authentication_config(&config(Vec::new())).unwrap(), None);
+            // After the configuration is removed the file may stay on disk, but no flag names it.
+            assert_eq!(
+                authentication_config(&config(ApiServer::default())).unwrap(),
+                None
+            );
         }
     }
 

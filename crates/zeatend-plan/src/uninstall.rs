@@ -468,7 +468,7 @@ mod tests {
                 "",
                 "disable: [traefik, metrics-server]\n",
                 "disable: [traefik, metrics-server, local-storage]\n",
-                "apiServer:\n  jwt:\n    - issuer: https://id.example.com\n      audiences: [kubernetes]\n      usernamePrefix: \"z:\"\n",
+                "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n",
             ] {
                 // Not every distribution takes every component.
                 let Ok(Document::Install(config)) =
@@ -507,7 +507,7 @@ mod tests {
                 "distribution: {distribution}\njoin:\n  server: https://10.0.0.5:9345\n  \
                  role: {role}\n  tokenFile: /etc/zeatend/join-token\n{}",
                 if role == "server" {
-                    "apiServer:\n  jwt:\n    - issuer: https://id.example.com\n      audiences: [kubernetes]\n      usernamePrefix: \"z:\"\n"
+                    "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n"
                 } else {
                     ""
                 }
