@@ -2,6 +2,18 @@
 
 All notable changes to Zeabur Zeatend. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (CONTRIBUTING.md, "Releases").
 
+## 0.1.1 (2026-11-21)
+
+### Features
+
+#### `apiServer.authenticationConfig` sets the API server's authentication configuration
+
+`apiServer.authenticationConfig` takes a Kubernetes `AuthenticationConfiguration`, such as the OpenID Connect issuers whose tokens the API server accepts. On a K3s, RKE2 or KubeSolo server, `apply` writes it to a file and gives the file to the API server, and writes it again when it changes. On K3s and RKE2, anonymous requests stay off unless the configuration says otherwise.
+
+#### `storage.longhorn` prepares nodes for Longhorn
+
+With `storage: {longhorn: true}`, `apply` installs the iSCSI initiator and the NFS client with apt or dnf, loads `iscsi_tcp` and `dm_crypt` at boot, enables `iscsid` and keeps multipathd off Longhorn's disks. `plan` lists what a node lacks, `zeatend doctor` reports it, and `zeatend node add` gives a new node the same `storage` setting. K3s and RKE2 only.
+
 ## 0.1.0 (2026-11-20)
 
 ### Features
