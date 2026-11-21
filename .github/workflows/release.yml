@@ -36,7 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@993db7daf21a752dc7d3940f227e03478ee613cc # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - name: The version is the crate's, with a CHANGELOG.md section, on main
@@ -61,7 +61,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@993db7daf21a752dc7d3940f227e03478ee613cc # main
       - name: Build
         run: scripts/release-build.sh "$VERSION" "${{ matrix.arch }}" dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
+      - uses: zeabur-oss/.github/actions/ci-setup@993db7daf21a752dc7d3940f227e03478ee613cc # main
       - name: Install the packages
         run: bun install --frozen-lockfile
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -96,7 +96,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bun x zeabur-oss-release unpublished "$VERSION"
-      - uses: zeabur-oss/.github/actions/release-draft@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
+      - uses: zeabur-oss/.github/actions/release-draft@993db7daf21a752dc7d3940f227e03478ee613cc # main
         with:
           version: ${{ env.VERSION }}
           name: Zeabur Zeatend
@@ -117,7 +117,7 @@ jobs:
       contents: write
       attestations: read
     steps:
-      - uses: zeabur-oss/.github/actions/release-verify@fe73a0c68d3ef4b7557f15f7987f59f555714788 # main
+      - uses: zeabur-oss/.github/actions/release-verify@993db7daf21a752dc7d3940f227e03478ee613cc # main
         with:
           version: ${{ env.VERSION }}
       - name: Run zeatend as a user gets it
