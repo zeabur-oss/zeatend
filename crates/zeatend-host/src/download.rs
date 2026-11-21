@@ -93,23 +93,25 @@ impl Agent {
     }
 }
 
-/// A client that trusts the platform's CA store. With `proxy`, HTTPS requests go through it,
-/// except to the hosts its `noProxy` names; without, through the proxy of the environment.
+/// A client that trusts the platform's CA store.
+///
+/// With `proxy`, HTTPS requests go through it, except to the hosts of the node's `NO_PROXY`
+/// ([`Proxy::node_no_proxy`] of `direct`); without, through the proxy of the environment.
 ///
 /// A TLS setup or proxy that fails is reported by the first download.
 #[must_use]
-pub fn agent(proxy: Option<&Proxy>) -> Agent {
-    build(proxy, None)
+pub fn agent(proxy: Option<&Proxy>, direct: &[String]) -> Agent {
+    build(proxy, direct, None)
 }
 
 /// [`agent`] that also trusts the CA certificates of the PEM file `ca`, for a registry mirror
 /// with a private CA.
 #[must_use]
-pub fn agent_trusting(proxy: Option<&Proxy>, ca: &[u8]) -> Agent {
-    build(proxy, Some(ca))
+pub fn agent_trusting(proxy: Option<&Proxy>, direct: &[String], ca: &[u8]) -> Agent {
+    build(proxy, direct, Some(ca))
 }
 
-fn build(proxy: Option<&Proxy>, ca: Option<&[u8]>) -> Agent {
+fn build(proxy: Option<&Proxy>, direct: &[String], ca: Option<&[u8]>) -> Agent {
     let mut builder = Client::builder()
         .user_agent(AGENT)
         .redirect(redirect::Policy::custom(follow));
@@ -133,7 +135,7 @@ fn build(proxy: Option<&Proxy>, ca: Option<&[u8]>) -> Agent {
     let builder = match proxy {
         None => Ok(builder),
         Some(proxy) => reqwest::Proxy::https(&proxy.https)
-            .map(|p| p.no_proxy(NoProxy::from_string(&proxy.no_proxy.join(","))))
+            .map(|p| p.no_proxy(NoProxy::from_string(&proxy.node_no_proxy(direct))))
             .map(|p| builder.no_proxy().proxy(p)),
     };
     Agent {
@@ -642,7 +644,7 @@ mod tests {
     async fn fetch_text(url: &str) -> Result<String, HostError> {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        fetch(&agent(None), url, &dest, None, &mut ()).await?;
+        fetch(&agent(None, &[]), url, &dest, None, &mut ()).await?;
         Ok(fs::read_to_string(&dest).unwrap())
     }
 
@@ -661,7 +663,7 @@ mod tests {
             String::from_utf8_lossy(&request[..n]).into_owned()
         });
         let dir = tempfile::tempdir().unwrap();
-        let agent = agent(Some(&proxy));
+        let agent = agent(Some(&proxy), &[]);
         let url = "https://releases.invalid/file";
         let err = fetch(&agent, url, &dir.path().join("f"), None, &mut ())
             .await
@@ -675,15 +677,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_node_and_its_networks_are_reached_without_the_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let proxy = Proxy {
+            https: format!("http://{}", listener.local_addr().unwrap()),
+            no_proxy: Vec::new(),
+        };
+        let agent = agent(Some(&proxy), &["node.invalid".to_owned()]);
+        for url in ["https://node.invalid/v2/", "https://registry.svc/v2/"] {
+            agent.status(url).await.unwrap_err();
+        }
+        let reached = listener.accept().map(|_| ());
+        assert!(
+            reached
+                .as_ref()
+                .is_err_and(|e| e.kind() == io::ErrorKind::WouldBlock),
+            "{reached:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn a_registry_that_asks_for_credentials_still_answers() {
         let (url, _) = serve(&[401], "");
-        assert_eq!(agent(None).status(&url).await.unwrap(), 401);
+        assert_eq!(agent(None, &[]).status(&url).await.unwrap(), 401);
     }
 
     #[tokio::test]
     async fn a_ca_file_that_is_not_pem_fails_the_request() {
         let (url, seen) = serve(&[200], ABC);
-        let err = agent_trusting(None, b"not a certificate")
+        let err = agent_trusting(None, &[], b"not a certificate")
             .status(&url)
             .await;
         assert!(matches!(err, Err(HostError::Download { .. })), "{err:?}");
@@ -698,7 +721,7 @@ mod tests {
         let (url, seen) = serve(&[503, 503, 200], ABC);
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(None), &url, &dest, Some(ABC_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(ABC_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, ABC_SHA);
@@ -716,9 +739,15 @@ mod tests {
     async fn client_errors_fail_at_once() {
         let (url, seen) = serve(&[404], "");
         let dir = tempfile::tempdir().unwrap();
-        let err = fetch(&agent(None), &url, &dir.path().join("f"), None, &mut ())
-            .await
-            .unwrap_err();
+        let err = fetch(
+            &agent(None, &[]),
+            &url,
+            &dir.path().join("f"),
+            None,
+            &mut (),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("404"), "{err}");
         assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
@@ -772,7 +801,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let wrong = "0".repeat(64);
         let err = fetch(
-            &agent(None),
+            &agent(None, &[]),
             &url,
             &dir.path().join("f"),
             Some(&wrong),
@@ -929,9 +958,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
         let mut recorder = Recorder::default();
-        let digest = fetch(&agent(None), &url, &dest, Some(HELLO_SHA), &mut recorder)
-            .await
-            .unwrap();
+        let digest = fetch(
+            &agent(None, &[]),
+            &url,
+            &dest,
+            Some(HELLO_SHA),
+            &mut recorder,
+        )
+        .await
+        .unwrap();
         assert_eq!(digest, HELLO_SHA);
         assert_eq!(fs::read_to_string(&dest).unwrap(), HELLO);
         let heads = seen.lock().unwrap().clone();
@@ -958,7 +993,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(None), &url, &dest, None, &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, None, &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -982,7 +1017,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(None), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -1011,7 +1046,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(None), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -1034,7 +1069,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(None), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -1048,7 +1083,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
         let mut recorder = Recorder::default();
-        let err = fetch(&agent(None), &url, &dest, None, &mut recorder)
+        let err = fetch(&agent(None, &[]), &url, &dest, None, &mut recorder)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no data for"), "{err}");
@@ -1074,7 +1109,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let err = fetch(&agent(None), &url, &dest, Some(HELLO_SHA), &mut ())
+        let err = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap_err();
         assert!(matches!(err, HostError::Digest { .. }), "{err}");

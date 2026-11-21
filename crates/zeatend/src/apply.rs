@@ -632,7 +632,7 @@ pub(crate) async fn load_apparmor_profile<'a>(
 /// Downloads the release into `dir` and its image archives into the image directory, and checks
 /// each against its pinned digest or, for a release that is not pinned, the release's list.
 async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallError> {
-    let agent = download::agent(cluster.proxy.as_ref());
+    let agent = download::agent(cluster.proxy.as_ref(), &[]);
     let images = cluster.distribution.paths().images_dir;
     let mut list = None;
     for d in cluster.downloads() {

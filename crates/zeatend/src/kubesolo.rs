@@ -101,7 +101,7 @@ pub(crate) async fn run(
 /// whether it started or restarted the unit.
 async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError> {
     output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
-    let agent = download::agent(solo.proxy.as_ref());
+    let agent = download::agent(solo.proxy.as_ref(), &[]);
     let kubectl = Path::new(KUBECTL);
     output::note(&solo.kubectl.url);
     download::fetch(

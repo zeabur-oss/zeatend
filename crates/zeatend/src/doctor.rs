@@ -112,7 +112,7 @@ impl Network {
     async fn check(&self, downloads: bool) -> Vec<Finding> {
         let mut findings = Vec::new();
         if downloads {
-            let agent = download::agent(self.proxy.as_ref());
+            let agent = download::agent(self.proxy.as_ref(), &[]);
             let arch = facts::arch(std::env::consts::ARCH);
             for url in plan::release_urls(self.distribution, arch) {
                 findings.push(match agent.status(&url).await {
@@ -128,14 +128,15 @@ impl Network {
                 });
             }
         }
+        let direct = facts::addresses().await;
         for endpoint in self.mirrors.values().flatten() {
             let Some((url, host)) = registry::probe(endpoint) else {
                 continue;
             };
             let ca = self.hosts.get(host).and_then(|h| h.ca_file.as_deref());
             let agent = match ca.map(fs::read) {
-                None => download::agent(self.proxy.as_ref()),
-                Some(Ok(pem)) => download::agent_trusting(self.proxy.as_ref(), &pem),
+                None => download::agent(self.proxy.as_ref(), &direct),
+                Some(Ok(pem)) => download::agent_trusting(self.proxy.as_ref(), &direct, &pem),
                 Some(Err(error)) => {
                     findings.push(Finding::MirrorNo {
                         endpoint: endpoint.clone(),

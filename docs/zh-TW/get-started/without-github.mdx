@@ -164,11 +164,30 @@ drop-in 檔案是 `/etc/systemd/system/<unit>.service.d/zeatend-proxy.conf`。�
 sudo zeatend doctor
 ```
 
-安裝後，`doctor` 會檢查服務、節點與鏡像站。要確認映像檔真的經過鏡像站，可以啟動一個 Pod，再到鏡像站的日誌裡找這次下載：
+安裝後，`doctor` 會檢查服務、節點與鏡像站。要確認映像檔真的經過鏡像站，可以啟動一個 Pod，再到鏡像站的日誌裡找這次下載。叢集依照 CIS 基準強化安全性，所以這個 Pod 以非 root 使用者執行，也不取得額外權限：
 
 ```sh
-sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml \
-  run mirror-test --image=docker.io/library/busybox:1.37 --restart=Never -- true
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mirror-test
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: docker.io/library/busybox:1.37
+      command: ["true"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+EOF
 ```
 
 Pod 執行完後，把它刪除：
