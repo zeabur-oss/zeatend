@@ -136,7 +136,7 @@ sudo zeatend doctor
 <Step>
 ### Install Zeabur OSS
 
-On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
+On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Let the cluster trust sign-in**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
 
 On RKE2 or KubeSolo, follow [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
 </Step>
