@@ -396,11 +396,12 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
             Document::Install(config) => config.storage,
             Document::Join(config) => config.storage,
         };
+        let unprepared = (!storage.longhorn).then(|| config.to_path_buf());
         return node::add(&node::AddOptions {
             role,
             address: address.clone(),
             ttl: *ttl,
-            storage,
+            unprepared,
         })
         .await;
     }
