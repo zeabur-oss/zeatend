@@ -151,6 +151,14 @@ enum InstallError {
     /// A host check failed.
     #[error("{}", i18n::messages().host_not_ready)]
     HostNotReady,
+    /// A step that `apply` started out of the order of its list: a bug in zeatend.
+    #[error("zeatend started the step {found} where its list has {expected}; report this bug")]
+    StepOrder {
+        /// The next step of the list.
+        expected: &'static str,
+        /// The step it started.
+        found: &'static str,
+    },
     /// The plan of K3s has no `install.sh`.
     #[error("no install.sh for K3s in the plan")]
     NoInstallScript,

@@ -47,7 +47,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
     node_addresses(&mut s, &facts.node_ips);
     push(&mut s, "");
     s.push_str(&changes(plan.changes.as_ref(), unit));
-    files(&mut s, &plan.host_file_paths, None);
+    files(&mut s, &plan.host_file_paths(), None);
     findings(&mut s, &plan.findings);
     s
 }
@@ -350,7 +350,7 @@ mod tests {
                 "{text}"
             );
             assert!(text.contains("Node name        vps-2"), "{text}");
-            for path in &p.host_file_paths {
+            for path in &p.host_file_paths() {
                 assert!(text.contains(path.as_str()), "{path} in\n{text}");
             }
         }

@@ -1,0 +1,439 @@
+---
+title: Install by hand
+description: Run each step of zeatend apply yourself, from the host checks to the install record, and check each one with zeatend doctor.
+---
+
+This page runs the steps of `sudo zeatend apply` one at a time, with the same files, downloads and commands. Use it when you want to see each change before it happens, or to install on a server that can't reach GitHub: you download the release on another computer and copy it over.
+
+`apply` prints the same steps as it runs, numbered the same way, such as `==> 3/10 Writing the configuration files`. At the end, `sudo zeatend apply` finds each step done, changes nothing, and writes the install record. After that, Zeatend maintains the cluster as if it had installed it.
+
+Most of the commands below are the same on every distribution. Where they differ, a tab shows each one. The steps only K3s and RKE2 have, and those only KubeSolo has, say so at the top.
+
+## Before you begin
+
+- **The server**, with Zeatend installed and `/etc/zeatend/config.yaml` written, as in [Install a cluster](install.mdx) up to **Write the configuration**. On a server without access to GitHub, download Zeatend's archive on another computer, check it against `SHA256SUMS` and copy it over.
+- **`jq`** on the server. It reads the plan.
+- **No `version`** in the configuration, so Zeatend installs the pinned release. For a K3s or RKE2 `version` other than the pinned one, Zeatend has no digests built in, so `apply` downloads the files from GitHub again to check them against the release's own checksum list.
+- **A computer that reaches GitHub**, with `curl`, `jq` and `sha256sum`, and SSH access to the server. For KubeSolo it must also reach `dl.k8s.io`.
+
+Each section ends with `sudo zeatend doctor` and the lines it prints at that point. A line that isn't `ok` names what to fix. `doctor` doesn't change anything, so run it as often as you like.
+
+<Steps>
+<Step>
+
+### Check the host
+
+{/* step: check-host */}
+
+On the server, run the host checks and save the plan:
+
+```sh
+sudo zeatend plan
+sudo zeatend plan --json > plan.json
+```
+
+`plan` prints the checks that `apply` runs first. A `FAIL` line stops `apply`, so fix it before you go on. `plan.json` holds every file the install writes, with its path, mode and content, and every download, with its URL and SHA-256. The rest of this page reads them from there.
+
+The plan depends on the configuration and the host. If you change `/etc/zeatend/config.yaml`, run `plan --json` again and redo the steps from **Write the configuration files**.
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+`service` stays `FAIL` until the release is installed.
+
+</Step>
+<Step>
+
+### Download the release
+
+{/* step: download */}
+
+Copy `plan.json` to the computer that reaches GitHub, then download each file into a new directory and check it against the plan:
+
+```sh
+scp <you>@<server>:plan.json .
+mkdir release && cd release
+downloads='.release[] | [.release, .installScript, .download, .kubectl] + (.images // []) | .[] | select(.)'
+jq -r "$downloads | \"\\(.file) \\(.url)\"" ../plan.json |
+  while read -r file url; do curl -fsSL -o "$file" "$url"; done
+jq -r "$downloads | \"\\(.sha256)  \\(.file)\"" ../plan.json | sha256sum -c -
+```
+
+`sha256sum` prints `OK` for each file. The digests are built into Zeatend, so a file that matches is the one `apply` would install. Copy the files to the server:
+
+```sh
+scp * <you>@<server>:
+```
+
+On the server, put each file where `apply` keeps it:
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+```sh
+version=$(jq -r '.release.cluster.version' plan.json)
+release=$(jq -r '.release.cluster.release.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/rancher/zeatend/downloads/$version" "$release" install.sh
+jq -r '.release.cluster.images[].file' plan.json |
+  xargs sudo install -D -m 0644 -t /var/lib/rancher/k3s/agent/images
+```
+
+</Tab>
+<Tab value="RKE2">
+
+```sh
+version=$(jq -r '.release.cluster.version' plan.json)
+release=$(jq -r '.release.cluster.release.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/rancher/zeatend/downloads/$version" "$release"
+jq -r '.release.cluster.images[].file' plan.json |
+  xargs sudo install -D -m 0644 -t /var/lib/rancher/rke2/agent/images
+```
+
+</Tab>
+<Tab value="KubeSolo">
+
+```sh
+version=$(jq -r '.release.kubeSolo.version' plan.json)
+release=$(jq -r '.release.kubeSolo.download.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/zeatend/downloads/$version" "$release"
+sudo install -D -m 0755 kubectl /var/lib/zeatend/bin/kubectl
+```
+
+</Tab>
+</Tabs>
+
+K3s's and RKE2's image archives hold the images their components start with, and KubeSolo's archive has them inside, so the cluster starts without a registry. Keep the shell open: the next steps use `$version` and `$release`.
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+</Step>
+<Step>
+
+### Write the configuration files
+
+{/* step: write-files */}
+
+Write each file of the plan with its mode and exact content, then make systemd read the new units and drop-ins:
+
+```sh
+jq -c '.hostFiles[]' plan.json | while read -r file; do
+  path=$(jq -r '.path' <<<"$file")
+  jq -j '.content' <<<"$file" | sudo install -D -m "$(jq -r '.mode' <<<"$file")" /dev/stdin "$path"
+  echo "$path"
+done
+sudo systemctl daemon-reload
+```
+
+It prints each path. On K3s and RKE2 they are the distribution's configuration and its CIS settings: the audit policy, the Pod Security admission settings, the network policies, the kernel parameters and the memory limits of the service. On KubeSolo they are its configuration and its systemd unit.
+
+```sh
+sudo zeatend doctor
+```
+
+On K3s and RKE2, nothing is installed yet:
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+On KubeSolo, the unit is there, so `doctor` runs the host checks and finds the service stopped:
+
+```text
+FAIL service            kubesolo is not running; `sudo journalctl -u kubesolo -n 100` shows why, and `sudo systemctl restart kubesolo` starts it again
+```
+
+It also prints the host checks above that line, as `plan` does.
+
+</Step>
+<Step>
+
+### Prepare the host
+
+{/* step: prepare-host */}
+
+Load the AppArmor profile, when the plan has one. Zeatend writes it on hosts where AppArmor restricts unconfined programs, such as Ubuntu 24.04, so containerd's own profile works:
+
+```sh
+if [ -f /etc/apparmor.d/cri-containerd.apparmor.d ]; then
+  sudo apparmor_parser --replace /etc/apparmor.d/cri-containerd.apparmor.d
+fi
+```
+
+Then, for K3s and RKE2, load the kernel parameters that the kubelet checks, and make what the server needs:
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+```sh
+sudo sysctl --quiet --load=/etc/sysctl.d/60-k3s-cis.conf
+sudo install -d -m 0700 /var/lib/rancher/k3s/server/logs
+```
+
+The directory holds the API server's audit log.
+
+</Tab>
+<Tab value="RKE2">
+
+```sh
+sudo sysctl --quiet --load=/etc/sysctl.d/60-rke2-cis.conf
+id etcd || sudo useradd -r -c "etcd user" -s /sbin/nologin -M etcd -U
+```
+
+RKE2's CIS profile runs etcd as the local user `etcd`.
+
+</Tab>
+<Tab value="KubeSolo">
+
+KubeSolo needs nothing more.
+
+</Tab>
+</Tabs>
+
+```sh
+sudo zeatend doctor
+```
+
+The lines are the same as after the last step.
+
+</Step>
+<Step>
+
+### Install the release
+
+{/* step: install-release */}
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+Install the binary, then run K3s's `install.sh` without letting it download, enable or start anything. It writes the unit `k3s.service`, the `kubectl` link and `k3s-uninstall.sh`:
+
+```sh
+dir=/var/lib/rancher/zeatend/downloads/$version
+sudo install -m 0755 "$dir/$release" /usr/local/bin/k3s
+sudo INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true \
+  INSTALL_K3S_SKIP_SELINUX_RPM=true sh "$dir/install.sh" server
+sudo systemctl daemon-reload
+```
+
+</Tab>
+<Tab value="RKE2">
+
+Unpack the tarball into `/usr/local`. It holds the binary, the unit `rke2-server.service` and `rke2-uninstall.sh`:
+
+```sh
+sudo tar -xzf "/var/lib/rancher/zeatend/downloads/$version/$release" -C /usr/local
+sudo systemctl daemon-reload
+```
+
+</Tab>
+<Tab value="KubeSolo">
+
+Take the binary out of the archive and install it:
+
+```sh
+tar -xzf "/var/lib/zeatend/downloads/$version/$release" kubesolo
+sudo install -m 0755 kubesolo /usr/local/bin/kubesolo
+```
+
+</Tab>
+</Tabs>
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` now finds the distribution. It prints the host checks and finds the service stopped:
+
+```text
+ok   root               running as root
+ok   systemd            systemd is the init system
+...
+FAIL service            k3s is not running; `sudo journalctl -u k3s -n 100` shows why, and `sudo systemctl restart k3s` starts it again
+```
+
+The unit is `rke2-server` on RKE2 and `kubesolo` on KubeSolo.
+
+</Step>
+<Step>
+
+### Start the service
+
+{/* step: start-service */}
+
+```sh
+sudo systemctl enable --now k3s
+```
+
+On RKE2, enable `rke2-server`; on KubeSolo, `kubesolo`. The first start takes a few minutes.
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   service            k3s is running
+ok   Kubernetes API     the API server answers /readyz
+warn install record     no install record at /var/lib/rancher/zeatend/record.json: zeatend did not install this node, or apply stopped before the end. Run `sudo zeatend apply`.
+FAIL nodes              vps-1 is not Ready; `sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml describe node vps-1` shows why
+```
+
+The node needs a minute after the start, so `nodes` can show `FAIL` or `the cluster has no nodes` for now. The `install record` line stays until the last step. On KubeSolo, the record is `/var/lib/zeatend/record.json`.
+
+</Step>
+<Step>
+
+### Wait for the node
+
+{/* step: wait-ready */}
+
+Wait until the node registers, then until it is Ready:
+
+```sh
+kubectl="sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml"
+node=$(jq -r '.nodeName' plan.json)
+$kubectl wait --for=create "node/$node" --timeout=10m
+$kubectl wait --for=condition=Ready "node/$node" --timeout=10m
+```
+
+On RKE2, set `kubectl="sudo /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"`; on KubeSolo, `kubectl="sudo /var/lib/zeatend/bin/kubectl --kubeconfig /var/lib/kubesolo/pki/admin/admin.kubeconfig"`. The next steps use `$kubectl` too.
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   nodes              vps-1 is Ready
+```
+
+Every line below `nodes` is `ok`. On KubeSolo, `kubelet reserves` warns, because Zeatend doesn't set the kubelet's reserves there yet ([#4](https://github.com/zeabur-oss/zeatend/issues/4)).
+
+</Step>
+<Step>
+
+### Wait for the turned-off components
+
+{/* step: wait-removed k3s rke2 */}
+
+K3s and RKE2 only. Skip this step when `/etc/zeatend/config.yaml` has no `disable` list. Otherwise the server removes the components it names, such as Traefik, at its first start. Wait until their add-ons are gone:
+
+```sh
+$kubectl get addons,helmcharts -n kube-system
+```
+
+The components in `disable` are no longer in the list.
+
+```sh
+sudo zeatend doctor
+```
+
+The lines are the same as after the last step.
+
+</Step>
+<Step>
+
+### Make the certificates readable by root only
+
+{/* step: protect-certificates k3s rke2 */}
+
+K3s and RKE2 only. The CIS Benchmark wants the server's certificates mode 0600. The server writes them at its first start with mode 0644:
+
+```sh
+sudo find /var/lib/rancher/k3s/server/tls -maxdepth 1 -type f -name '*.crt' -exec chmod 0600 {} +
+```
+
+On RKE2, the directory is `/var/lib/rancher/rke2/server/tls`.
+
+```sh
+sudo zeatend doctor
+```
+
+The lines are the same as after the last step.
+
+</Step>
+<Step>
+
+### Wait for CoreDNS and local-path storage
+
+{/* step: wait-addons kubesolo */}
+
+KubeSolo only.
+
+```sh
+$kubectl wait --for=create -n kube-system deployment/coredns --timeout=10m
+$kubectl rollout status -n kube-system deployment/coredns --timeout=10m
+$kubectl wait --for=create -n local-path-storage deployment/local-path-provisioner --timeout=10m
+$kubectl rollout status -n local-path-storage deployment/local-path-provisioner --timeout=10m
+```
+
+```sh
+sudo zeatend doctor
+```
+
+The lines are the same as after the last step.
+
+</Step>
+<Step>
+
+### Write the install record
+
+{/* step: write-record */}
+
+Let `apply` check your work and write the record:
+
+```sh
+sudo zeatend apply
+```
+
+`apply` runs every step again. Each one finds its work done: the downloads match their digests, the files match the plan, and the service runs with them, so nothing restarts. Then it writes `record.json`, which the next `plan` reads to tell an upgrade from a first install. If a step does change something, such as a file you left out, `apply` fixes it and restarts the service.
+
+```sh
+sudo zeatend doctor
+```
+
+The `install record` line is now `ok`, and so is every line about the cluster:
+
+```text
+ok   service            k3s is running
+ok   Kubernetes API     the API server answers /readyz
+ok   install record     zeatend 0.2.0 wrote the install record
+ok   nodes              vps-1 is Ready
+ok   kubelet reserves   the kubelet on vps-1 keeps at least the memory the OS needs from pods
+ok   Secrets encryption the API server stores Secrets encrypted (aescbc)
+```
+
+A host check that still warns, such as `swap`, names the command that fixes it. From now on, `sudo zeatend plan` shows `nothing` under **Changes since the last apply**, and `apply` maintains the cluster as if it had installed it.
+
+</Step>
+<Step>
+
+### Write the kubeconfig
+
+{/* step: write-kubeconfig kubesolo */}
+
+On KubeSolo, the same `apply` writes `/etc/zeatend/kubeconfig.yaml`, a copy of the admin kubeconfig that names the cluster after the node, and prints how to copy it to your own computer. Check that it is there, readable by root only:
+
+```sh
+sudo ls -l /etc/zeatend/kubeconfig.yaml
+sudo zeatend doctor
+```
+
+`doctor` prints the same lines as after the last step.
+
+</Step>
+</Steps>
+
+## Next
+
+- [Add nodes](../operations/add-nodes.mdx) to run services on more servers.
+- [Maintain the cluster](../operations/maintain.mdx): upgrades, certificates and backups.

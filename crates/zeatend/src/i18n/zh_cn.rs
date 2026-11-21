@@ -4,6 +4,7 @@ use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
+use zeatend_plan::steps::Step;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
 
@@ -23,6 +24,7 @@ pub(super) const MESSAGES: Messages = Messages {
     starting_unit,
     restarting_unit,
     waiting_for_node,
+    step,
     done: DONE,
     ready,
     joined,
@@ -159,7 +161,24 @@ fn restarting_unit(unit: &str) -> String {
 }
 
 fn waiting_for_node(node: &str) -> String {
-    format!("等待节点 {node} 就绪")
+    format!("节点 {node}")
+}
+
+const fn step(step: Step) -> &'static str {
+    match step {
+        Step::CheckHost => "正在检查主机",
+        Step::Download => "正在下载发行版",
+        Step::WriteFiles => "正在写入配置文件",
+        Step::PrepareHost => "正在准备主机",
+        Step::InstallRelease => "正在安装发行版",
+        Step::StartService => "正在启动服务",
+        Step::WaitReady => "正在等待节点就绪",
+        Step::WaitRemoved => "正在等待已关闭的组件移除完毕",
+        Step::ProtectCertificates => "正在把证书改为仅 root 可读",
+        Step::WaitAddons => "正在等待 CoreDNS 和 local-path 存储启动",
+        Step::WriteRecord => "正在写入安装记录",
+        Step::WriteKubeconfig => "正在写入 kubeconfig",
+    }
 }
 
 fn ready(r: &Ready<'_>) -> String {

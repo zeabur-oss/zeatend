@@ -2,6 +2,7 @@
   label: 開始使用
   pages:
     install: 安裝叢集與 Zeabur
+    manual-install: 手動安裝
 - group: operations
   label: 維運
   pages:
