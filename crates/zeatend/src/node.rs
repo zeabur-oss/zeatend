@@ -5,7 +5,7 @@
 //! token, which a bootstrap token cannot replace. K3s takes workers only. The new VM's own
 //! `zeatend plan` then checks the ports and the round-trip time to this server before it joins.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k8s_openapi::List;
@@ -15,7 +15,6 @@ use zeatend_host::{cmd, facts, files};
 use zeatend_plan::authentication::{self, ApiServer};
 use zeatend_plan::cluster::{self, Rancher};
 use zeatend_plan::config::{Component, Role};
-use zeatend_plan::longhorn::Storage;
 use zeatend_plan::token::JoinToken;
 use zeatend_plan::{PlanError, join, ports};
 
@@ -29,8 +28,8 @@ pub(crate) struct AddOptions {
     pub(crate) address: Option<String>,
     /// How long a worker's token can join nodes.
     pub(crate) ttl: Duration,
-    /// This server's `storage` section, which the new VM takes too.
-    pub(crate) storage: Storage,
+    /// This server's configuration file, when it does not turn on `storage.longhorn`.
+    pub(crate) unprepared: Option<PathBuf>,
 }
 
 /// The distribution of this server: the one whose admin kubeconfig is here.
@@ -127,7 +126,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             .collect::<Vec<_>>(),
         disable: &disable,
         api_server: &api_server,
-        storage: options.storage,
+        unprepared: options.unprepared.as_deref(),
         ttl: options.ttl,
     })?;
     output::line(text.trim_end());
@@ -189,8 +188,8 @@ struct Instructions<'a> {
     disable: &'a [Component],
     /// The `apiServer` section of a new server, the same as this one's.
     api_server: &'a ApiServer,
-    /// The `storage` section of the new VM, the same as this one's.
-    storage: Storage,
+    /// This server's configuration file, when it does not turn on `storage.longhorn`.
+    unprepared: Option<&'a Path>,
     ttl: Duration,
 }
 
@@ -246,6 +245,19 @@ fn instructions(i: &Instructions<'_>) -> Result<String, PlanError> {
         ),
     }
     push(&mut text, "");
+    if let Some(path) = i.unprepared {
+        push(
+            &mut text,
+            &format!(
+                "With a second node, the Zeabur catalog recommends Longhorn, which needs every \
+                 node prepared. Here, add these lines to {} and run zeatend apply:",
+                path.display()
+            ),
+        );
+        push(&mut text, "  storage:");
+        push(&mut text, "    longhorn: true");
+        push(&mut text, "");
+    }
     let layout = i.distribution.distribution().layout();
     push(&mut text, "When the node is Ready, here:");
     push(
@@ -288,9 +300,8 @@ fn commands(i: &Instructions<'_>) -> Result<String, PlanError> {
         let names: Vec<&str> = i.disable.iter().map(|c| c.name()).collect();
         lines.push(format!("disable: [{}]", names.join(", ")));
     }
-    if i.storage.longhorn {
-        lines.extend(["storage:".to_owned(), "  longhorn: true".to_owned()]);
-    }
+    // The new node makes the cluster multi-node, where the Zeabur catalog recommends Longhorn.
+    lines.extend(["storage:".to_owned(), "  longhorn: true".to_owned()]);
     lines.extend([
         "join:".to_owned(),
         format!("  server: {}", i.server),
@@ -357,7 +368,7 @@ mod tests {
             node_names: &["vps-1"],
             disable: &[],
             api_server: &ApiServer::default(),
-            storage: Storage::default(),
+            unprepared: None,
             ttl: Duration::from_hours(1),
         })
         .unwrap();
@@ -375,7 +386,7 @@ mod tests {
             node_names: &["vps-1", "vps-2"],
             disable: &[],
             api_server: &ApiServer::default(),
-            storage: Storage::default(),
+            unprepared: None,
             ttl: Duration::from_mins(30),
         })
         .unwrap();
@@ -412,7 +423,7 @@ mod tests {
             node_names: &["vps-1"],
             disable: &[Component::Traefik, Component::MetricsServer],
             api_server: &api_server,
-            storage: Storage::default(),
+            unprepared: None,
             ttl: Duration::from_hours(1),
         })
         .unwrap();
@@ -441,7 +452,7 @@ mod tests {
             node_names: &["vps-1"],
             disable: &[],
             api_server: &ApiServer::default(),
-            storage: Storage::default(),
+            unprepared: None,
             ttl: Duration::from_hours(1),
         })
         .unwrap();
@@ -449,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_node_is_prepared_for_longhorn_when_this_one_is() {
+    fn every_new_node_is_prepared_for_longhorn_and_so_is_this_one() {
         let text = instructions(&Instructions {
             distribution: Rancher::K3s,
             server: "https://10.0.1.10:6443",
@@ -459,11 +470,36 @@ mod tests {
             node_names: &["vps-1"],
             disable: &[],
             api_server: &ApiServer::default(),
-            storage: Storage { longhorn: true },
+            unprepared: Some(Path::new("/etc/zeatend/config.yaml")),
             ttl: Duration::from_hours(1),
         })
         .unwrap();
         assert!(pasted(&text).storage.longhorn, "{text}");
+        assert!(
+            text.contains(
+                "Here, add these lines to /etc/zeatend/config.yaml and run zeatend apply"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_prepared_server_gets_no_longhorn_step() {
+        let text = instructions(&Instructions {
+            distribution: Rancher::K3s,
+            server: "https://10.0.1.10:6443",
+            role: Role::Worker,
+            token: &worker_token(),
+            version: None,
+            node_names: &["vps-1"],
+            disable: &[],
+            api_server: &ApiServer::default(),
+            unprepared: None,
+            ttl: Duration::from_hours(1),
+        })
+        .unwrap();
+        assert!(pasted(&text).storage.longhorn, "{text}");
+        assert!(!text.contains("Here, add these lines"), "{text}");
     }
 
     #[test]

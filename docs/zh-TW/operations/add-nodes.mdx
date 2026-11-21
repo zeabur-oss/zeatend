@@ -54,6 +54,8 @@ On the new VM, as root, with this zeatend copied to /usr/local/bin:
 install -d -m 0700 /etc/zeatend
 (umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
 distribution: k3s
+storage:
+  longhorn: true
 join:
   server: https://10.0.1.10:6443
   role: worker
@@ -65,12 +67,18 @@ zeatend apply   # installs K3s and waits until the node is Ready
 
 The token joins workers for 1h. Revoke it once the node is Ready; the node keeps working without it.
 
+With a second node, the Zeabur catalog recommends Longhorn, which needs every node prepared. Here, add these lines to /etc/zeatend/config.yaml and run zeatend apply:
+  storage:
+    longhorn: true
+
 When the node is Ready, here:
   /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
   /usr/local/bin/k3s token delete abcdef   # revokes the token
 ```
 
 工作節點的權杖可在一小時內用來加入工作節點。用 `--ttl` 可調整期限，例如 `--ttl 30m`，最長 `24h`。每次執行 `node add` 都會建立新的權杖。
+
+設定檔會開啟 `storage.longhorn`：加入新節點後叢集就有多個節點，Zeabur 型錄這時會推薦 [Longhorn](../reference/configuration.mdx#longhorn)。如果這台伺服器的設定檔沒有開啟它，輸出也會請你在這台開啟並執行 `zeatend apply`，讓這台也準備好。
 
 RKE2 伺服器拿到的則是叢集的伺服器權杖，永不過期，能用來加入伺服器與工作節點。由於每台伺服器都會執行 API 伺服器並部署內附元件，設定檔也會複製這台伺服器的 `disable` 清單與 `apiServer` 設定。不要把輸出貼到聊天室或工單。
 
