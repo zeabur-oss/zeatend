@@ -70,10 +70,10 @@ sudo zeatend apply
 
 如果升級違反 Kubernetes 的版本規則，`apply` 會在任何變更之前停止：
 
-- **較舊的版本。**Zeatend 不會降級。錯誤訊息會列出已安裝的版本；請使用能安裝該版本或更新版本的 Zeatend。
-- **跨越超過一個次要版本。**伺服器每次只能升級一個 Kubernetes 次要版本，例如從 1.36 升到 1.37。在 K3s 或 RKE2 上，先把 `version` 設為下一個次要版本的發行版本並套用，再移除 `version` 並重新套用。在 KubeSolo 上，先套用會安裝下一個次要版本的 Zeatend 版本。
-- **工作節點比伺服器新。**工作節點的 Kubernetes 次要版本不能比 API 伺服器新。請先升級伺服器。
-- **安裝紀錄來自更新版本的 Zeatend。**錯誤訊息會列出該使用的 Zeatend 版本。
+- **較舊的版本**。Zeatend 不會降級。錯誤訊息會列出已安裝的版本；請使用能安裝該版本或更新版本的 Zeatend。
+- **跨越超過一個次要版本**。伺服器每次只能升級一個 Kubernetes 次要版本，例如從 1.36 升到 1.37。在 K3s 或 RKE2 上，先把 `version` 設為下一個次要版本的發行版本並套用，再移除 `version` 並重新套用。在 KubeSolo 上，先套用會安裝下一個次要版本的 Zeatend 版本。
+- **工作節點比伺服器新**。工作節點的 Kubernetes 次要版本不能比 API 伺服器新。請先升級伺服器。
+- **安裝紀錄來自更新版本的 Zeatend**。錯誤訊息會列出該使用的 Zeatend 版本。
 
 要安裝固定版本以外的 K3s 或 RKE2 版本，請在設定中指定 `version`，例如 `version: v1.37.1+k3s1`。Zeatend 只會用該版本提供的校驗碼清單驗證下載內容，所以安裝計畫會標示不支援。KubeSolo 不接受 `version`。
 
@@ -81,7 +81,7 @@ sudo zeatend apply
 
 各發行版會建立並更新叢集憑證，Zeatend 不負責這些工作。
 
-**K3s 和 RKE2。**用戶端與伺服器憑證的有效期為 365 天。每次服務啟動時，都會更新將在 120 天內到期的憑證。每隔幾個月重新啟動一次，或升級版本，就能維持憑證有效。要檢查到期時間，請在伺服器上執行：
+**K3s 和 RKE2**。用戶端與伺服器憑證的有效期為 365 天。每次服務啟動時，都會更新將在 120 天內到期的憑證。每隔幾個月重新啟動一次，或升級版本，就能維持憑證有效。要檢查到期時間，請在伺服器上執行：
 
 ```sh
 sudo k3s certificate check --output table
@@ -89,7 +89,7 @@ sudo k3s certificate check --output table
 
 在 RKE2 上，請執行 `sudo rke2 certificate check --output table`。憑證授權單位的有效期為 10 年。手動輪替方式見 [K3s](https://docs.k3s.io/cli/certificate) 和 [RKE2](https://docs.rke2.io/security/certificates) 文件。
 
-**KubeSolo。**憑證的有效期為 365 天。KubeSolo 啟動時，如果發現 API 伺服器的憑證已到期，就會重新建立憑證，但不包含憑證授權單位。之後請重新啟動：
+**KubeSolo**。憑證的有效期為 365 天。KubeSolo 啟動時，如果發現 API 伺服器的憑證已到期，就會重新建立憑證，但不包含憑證授權單位。之後請重新啟動：
 
 ```sh
 sudo systemctl restart kubesolo
