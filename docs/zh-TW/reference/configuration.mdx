@@ -1,0 +1,74 @@
+---
+title: 設定檔
+description: /etc/zeatend/config.yaml 的所有設定，適用於叢集的第一台伺服器與加入叢集的節點。
+---
+
+Zeatend 會讀取一份 YAML 檔案，預設為 `/etc/zeatend/config.yaml`，也可以用 `--config` 指定其他檔案。沒有這份檔案時，Zeatend 會使用預設值安裝 K3s。遇到不認得的鍵就會報錯，避免漏掉拼字錯誤。
+
+如果檔案的最外層有 `join` 區段，就會加入叢集；沒有這個區段時，則會設定新叢集的第一台伺服器。
+
+## 第一台伺服器
+
+```yaml
+distribution: k3s
+disable: [traefik]
+host:
+  tlsSan: [k8s.example.com]
+apiServer:
+  authenticationConfig:
+    apiVersion: apiserver.config.k8s.io/v1
+    kind: AuthenticationConfiguration
+    jwt:
+      - issuer:
+          url: https://identity.example.com
+          audiences: [kubernetes]
+        claimMappings:
+          username: {claim: preferred_username, prefix: "zeabur:"}
+          groups: {claim: groups, prefix: "zeabur:"}
+```
+
+| 鍵 | 預設值 | 說明 |
+| --- | --- | --- |
+| `distribution` | `k3s` | `k3s`、`rke2` 或 `kubesolo`。 |
+| `version` | Zeatend 固定使用的發行版本 | K3s 或 RKE2 的發行版本，例如 `v1.37.1+k3s1` 或 `v1.37.1+rke2r1`。Zeatend 只會用該發行版本提供的校驗碼清單檢查下載檔案，所以安裝計畫會標示為不支援。KubeSolo 不接受這個設定。 |
+| `disable` | 無 | 不讓 K3s 或 RKE2 部署的內附元件：`traefik`、`metrics-server`，以及 K3s 的 `local-storage`（local-path 儲存類別）。KubeSolo 沒有內附這些元件。 |
+| `apiServer.authenticationConfig` | 無 | API 伺服器的[驗證設定](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，依 Kubernetes 文件的格式填寫。 |
+| `host.tlsSan` | 無 | API 伺服器憑證的其他名稱與位址，例如 DNS 名稱。 |
+| `host.nodeName` | 主機名稱 | 節點在 Kubernetes 裡的名稱。 |
+| `host.requireEncryptedDisk` | `false` | 如果叢集資料不在加密磁碟上，就停止安裝。 |
+
+### 節點名稱
+
+沒有設定 `host.nodeName` 時，節點會使用轉成小寫的主機名稱。在 K3s 和 RKE2 上，如果主機名稱來自伺服器位址，例如 `ip-10-0-1-5`，就會改用 `node-` 加上六位十六進位數字。安裝完成後，節點名稱就不會改變。
+
+KubeSolo 一律使用主機名稱，所以 `host.nodeName` 只能填入相同名稱。要為 KubeSolo 節點命名，請在安裝前設定主機名稱。
+
+### 驗證設定
+
+Zeatend 只檢查 `apiVersion` 和 `kind`，其餘內容會原樣寫入檔案，再把檔案交給 API 伺服器。API 伺服器啟動時，Kubernetes 會檢查其他欄位。在 K3s 和 RKE2 上，如果設定沒有 `anonymous` 區段，就會加入 `anonymous: {enabled: false}`，維持停用匿名請求。變更會在下次執行 `apply` 時生效。
+
+Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)會用 `zeabur-identityctl kube-config` 寫入這個區段，讓 API 伺服器接受 Zeabur Identity 的登入。
+
+## 加入叢集的節點
+
+`zeatend node add` 會幫你輸出這份檔案，詳見[新增節點](../operations/add-nodes.mdx)。
+
+```yaml
+distribution: k3s
+join:
+  server: https://10.0.0.5:6443
+  role: worker
+  tokenFile: /etc/zeatend/join-token
+```
+
+| 鍵 | 說明 |
+| --- | --- |
+| `distribution` | 叢集使用的發行版，為 `k3s` 或 `rke2`。 |
+| `version` | 如果叢集的發行版本與 Zeatend 固定使用的版本不同，填入叢集的版本。 |
+| `join.server` | K3s 使用 `https://<address>:6443`，RKE2 使用 `https://<address>:9345`。 |
+| `join.role` | 預設為 `worker`，RKE2 也可以用 `server`。 |
+| `join.token` | 加入權杖。使用這個設定時，設定檔的權限必須為 0600。 |
+| `join.tokenFile` | 存放加入權杖的檔案，權限為 0600。用這個設定取代 `join.token`。 |
+| `join.nodeNames` | 叢集裡已有的節點名稱，讓這個節點選用其他名稱。 |
+| `disable`, `apiServer` | 僅限 RKE2 伺服器。每台伺服器都會部署內附元件並執行 API 伺服器，請為所有伺服器設定相同的值。 |
+| `host` | 與第一台伺服器相同。`tlsSan` 只適用於伺服器。 |

@@ -1,0 +1,66 @@
+---
+title: Commands
+description: What each zeatend command does, its flags, and its exit codes.
+---
+
+Run `zeatend` as root on the server it sets up. Every command reads the configuration file, `/etc/zeatend/config.yaml` unless `--config <file>` (`-c`) names another. `zeatend --help` and `zeatend <command> --help` describe the same commands and flags.
+
+## zeatend
+
+With no command, `sudo zeatend` opens the install screens. They show the server and its checks, ask for the distribution, the API server's address and DNS name and the node name, and show the plan. Your choices go into the configuration file, and the install runs as with `zeatend apply`. The screens speak English, 繁體中文 or 简体中文, from the locale; F2 changes the language. A terminal that can't show Chinese, such as the Linux console, gets English. The screens need root and systemd, and set up a first server only.
+
+## zeatend plan
+
+Shows what `apply` would install, and runs the host checks. Changes nothing.
+
+| Flag | Meaning |
+| --- | --- |
+| `--json` | Print the plan as JSON, without the host checks. `apply --plan` takes this output. |
+
+For a node that joins, `plan` also measures the round-trip time to the server and checks which of its ports this server reaches.
+
+## zeatend apply
+
+Installs, or brings an install in line with the configuration. It's safe to run again. A `FAIL` host check stops it before it changes anything.
+
+| Flag | Meaning |
+| --- | --- |
+| `--plan <file>` | Apply the plan that `plan --json` wrote to the file. Nothing changes if, since then, a file the plan writes, the installed release or the install record has changed. |
+| `--foreground` | Run the install in this process, not in a systemd unit. It stops when the session ends. |
+| `--json` | Print the progress as JSON lines. |
+
+On a host with systemd, the install runs in the unit `zeatend-install-<id>.service` and goes on when your session ends. While that unit runs, `apply` shows its progress and starts nothing new. `journalctl -u 'zeatend-install-*'` has the full output.
+
+## zeatend doctor
+
+Checks the server and the cluster on it: the host checks, the service, the API server, the install record, the nodes, the memory the kubelet keeps for the system and, on K3s and RKE2 servers, that Secrets are stored encrypted. Each line that isn't `ok` names what to do. See [Check the cluster](../operations/maintain.mdx#check-the-cluster).
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Every check passed. |
+| 1 | A check warned. |
+| 2 | A check failed. |
+| 3 | The checks couldn't run, such as without root. |
+
+## zeatend node add
+
+Prints the configuration and commands that join a new server to this K3s or RKE2 cluster, with a join token. Run it on a server. See [Add nodes](../operations/add-nodes.mdx).
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--role <role>` | `worker` | `worker`, or on RKE2 `server`. |
+| `--address <address>` | This node's `InternalIP` | The address the new server reaches this one at. |
+| `--ttl <time>` | `1h` | How long a worker's token joins nodes, such as `30m` or `2h`; from `1m` to `24h`. |
+
+## zeatend uninstall
+
+Removes K3s, RKE2 or KubeSolo and Zeatend's files from this server. It shows what it removes and keeps, and asks first. Volumes stay. It's safe to run again. See [Uninstall](../operations/uninstall.mdx).
+
+| Flag | Meaning |
+| --- | --- |
+| `--yes`, `-y` | Remove without asking. Needed without a terminal. |
+| `--delete-volumes` | Also remove the volumes: the local-path storage of K3s and KubeSolo, `/var/lib/zeabur/storage` and `/var/lib/longhorn`. |
+
+## Exit codes
+
+`plan`, `apply`, `node add` and `uninstall` exit 0 on success and 1 on an error. `apply` exits 130 when you stop following the install unit with Ctrl-C; the install goes on.

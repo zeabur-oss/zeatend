@@ -1,0 +1,54 @@
+---
+title: Get started with Zeatend
+description: Zeatend turns a Linux server into a Kubernetes cluster with K3s, RKE2 or KubeSolo, adds nodes to it, and removes it again. Zeabur then installs on that cluster.
+---
+
+Zeatend sets up Kubernetes on your own Linux servers. Run it on a server, and from one configuration file it installs K3s, RKE2 or KubeSolo, hardened to the CIS benchmark. It also joins more servers to the cluster, upgrades and checks it, and removes it from a server.
+
+## Where Zeatend fits
+
+Each open-source Zeabur product does one job:
+
+| Product | Its job |
+| --- | --- |
+| Zeatend | Sets up the cluster on your servers: installs Kubernetes, adds nodes, upgrades and removes it. |
+| Zeabur | The platform that runs on the cluster. You deploy and manage your services in it. |
+| Zeabur Identity | Sign-in. People sign in to Zeabur and `kubectl` with their own accounts. |
+| Zeabur Catalog | The components and templates you add to the cluster and deploy from Zeabur. |
+
+Zeatend's job ends once Kubernetes runs. It doesn't install Zeabur: one `helm install` does that, and Zeabur's docs show the command. An agent such as Claude Code or Codex can follow these pages for you. The [glossary](https://oss.zeabur.com/docs/glossary/) defines these names.
+
+## What Zeatend does
+
+- Installs one of three distributions on a Linux server with systemd:
+  - **K3s**, the default. One server, and as many workers as you add.
+  - **RKE2**, for a control plane of three or more servers, so the cluster keeps running when one server goes down.
+  - **KubeSolo**, for one small server. It takes no other nodes.
+- Checks the server first and stops when the server can't run the cluster: no root, no systemd, Docker on a KubeSolo host, ports in use, or too little disk space.
+- Downloads each distribution's files and checks them against digests built into Zeatend.
+- Prints the configuration and a join token that add another server to a K3s or RKE2 cluster.
+- Checks the server and the cluster at any time with `zeatend doctor`.
+- Removes the distribution and its own files from a server, and keeps the volumes unless you ask.
+
+## What Zeatend doesn't do
+
+- It doesn't set up other servers from yours: copy it to each server and run it there as root.
+- It doesn't back up the cluster or move it to another server. [Maintain the cluster](operations/maintain.mdx) shows where each distribution keeps its data.
+- It doesn't change objects in the cluster through the Kubernetes API. To remove a node from the cluster, run `kubectl delete node` yourself.
+- It needs the internet: the server downloads the distribution from GitHub.
+
+## Get started
+
+- [Install a cluster and Zeabur](get-started/install.mdx): Turn one Linux server into a cluster, then install Zeabur on it.
+
+## Operate
+
+- [Add nodes](operations/add-nodes.mdx): Join workers, or on RKE2 more servers, to the cluster.
+- [Maintain the cluster](operations/maintain.mdx): Upgrade Zeatend and Kubernetes, renew certificates, back up the data, and check the cluster.
+- [Uninstall](operations/uninstall.mdx): Remove the cluster from a server.
+
+## Reference
+
+- [Commands](reference/commands.mdx)
+- [Configuration file](reference/configuration.mdx)
+- [Supported servers and files](reference/hosts.mdx)

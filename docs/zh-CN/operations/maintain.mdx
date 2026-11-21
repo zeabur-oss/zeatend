@@ -1,0 +1,122 @@
+---
+title: 维护集群
+description: 升级 Zeatend 和 Kubernetes 发行版，保持证书有效，备份集群数据，并用 zeatend doctor 检查集群。
+---
+
+Zeatend 负责升级发行版和检查集群。证书和备份由发行版管理，各发行版的存放位置见下文。
+
+## 检查集群
+
+在任意节点上运行：
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` 先运行 `zeatend plan` 的主机检查，再检查集群：
+
+| 检查项 | 检查内容 |
+| --- | --- |
+| 服务 | 发行版的 systemd 服务正在运行。 |
+| Kubernetes API | 在服务器节点上，API 服务器响应 `/readyz`。 |
+| 安装记录 | Zeatend 已写入安装记录，且记录并非来自更新版本的 Zeatend。 |
+| 节点 | 每个节点都处于 `Ready` 状态。工作节点只检查自身节点。 |
+| kubelet 预留资源 | kubelet 为系统预留足够的内存，不分配给副本。 |
+| 机密变量加密 | 在 K3s 或 RKE2 服务器节点上，API 服务器加密存储机密变量。 |
+
+每个不为 `ok` 的输出行都会说明需要做什么。`doctor` 使用监控插件的退出码：一切正常时为 0，有警告时为 1，检查失败时为 2，无法运行检查时为 3。可以从监控系统或 systemd 定时器运行，以便及早发现问题。
+
+## 升级
+
+每个 Zeatend 版本都固定使用一个 K3s、RKE2 和 KubeSolo 版本，并用内置摘要校验下载内容。要升级 Kubernetes，安装新版 Zeatend 后，再次运行 `apply`。
+
+<Steps>
+<Step>
+
+### 阅读发行说明
+
+从当前版本到目标版本，逐一阅读各版本的[发行说明](https://github.com/zeabur-oss/zeatend/releases)。用 `zeatend --version` 查看当前版本。
+
+</Step>
+<Step>
+
+### 在每个节点上安装新版 Zeatend
+
+在每个节点上运行[下载 Zeatend](../get-started/install.mdx#下载-zeatend) 中的命令。Zeatend 只有一个文件，替换这个文件不会改变集群。
+
+</Step>
+<Step>
+
+### 逐台升级服务器节点
+
+在服务器节点上检查安装计划并应用：
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+安装计划的第一行会显示要安装的版本。`apply` 会安装该版本、重启服务，并等待节点达到 `Ready` 状态。当前服务器节点达到 `Ready` 状态后，再升级下一台。
+
+</Step>
+<Step>
+
+### 升级工作节点
+
+在每个工作节点上运行相同的两条命令。工作节点会读取 `node add` 写入的 `/etc/zeatend/config.yaml`，所以要保留这个文件。
+
+</Step>
+</Steps>
+
+如果升级违反 Kubernetes 的规则，`apply` 会在修改前停止：
+
+- **安装更旧的版本**：Zeatend 不支持降级。错误消息会显示已安装的版本，请使用能安装该版本或更新版本的 Zeatend。
+- **跨越多个次版本**：服务器节点每次只能升级一个 Kubernetes 次版本，例如从 1.36 升级到 1.37。使用 K3s 或 RKE2 时，将 `version` 设为下一个次版本的某个发行版本，应用后删除 `version`，再应用一次。使用 KubeSolo 时，先应用能安装下一个次版本的 Zeatend 版本。
+- **工作节点版本高于服务器节点**：工作节点的 Kubernetes 次版本不能高于 API 服务器。先升级服务器节点。
+- **安装记录来自更新版本的 Zeatend**：错误消息会显示需要使用的 Zeatend 版本。
+
+要安装固定版本以外的 K3s 或 RKE2 版本，在配置中设置 `version`，例如 `version: v1.37.1+k3s1`。Zeatend 只会用该发行版本自己的校验和列表校验下载内容，所以安装计划会将这个版本标为不受支持。KubeSolo 不接受 `version`。
+
+## 证书
+
+集群证书由发行版创建和续期，Zeatend 不管理证书。
+
+**K3s 和 RKE2**：客户端和服务器证书的有效期为 365 天。每次服务启动时，都会续期将在 120 天内到期的证书。每隔几个月重启一次，或升级发行版，就能保持证书有效。要查看到期时间，在服务器节点上运行：
+
+```sh
+sudo k3s certificate check --output table
+```
+
+使用 RKE2 时，运行 `sudo rke2 certificate check --output table`。CA 的有效期为 10 年。手动轮换方法见 [K3s](https://docs.k3s.io/cli/certificate) 和 [RKE2](https://docs.rke2.io/security/certificates) 文档。
+
+**KubeSolo**：证书的有效期为 365 天。KubeSolo 启动时，如果发现 API 服务器的证书已到期，就会重新生成证书，但不会重新生成 CA。然后重启 KubeSolo：
+
+```sh
+sudo systemctl restart kubesolo
+```
+
+之后，将 kubeconfig 重新复制到你的电脑，旧文件中的客户端证书已经到期。
+
+## 备份
+
+Zeatend 不执行备份。需要备份两部分：集群的数据存储，以及服务的卷。在 Zeabur 开源版中，[备份](https://oss.zeabur.com/zh-CN/docs/zeabur/cluster/backups/)涵盖服务的卷和数据库。
+
+| 发行版 | 数据存储 | 备份内容 |
+| --- | --- | --- |
+| K3s | `/var/lib/rancher/k3s/server/db/` 中的 SQLite | 该文件夹，以及令牌 `/var/lib/rancher/k3s/server/token`。 |
+| RKE2 | etcd。每台服务器节点在 00:00 和 12:00 创建快照，保留 5 份，存放在 `/var/lib/rancher/rke2/server/db/snapshots/`。 | 将快照和令牌 `/var/lib/rancher/rke2/server/token` 复制到服务器之外。运行 `sudo rke2 etcd-snapshot save` 可立即创建快照。 |
+| KubeSolo | `/var/lib/kubesolo/kine/db/` 中的 SQLite | 停止 KubeSolo 后，备份 `/var/lib/kubesolo`，其中也包含证书。 |
+
+没有对应令牌的备份无法还原。将备份和令牌都存放在服务器之外，并像管理员 kubeconfig 一样保密。还原方法见 [K3s](https://docs.k3s.io/datastore/backup-restore) 和 [RKE2](https://docs.rke2.io/datastore/backup_restore) 文档。
+
+默认 `local-path` 存储类的卷是创建卷的节点上的文件夹，例如 `/var/lib/rancher/k3s/storage`。详见 [Zeatend 写入的文件](../reference/hosts.mdx#zeatend-写入的文件)。
+
+## 重启前
+
+如果节点上运行着工作负载，先阻止新的副本在该节点上启动：
+
+```sh
+kubectl cordon <node>
+```
+
+重启后，运行 `kubectl uncordon <node>` 和 `sudo zeatend doctor`。服务会随 systemd 启动。

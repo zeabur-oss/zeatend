@@ -1,0 +1,155 @@
+---
+title: 新增節點
+description: 在伺服器執行 zeatend node add，再到新伺服器執行輸出的指令，等節點進入 Ready 狀態後撤銷加入權杖。
+---
+
+`zeatend node add` 在叢集的伺服器上執行，會輸出新伺服器加入叢集所需的設定檔與指令，設定檔內含加入權杖。加入之前，新伺服器上的 `zeatend plan` 會檢查連接埠，以及到叢集的網路延遲。
+
+| 發行版 | 可新增的節點 |
+| --- | --- |
+| K3s | 工作節點。Zeatend 設定的 K3s 只有一台伺服器。 |
+| RKE2 | 工作節點，也能用 `--role server` 新增伺服器。 |
+| KubeSolo | 無法新增。KubeSolo 只執行一個節點。 |
+
+## 交給 Agent 新增節點
+
+在能用 SSH 連上兩台伺服器的電腦上，把這段提示貼給 Claude Code 或 Codex，並告訴 Agent 兩台伺服器的位址：
+
+```text
+請按照 https://oss.zeabur.com/docs/zeatend/operations/add-nodes.md，把我的新伺服器加入我的 Zeatend 叢集。
+```
+
+## 開始之前
+
+- **一台新的 Linux 伺服器**，符合[支援的伺服器](../reference/hosts.mdx)需求，並能用 `sudo` 取得 root 權限。
+- **相同的供應商與區域。**所有節點都要使用同一家主機供應商，並放在同一個區域；同一區域內可使用不同可用區。跨供應商或跨區域的延遲會拖慢 etcd、Kubernetes API 和儲存。
+- **開放節點之間的連接埠。**在防火牆或安全群組允許以下連線：
+
+  | 方向 | K3s | RKE2 |
+  | --- | --- | --- |
+  | 連到伺服器 | TCP 6443 | TCP 9345 和 6443 |
+  | 所有節點之間 | TCP 10250、UDP 8472（flannel VXLAN） | TCP 10250 和 9099、UDP 8472（Canal VXLAN） |
+  | 伺服器之間 | 無 | TCP 2379 到 2381 |
+
+  不要對網際網路開放 UDP 8472。如果節點之間封鎖這個連接埠，不同節點上的副本就無法互相連線。
+
+<Steps>
+<Step>
+
+### 輸出加入指令
+
+在叢集的伺服器上執行：
+
+```sh
+sudo zeatend node add
+```
+
+在 RKE2 上，要新增伺服器而非工作節點，請加上 `--role server`。新伺服器會連到這個節點的 `InternalIP`；要使用其他位址，請加上 `--address <address>`。
+
+輸出的內容如下，請在新伺服器執行其中的指令：
+
+```text
+On the new VM, as root, with this zeatend copied to /usr/local/bin:
+
+install -d -m 0700 /etc/zeatend
+(umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
+distribution: k3s
+join:
+  server: https://10.0.1.10:6443
+  role: worker
+  token: K10…::abcdef.0123456789abcdef
+  nodeNames: [vps-1]
+EOF
+zeatend plan    # what it installs, the distance to this server, the ports and warnings
+zeatend apply   # installs K3s and waits until the node is Ready
+
+The token joins workers for 1h. Revoke it once the node is Ready; the node keeps working without it.
+
+When the node is Ready, here:
+  /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+  /usr/local/bin/k3s token delete abcdef   # revokes the token
+```
+
+工作節點的權杖可在一小時內用來加入工作節點。用 `--ttl` 可調整期限，例如 `--ttl 30m`，最長 `24h`。每次執行 `node add` 都會建立新的權杖。
+
+RKE2 伺服器拿到的則是叢集的伺服器權杖，永不過期，能用來加入伺服器與工作節點。由於每台伺服器都會執行 API 伺服器並部署內附元件，設定檔也會複製這台伺服器的 `disable` 清單與 `apiServer` 設定。不要把輸出貼到聊天室或工單。
+
+</Step>
+<Step>
+
+### 在新伺服器安裝相同版本的 Zeatend
+
+在原本的伺服器檢查版本：
+
+```sh
+zeatend --version
+```
+
+在新伺服器執行[下載 Zeatend](../get-started/install.mdx#下載-zeatend) 的下載指令，並把第一行改成這個版本，例如 `version=v0.2.0`。
+
+</Step>
+<Step>
+
+### 在新伺服器執行指令
+
+在新伺服器用 `sudo -i` 開啟 root shell，再貼上 `node add` 輸出的指令，從 `install -d` 到 `zeatend apply`。
+
+`zeatend plan` 會顯示要安裝的版本、寫入的檔案、到伺服器的往返時間，以及能連上伺服器的哪些連接埠：
+
+```text
+Distance         0.7 ms to the server (median of 5 TCP connects; 0.6 to 0.9)
+Ports on the server
+  open    TCP 6443  Kubernetes API and K3s supervisor
+  open    TCP 10250 kubelet
+  unknown UDP 8472  flannel VXLAN
+```
+
+如果連接埠顯示 `CLOSED`，表示兩台伺服器之間的連線受阻；請先開放，再繼續操作。Zeatend 無法檢查 UDP 連接埠，所以 UDP 8472 顯示 `unknown` 是正常的。
+
+`zeatend apply` 會安裝發行版、加入叢集，並等待節點進入 `Ready` 狀態：
+
+```text
+vps-2 joined the cluster as a worker. List the nodes on a server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+==> Waiting for node vps-2 to be Ready
+==> Done
+```
+
+</Step>
+<Step>
+
+### 檢查節點並撤銷權杖
+
+在第一台伺服器執行 `node add` 最後輸出的兩個指令。第一個指令會列出節點，新節點應顯示 `Ready`：
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+```
+
+第二個指令會撤銷工作節點的權杖。請把 `abcdef` 換成輸出的權杖 ID：
+
+```sh
+sudo /usr/local/bin/k3s token delete abcdef
+```
+
+在 RKE2 上，指令會使用 `/var/lib/rancher/rke2/bin/kubectl`、`/etc/rancher/rke2/rke2.yaml` 和 `rke2 token delete`。RKE2 伺服器的伺服器權杖無法用這種方式撤銷。
+
+保留新伺服器上的 `/etc/zeatend/config.yaml`：升級時，`zeatend apply` 會再次讀取這個檔案。檔案內已撤銷的權杖無法再用來加入節點。
+
+</Step>
+</Steps>
+
+## RKE2 需要幾台伺服器
+
+etcd 需要過半數伺服器運作。三台伺服器中有一台停機時，叢集仍可運作；只有兩台時，任何一台停機都會讓叢集停止運作，所以請新增第三台。
+
+## 移除節點
+
+Zeatend 不會修改叢集內的物件。在伺服器上，把副本移出節點，再刪除節點：
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+接著從那台伺服器[解除安裝](uninstall.mdx) Zeatend 安裝的叢集。使用預設 `local-path` 儲存類別磁碟區的副本無法移到其他節點：資料會留在建立磁碟區的節點上。

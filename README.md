@@ -5,7 +5,7 @@
 
 English | [繁體中文](README.zh-TW.md) | [简体中文](README.zh-CN.md)
 
-# Zeabur Zeatend
+# Zeatend
 
 A Kubernetes cluster manager in the spirit of [k3sup](https://github.com/alexellis/k3sup). It
 sets up and manages K3s, RKE2 and KubeSolo clusters on hosts over SSH, with a terminal UI.
@@ -119,8 +119,7 @@ Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
 
 K3s and RKE2 deploy their packaged components as upstream ships them, Traefik among them. To run
 your own instead, turn them off with `disable`, such as `disable: [traefik, metrics-server]`.
-`local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these. On a
-cluster that zeabur-installer installed, `disable` starts as the list the installer turned off.
+`local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these.
 
 `apiServer.authenticationConfig` is the API server's
 [authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration),

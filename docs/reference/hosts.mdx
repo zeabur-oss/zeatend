@@ -1,0 +1,75 @@
+---
+title: Supported servers and files
+description: The servers Zeatend installs on, the releases it pins, the ports it needs, and the files it writes on each server.
+---
+
+## Supported servers
+
+| Requirement | Detail |
+| --- | --- |
+| System | Linux that boots with systemd. K3s, RKE2 and KubeSolo run as systemd services, so `apply` doesn't install on a host without it. |
+| CPU | x86-64 (`amd64`) or ARM64 (`arm64`). |
+| Access | Root through `sudo`. |
+| Memory | At least 1900 MiB for K3s, which a 2 GiB server has, and 1400 MiB for KubeSolo. RKE2 needs more. The host checks warn when the memory is too low. |
+| Disk | At least 10 GiB free on the file system that holds the cluster's data; 30 GiB or more leaves room for images, logs and volumes. |
+| Network | The server reaches GitHub, and for KubeSolo `dl.k8s.io`. |
+| Docker | Not on a KubeSolo host. |
+
+Before a change merges, CI installs each distribution on an Ubuntu 26.04 runner and runs the cluster tests.
+
+The host checks also warn when the clock isn't synchronized, swap is on, the kernel keeps memory for a crash kernel, another Kubernetes install left files on the host, or the cluster's data isn't on an encrypted disk.
+
+## Releases
+
+Each Zeatend release pins one release of each distribution and checks its downloads against digests built into Zeatend. `zeatend plan` prints the release it installs. This release pins:
+
+| Distribution | Release | Kubernetes |
+| --- | --- | --- |
+| K3s | `v1.37.2+k3s1` | 1.37 |
+| RKE2 | `v1.37.2+rke2r1` | 1.37 |
+| KubeSolo | `v1.3.0` | 1.36, because KubeSolo has no 1.37 release yet |
+
+Zeatend installs every distribution hardened to the CIS benchmark.
+
+## Ports
+
+These ports must be free on the server before the install. `zeatend plan` checks them.
+
+| Distribution | Server | Worker |
+| --- | --- | --- |
+| K3s | TCP 80, 443, 6443, 10250 | TCP 80, 443, 10250 |
+| RKE2 | TCP 80, 443, 6443, 9345, 10250 | TCP 80, 443, 10250 |
+| KubeSolo | TCP 80, 443, 6443, 10250, 10443 | None: no workers |
+
+On K3s and RKE2, ServiceLB holds ports 80 and 443 on every node for a LoadBalancer Service. For the ports between nodes, see [Add nodes](../operations/add-nodes.mdx#before-you-begin).
+
+## Files Zeatend writes
+
+`zeatend plan` lists the files it writes on this server. `zeatend uninstall` removes them and keeps `/etc/zeatend/config.yaml`.
+
+| File | K3s | RKE2 | KubeSolo |
+| --- | --- | --- | --- |
+| Zeatend's configuration | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` |
+| The distribution's configuration | `/etc/rancher/k3s/config.yaml` and `config.yaml.d/` | `/etc/rancher/rke2/config.yaml` and `config.yaml.d/` | `/etc/kubesolo/config.yaml` |
+| Kernel parameters for the CIS benchmark | `/etc/sysctl.d/60-k3s-cis.conf` | `/etc/sysctl.d/60-rke2-cis.conf` | None |
+| Audit policy (servers) | `/etc/rancher/k3s/audit-policy.yaml` | `/etc/rancher/rke2/audit-policy.yaml` | None |
+| Authentication configuration, with `apiServer.authenticationConfig` | `/etc/rancher/k3s/authentication/` | `/etc/rancher/rke2/authentication/` | `/etc/kubesolo/authentication/` |
+| Join token (joined nodes, mode 0600) | `/etc/rancher/k3s/zeatend-join-token` | `/etc/rancher/rke2/zeatend-join-token` | None |
+| Downloads and the install record | `/var/lib/rancher/zeatend/` | `/var/lib/rancher/zeatend/` | `/var/lib/zeatend/` |
+| Admin kubeconfig to copy to your computer | `/etc/rancher/k3s/k3s.yaml`, written by K3s | `/etc/rancher/rke2/rke2.yaml`, written by RKE2 | `/etc/zeatend/kubeconfig.yaml` |
+
+K3s servers also get `/etc/rancher/k3s/admission.yaml`, the manifests `zeabur-cis.yaml` and `zeatend-servicelb-policy.yaml` in `/var/lib/rancher/k3s/server/manifests/`, and the memory settings `/etc/systemd/system/k3s.service.d/zeatend-memory.conf`. RKE2 servers get `zeatend-servicelb-policy.yaml` in `/var/lib/rancher/rke2/server/manifests/`. KubeSolo gets its service `/etc/systemd/system/kubesolo.service`.
+
+On a system that restricts unconfined programs with AppArmor, such as Ubuntu 26.04, every node also gets containerd's AppArmor profile `/etc/apparmor.d/cri-containerd.apparmor.d`.
+
+The install record, `record.json` in the downloads folder, names the Zeatend version, the distribution and the release installed. `zeatend doctor` and upgrades read it.
+
+## Where the cluster keeps its data
+
+| Distribution | Cluster data | Volumes of the `local-path` storage class |
+| --- | --- | --- |
+| K3s | `/var/lib/rancher/k3s` | `/var/lib/rancher/k3s/storage` |
+| RKE2 | `/var/lib/rancher/rke2` | None: RKE2 has no local-path storage class |
+| KubeSolo | `/var/lib/kubesolo` | `/var/lib/kubesolo/local-path-storage` |
+
+Zeabur's local storage keeps volumes in `/var/lib/zeabur/storage`, and Longhorn in `/var/lib/longhorn`.

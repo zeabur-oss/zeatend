@@ -1,0 +1,16 @@
+- group: get-started
+  label: 开始使用
+  pages:
+    install: 安装集群和 Zeabur
+- group: operations
+  label: 运维
+  pages:
+    add-nodes: 添加节点
+    maintain: 维护集群
+    uninstall: 卸载
+- group: reference
+  label: 参考
+  pages:
+    commands: 命令
+    configuration: 配置文件
+    hosts: 支持的服务器与文件

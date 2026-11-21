@@ -1,0 +1,155 @@
+---
+title: 添加节点
+description: 在集群服务器上运行 zeatend node add，在新服务器上运行输出的命令，并在节点 Ready 后撤销加入令牌。
+---
+
+在集群的一台服务器上运行 `zeatend node add`，命令会输出新服务器加入集群所需的配置文件（包含加入令牌）和命令。加入前，新服务器上的 `zeatend plan` 会检查端口和到集群的网络延迟。
+
+| 发行版 | 可以添加的节点 |
+| --- | --- |
+| K3s | 工作节点。Zeatend 安装的 K3s 只有一台服务器节点。 |
+| RKE2 | 工作节点，以及通过 `--role server` 添加的服务器节点。 |
+| KubeSolo | 无法添加。KubeSolo 只运行一个节点。 |
+
+## 交给 Agent 操作
+
+在一台能通过 SSH 连接两台服务器的电脑上，将这段提示词粘贴到 Claude Code 或 Codex，并告知两台服务器的地址：
+
+```text
+按照 https://oss.zeabur.com/docs/zeatend/operations/add-nodes.md 将我的新服务器加入 Zeatend 集群。
+```
+
+## 开始前
+
+- **一台新的 Linux 服务器**：符合[支持的服务器](../reference/hosts.mdx)要求，并且能通过 `sudo` 获取 root 权限。
+- **相同的云服务商和区域**：所有节点使用同一家云服务商，并位于同一区域，可以分布在该区域的不同可用区。跨云服务商或跨区域的网络延迟会拖慢 etcd、Kubernetes API 和存储。
+- **开放节点间的端口**：在防火墙或安全组中放行以下端口：
+
+  | 方向 | K3s | RKE2 |
+  | --- | --- | --- |
+  | 连接服务器节点 | TCP 6443 | TCP 9345 和 6443 |
+  | 所有节点之间 | TCP 10250、UDP 8472（flannel VXLAN） | TCP 10250 和 9099、UDP 8472（Canal VXLAN） |
+  | 服务器节点之间 | 无 | TCP 2379 到 2381 |
+
+  不要向互联网开放 UDP 8472。如果节点间无法通过这个端口通信，不同节点上的副本就无法互相连接。
+
+<Steps>
+<Step>
+
+### 输出加入命令
+
+在集群的一台服务器节点上运行：
+
+```sh
+sudo zeatend node add
+```
+
+使用 RKE2 时，添加 `--role server` 可以加入服务器节点，而非工作节点。新服务器会通过当前节点的 `InternalIP` 连接；要使用其他地址，添加 `--address <address>`。
+
+输出如下，其中的命令要在新服务器上运行：
+
+```text
+On the new VM, as root, with this zeatend copied to /usr/local/bin:
+
+install -d -m 0700 /etc/zeatend
+(umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
+distribution: k3s
+join:
+  server: https://10.0.1.10:6443
+  role: worker
+  token: K10…::abcdef.0123456789abcdef
+  nodeNames: [vps-1]
+EOF
+zeatend plan    # what it installs, the distance to this server, the ports and warnings
+zeatend apply   # installs K3s and waits until the node is Ready
+
+The token joins workers for 1h. Revoke it once the node is Ready; the node keeps working without it.
+
+When the node is Ready, here:
+  /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+  /usr/local/bin/k3s token delete abcdef   # revokes the token
+```
+
+工作节点的令牌可用于加入工作节点，有效期为一小时。用 `--ttl` 可以修改有效期，例如 `--ttl 30m`，最长为 `24h`。每次运行 `node add` 都会创建新令牌。
+
+RKE2 服务器节点获取的是集群的服务器令牌，没有有效期，能用于加入服务器节点和工作节点。由于每台服务器节点都会运行 API 服务器并部署内置组件，配置还会复制当前服务器的 `disable` 列表和 `apiServer` 设置。不要将输出放到聊天或工单中。
+
+</Step>
+<Step>
+
+### 在新服务器上安装相同版本的 Zeatend
+
+在服务器节点上检查版本：
+
+```sh
+zeatend --version
+```
+
+在新服务器上，运行[下载 Zeatend](../get-started/install.mdx#下载-zeatend) 中的下载命令，将第一行改为查到的版本，例如 `version=v0.2.0`。
+
+</Step>
+<Step>
+
+### 在新服务器上运行命令
+
+在新服务器上用 `sudo -i` 打开 root shell，粘贴 `node add` 输出的命令，从 `install -d` 到 `zeatend apply`。
+
+`zeatend plan` 会显示发行版本、要写入的文件、到服务器节点的往返延迟，以及能连接的服务器端口：
+
+```text
+Distance         0.7 ms to the server (median of 5 TCP connects; 0.6 to 0.9)
+Ports on the server
+  open    TCP 6443  Kubernetes API and K3s supervisor
+  open    TCP 10250 kubelet
+  unknown UDP 8472  flannel VXLAN
+```
+
+如果端口显示 `CLOSED`，说明两台服务器之间无法通过该端口通信，继续操作前先放行。Zeatend 无法检查 UDP 端口，所以 UDP 8472 显示 `unknown` 属于正常情况。
+
+`zeatend apply` 会安装发行版、加入集群，并等待节点达到 `Ready` 状态：
+
+```text
+vps-2 joined the cluster as a worker. List the nodes on a server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+==> Waiting for node vps-2 to be Ready
+==> Done
+```
+
+</Step>
+<Step>
+
+### 检查节点并撤销令牌
+
+在第一台服务器上，运行 `node add` 最后输出的两条命令。第一条列出节点，新节点应显示 `Ready`：
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+```
+
+第二条撤销工作节点的令牌。将 `abcdef` 换成输出中的令牌 ID：
+
+```sh
+sudo /usr/local/bin/k3s token delete abcdef
+```
+
+使用 RKE2 时，命令使用 `/var/lib/rancher/rke2/bin/kubectl`、`/etc/rancher/rke2/rke2.yaml` 和 `rke2 token delete`。RKE2 服务器节点的服务器令牌无法通过这种方式撤销。
+
+保留新服务器上的 `/etc/zeatend/config.yaml`，升级时 `zeatend apply` 还会读取这个文件。文件中的令牌撤销后，就无法再用于加入节点。
+
+</Step>
+</Steps>
+
+## RKE2 需要多少台服务器节点
+
+etcd 需要多数服务器节点正常运行。集群有三台服务器节点时，一台停止运行后，集群仍可继续运行。如果只有两台，任意一台停止运行都会导致集群停止，所以应添加第三台。
+
+## 移除节点
+
+Zeatend 不会修改集群中的对象。在服务器节点上，将副本从要移除的节点迁出，再删除节点：
+
+```sh
+kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <node>
+```
+
+然后在该服务器上[卸载](uninstall.mdx) Zeatend 安装的集群。使用默认 `local-path` 存储类卷的副本无法迁到其他节点，数据会留在创建卷的节点上。

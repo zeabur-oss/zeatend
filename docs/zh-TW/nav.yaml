@@ -1,0 +1,16 @@
+- group: get-started
+  label: 開始使用
+  pages:
+    install: 安裝叢集與 Zeabur
+- group: operations
+  label: 維運
+  pages:
+    add-nodes: 新增節點
+    maintain: 維護叢集
+    uninstall: 解除安裝
+- group: reference
+  label: 參考
+  pages:
+    commands: 指令
+    configuration: 設定檔
+    hosts: 支援的伺服器與檔案

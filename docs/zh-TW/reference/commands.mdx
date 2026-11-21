@@ -1,0 +1,66 @@
+---
+title: 指令
+description: 各個 zeatend 指令的用途、旗標與結束碼。
+---
+
+在要設定的伺服器上，以 root 身分執行 `zeatend`。每個指令都會讀取設定檔，預設為 `/etc/zeatend/config.yaml`，也可以用 `--config <file>`（`-c`）指定其他檔案。`zeatend --help` 和 `zeatend <command> --help` 也會說明相同的指令與旗標。
+
+## zeatend
+
+沒有指定指令時，`sudo zeatend` 會開啟安裝畫面，顯示伺服器資訊與檢查結果，詢問發行版、API 伺服器的位址與 DNS 名稱，以及節點名稱，再顯示安裝計畫。選擇的設定會寫入設定檔，接著依照 `zeatend apply` 的方式安裝。畫面會依語系使用英文、繁體中文或簡體中文，按 F2 可以切換語言。如果終端機無法顯示中文，例如 Linux 主控台，就會使用英文。安裝畫面需要 root 權限與 systemd，而且只能設定第一台伺服器。
+
+## zeatend plan
+
+顯示 `apply` 將安裝的內容，並執行主機檢查，不會變更任何內容。
+
+| 旗標 | 說明 |
+| --- | --- |
+| `--json` | 以 JSON 輸出安裝計畫，不執行主機檢查。`apply --plan` 可以讀取這份輸出。 |
+
+如果節點要加入叢集，`plan` 也會測量到伺服器的往返時間，並檢查這台伺服器能連到對方的哪些連接埠。
+
+## zeatend apply
+
+安裝，或依設定調整既有安裝，可以安全地重複執行。如果主機檢查出現 `FAIL`，就會在變更任何內容之前停止。
+
+| 旗標 | 說明 |
+| --- | --- |
+| `--plan <file>` | 套用 `plan --json` 寫入檔案的安裝計畫。如果安裝計畫要寫入的檔案、已安裝的發行版本或安裝紀錄在產生計畫後有變動，就不會變更任何內容。 |
+| `--foreground` | 在目前的處理程序中安裝，不使用 systemd 單元。工作階段結束時，安裝也會停止。 |
+| `--json` | 以 JSON lines 輸出進度。 |
+
+主機有 systemd 時，安裝會在 `zeatend-install-<id>.service` 單元中執行，工作階段結束後仍會繼續。這個單元執行期間，`apply` 會顯示進度，不會啟動新的安裝。`journalctl -u 'zeatend-install-*'` 可以檢視完整輸出。
+
+## zeatend doctor
+
+檢查伺服器與上面的叢集，包括主機檢查、服務、API 伺服器、安裝紀錄、節點，以及 kubelet 為系統保留的記憶體；在 K3s 和 RKE2 伺服器上，也會確認機密變數是否加密儲存。每一行非 `ok` 的結果都會說明處理方式，詳見[檢查叢集](../operations/maintain.mdx#檢查叢集)。
+
+| 結束碼 | 說明 |
+| --- | --- |
+| 0 | 所有檢查都通過。 |
+| 1 | 有檢查出現警告。 |
+| 2 | 有檢查未通過。 |
+| 3 | 無法執行檢查，例如沒有 root 權限。 |
+
+## zeatend node add
+
+輸出新伺服器加入這個 K3s 或 RKE2 叢集所需的設定與指令，包含加入權杖。請在伺服器上執行，詳見[新增節點](../operations/add-nodes.mdx)。
+
+| 旗標 | 預設值 | 說明 |
+| --- | --- | --- |
+| `--role <role>` | `worker` | `worker`，RKE2 也可以用 `server`。 |
+| `--address <address>` | 這個節點的 `InternalIP` | 新伺服器連到這台伺服器時使用的位址。 |
+| `--ttl <time>` | `1h` | 工作節點權杖可供節點加入的有效時間，例如 `30m` 或 `2h`；範圍為 `1m` 到 `24h`。 |
+
+## zeatend uninstall
+
+從這台伺服器移除 K3s、RKE2 或 KubeSolo，以及 Zeatend 的檔案。執行前會顯示要移除和保留的內容，並詢問確認。磁碟區會保留，可以安全地重複執行，詳見[解除安裝](../operations/uninstall.mdx)。
+
+| 旗標 | 說明 |
+| --- | --- |
+| `--yes`, `-y` | 不詢問就移除。沒有終端機時必須使用。 |
+| `--delete-volumes` | 同時移除磁碟區：K3s 和 KubeSolo 的 local-path 儲存空間、`/var/lib/zeabur/storage` 與 `/var/lib/longhorn`。 |
+
+## 結束碼
+
+`plan`、`apply`、`node add` 和 `uninstall` 成功時以 0 結束，出錯時以 1 結束。在追蹤安裝單元進度時，按 Ctrl-C 停止追蹤，`apply` 會以 130 結束，安裝仍會繼續。

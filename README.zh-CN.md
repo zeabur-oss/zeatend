@@ -8,7 +8,7 @@
 [English](README.md) | [繁體中文](README.zh-TW.md) | 简体中文
 <!-- vale ZeaburZhCN.Script = YES -->
 
-# Zeabur Zeatend
+# Zeatend
 
 Zeatend 是管理 Kubernetes 集群的工具，思路和 [k3sup](https://github.com/alexellis/k3sup) 相近。它通过 SSH 在主机上安装和管理 K3s、RKE2 和 KubeSolo 集群，并提供终端界面。
 
@@ -95,7 +95,7 @@ host:
 
 K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安装 Kubernetes 1.37。KubeSolo 还没有 1.37 版，所以 KubeSolo `v1.3.0` 安装的是 Kubernetes 1.36.6。
 
-K3s 和 RKE2 按上游的默认设置，部署自带的组件，例如 Traefik。要改用自己安装的版本，就用 `disable` 关闭，例如 `disable: [traefik, metrics-server]`。`local-storage` 会关闭 K3s 的 local-path 存储类。KubeSolo 没有这些组件。由 zeabur-installer 安装的集群，`disable` 一开始就是 installer 关闭的那些组件。
+K3s 和 RKE2 按上游的默认设置，部署自带的组件，例如 Traefik。要改用自己安装的版本，就用 `disable` 关闭，例如 `disable: [traefik, metrics-server]`。`local-storage` 会关闭 K3s 的 local-path 存储类。KubeSolo 没有这些组件。
 
 `apiServer.authenticationConfig` 是 API 服务器的[认证配置](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，按 Kubernetes 文档的格式写，例如让 API 服务器接受某个 OpenID Connect 签发者的令牌：
 
