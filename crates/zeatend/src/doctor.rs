@@ -47,6 +47,7 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
             config.host.require_encrypted_disk,
             Network {
                 distribution: config.distribution,
+                version: config.version,
                 mirrors: config.registry_mirrors,
                 hosts: config.registry_hosts,
                 proxy: config.proxy,
@@ -56,6 +57,7 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
             config.host.require_encrypted_disk,
             Network {
                 distribution: config.distribution,
+                version: config.version,
                 mirrors: config.registry_mirrors,
                 hosts: config.registry_hosts,
                 proxy: config.proxy,
@@ -101,6 +103,8 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
 /// What `doctor` checks the network with, from the configuration.
 struct Network {
     distribution: Distribution,
+    /// The configured K3s or RKE2 release; `None` for the pinned one.
+    version: Option<String>,
     mirrors: BTreeMap<String, Vec<String>>,
     hosts: BTreeMap<String, RegistryHost>,
     proxy: Option<Proxy>,
@@ -114,7 +118,7 @@ impl Network {
         if downloads {
             let agent = download::agent(self.proxy.as_ref(), &[]);
             let arch = facts::arch(std::env::consts::ARCH);
-            for url in plan::release_urls(self.distribution, arch) {
+            for url in plan::release_urls(self.distribution, self.version.as_deref(), arch) {
                 findings.push(match agent.status(&url).await {
                     Ok(status) if status < 400 => Finding::DownloadsOk { url },
                     Ok(status) => Finding::DownloadsNo {

@@ -338,10 +338,11 @@ fn memory(rancher: Rancher, facts: &Facts, findings: &mut Vec<Finding>) -> Resul
     Ok(())
 }
 
-/// The URLs of the pinned release files `apply` downloads to install `distribution` on `arch`;
-/// none for an architecture zeatend does not install.
+/// The URLs of the release files `apply` downloads to install `distribution` on `arch`: the
+/// pinned release, or `version` with its checksum list. None for an architecture zeatend does
+/// not install.
 #[must_use]
-pub fn release_urls(distribution: Distribution, arch: &str) -> Vec<String> {
+pub fn release_urls(distribution: Distribution, version: Option<&str>, arch: &str) -> Vec<String> {
     let Some(rancher) = distribution.rancher() else {
         return [KUBESOLO.archive(arch), KUBECTL.binary(arch)]
             .into_iter()
@@ -349,7 +350,7 @@ pub fn release_urls(distribution: Distribution, arch: &str) -> Vec<String> {
             .map(|asset| asset.url)
             .collect();
     };
-    cluster_plan(rancher, None, arch, &mut Vec::new()).map_or_else(
+    cluster_plan(rancher, version, arch, &mut Vec::new()).map_or_else(
         |_| Vec::new(),
         |cluster| cluster.downloads().map(|d| d.url.clone()).collect(),
     )
@@ -446,18 +447,18 @@ mod tests {
 
     #[test]
     fn the_release_urls_are_the_downloads_of_the_pinned_release() {
-        let k3s = release_urls(Distribution::K3s, "arm64");
+        let k3s = release_urls(Distribution::K3s, None, "arm64");
         assert!(k3s.iter().any(|url| url.ends_with("/k3s-arm64")), "{k3s:?}");
         assert!(
             k3s.iter().any(|url| url.ends_with("/install.sh")),
             "{k3s:?}"
         );
-        let rke2 = release_urls(Distribution::Rke2, "amd64");
+        let rke2 = release_urls(Distribution::Rke2, None, "amd64");
         assert!(
             rke2.iter().any(|url| url.contains("rke2-images-core")),
             "{rke2:?}"
         );
-        let kubesolo = release_urls(Distribution::KubeSolo, "amd64");
+        let kubesolo = release_urls(Distribution::KubeSolo, None, "amd64");
         assert!(
             kubesolo
                 .iter()
@@ -470,10 +471,21 @@ mod tests {
             Distribution::KubeSolo,
         ] {
             assert!(
-                release_urls(distribution, "riscv64").is_empty(),
+                release_urls(distribution, None, "riscv64").is_empty(),
                 "{distribution:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_release_urls_follow_a_configured_version_and_its_checksum_list() {
+        let k3s = release_urls(Distribution::K3s, Some("v1.36.0+k3s1"), "arm64");
+        assert!(
+            k3s.iter()
+                .any(|url| url.contains("/v1.36.0%2Bk3s1/") && url.ends_with("/k3s-arm64")),
+            "{k3s:?}"
+        );
+        assert!(k3s.iter().any(|url| url.contains("sha256sum")), "{k3s:?}");
     }
 
     fn config(yaml: &str) -> Config {
