@@ -166,6 +166,8 @@ fn pass_on(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::*;
     use crate::progress::Event;
 
@@ -249,21 +251,26 @@ mod tests {
 
     #[test]
     fn a_message_can_be_bytes_or_missing() {
-        let entry = |message: &str| {
-            let line = format!(
-                r#"{{"__CURSOR":"s=1;i=2","_SYSTEMD_UNIT":"{DONE_UNIT}","MESSAGE":{message}}}"#
-            );
-            Entry::parse(&line, DONE_UNIT).unwrap().output.unwrap()
+        let entry = |message: Value| {
+            let line =
+                json!({"__CURSOR": "s=1;i=2", "_SYSTEMD_UNIT": DONE_UNIT, "MESSAGE": message});
+            Entry::parse(&line.to_string(), DONE_UNIT)
+                .unwrap()
+                .output
+                .unwrap()
         };
         // "café \x1b" and an invalid byte: journalctl prints such a message as an array.
         assert_eq!(
-            entry("[99,97,102,195,169,32,27,255]"),
+            entry(json!([99, 97, 102, 195, 169, 32, 27, 255])),
             "caf\u{e9} \u{1b}\u{fffd}"
         );
-        assert_eq!(entry("null"), "");
-        assert_eq!(entry(r#""plain""#), "plain");
+        assert_eq!(entry(Value::Null), "");
+        assert_eq!(entry(json!("plain")), "plain");
         assert_eq!(Entry::parse("-- No entries --", DONE_UNIT), None);
-        assert_eq!(Entry::parse(r#"{"MESSAGE":"no cursor"}"#, DONE_UNIT), None);
+        assert_eq!(
+            Entry::parse(&json!({"MESSAGE": "no cursor"}).to_string(), DONE_UNIT),
+            None
+        );
     }
 
     #[test]

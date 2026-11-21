@@ -43,6 +43,15 @@ pictures that changed onto it. Look at them in the release pull request's diff.
 A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds a change file in
 `.changeset/` (`knope document-change`) or carries the label `changelog: none`.
 
+## JSON in tests
+
+- **`json!`, not raw strings.** Tests build JSON with `serde_json::json!`. They compare whole
+  objects (`assert_eq!(serde_json::to_value(&typed)?, json!({ … }))`) or deserialize one
+  (`serde_json::from_value::<Typed>(json!({ … }))`), and never index into a `Value`.
+- **A raw string only where the exact bytes are the subject**: malformed or byte-exact parser
+  input, a signature over a body, a golden file, NDJSON. A one-line comment says why.
+- **Production code** reads and writes a known shape through a typed struct, not `json!`.
+
 ## Releases
 
 A maintainer runs the Release pull request workflow (`.github/workflows/release-pr.yml`). knope
