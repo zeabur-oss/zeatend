@@ -11,6 +11,8 @@ install -d -m 0700 /etc/zeatend
 (umask 077; cat > /etc/zeatend/config.yaml) <<'EOF'
 distribution: k3s
 version: v1.37.1+k3s1
+storage:
+  longhorn: true
 join:
   server: https://10.0.1.10:6443
   role: worker

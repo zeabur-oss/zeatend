@@ -59,7 +59,7 @@ The Zeabur catalog installs Longhorn on clusters of more than one node. Longhorn
 - It enables and starts `iscsid`.
 - When multipathd runs, it writes `/etc/multipath/conf.d/zeatend-longhorn.conf`, which keeps multipathd off Longhorn's disks, and restarts multipathd when that file changed.
 
-`plan` lists only what the node lacks, so an `apply` right after another changes nothing. `zeatend doctor` reports what a node lacks. Zeatend doesn't install Longhorn itself. `uninstall` removes the two files and keeps the packages.
+`plan` lists only what the node lacks, so an `apply` right after another changes nothing. `zeatend doctor` reports what a node lacks. `zeatend node add` turns it on in the configuration of each new node, and tells you to turn it on on the server where you run it. Zeatend doesn't install Longhorn itself. `uninstall` removes the two files and keeps the packages.
 
 ## A node that joins
 
@@ -84,4 +84,4 @@ join:
 | `join.nodeNames` | The names of the cluster's nodes, so this node takes a different name. |
 | `disable`, `apiServer` | RKE2 servers only. Give every server the same values, because each one deploys the packaged components and runs an API server. |
 | `host` | As for the first server. `tlsSan` applies to servers only. |
-| `storage` | As for the first server. `zeatend node add` copies the server's `storage`. |
+| `storage` | `zeatend node add` turns on `storage.longhorn`. |
