@@ -1,11 +1,13 @@
 ---
 title: 安裝叢集與 Zeabur 開源版
-description: 在 Linux 伺服器上下載 Zeatend，選擇 K3s、RKE2 或 KubeSolo，檢查安裝計畫並安裝叢集，再安裝 Zeabur 開源版。
+description: 在 Linux 伺服器上下載 Zeatend，在安裝畫面或用指令選擇 K3s、RKE2 或 KubeSolo 並安裝叢集，再安裝 Zeabur 開源版。
 ---
 
 照這一頁做完，Linux 伺服器上就會有 Zeatend 建立的 Kubernetes 叢集，`zeatend doctor` 也會回報叢集運作正常。最後一步會連到 Zeabur 開源版的安裝文件。
 
 想在新伺服器上一次裝好 Zeabur 開源版，請照[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)操作。那份文件會用 K3s 完成本頁的步驟；本頁則涵蓋所有發行版，並說明每個步驟。
+
+大多數人用 Zeatend 的安裝畫面安裝。也可以交給 Agent，或照[用指令安裝](#用指令安裝)一步步執行指令。
 
 ## 交給 Agent 安裝
 
@@ -16,6 +18,8 @@ description: 在 Linux 伺服器上下載 Zeatend，選擇 K3s、RKE2 或 KubeSo
 ```
 
 Agent 會顯示安裝計畫與主機檢查結果，等你確認後才安裝。
+
+Agent 不能操作安裝畫面，會改用[用指令安裝](#用指令安裝)的步驟。
 
 ## 開始之前
 
@@ -31,7 +35,6 @@ Agent 會顯示安裝計畫與主機檢查結果，等你確認後才安裝。
 
 <Steps>
 <Step>
-
 ### 下載 Zeatend
 
 在伺服器上執行這些指令。第一行會從 [GitHub Releases](https://github.com/zeabur-oss/zeatend/releases) 取得最新版本。要安裝指定版本，把第一行換成 `version=v0.2.0` 或你要的版本。
@@ -48,10 +51,55 @@ curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/ze
 ```
 
 下載內容與發行檔相符時，`sha256sum` 會印出 `OK`。`zeatend` 是單一靜態執行檔，不需要其他套件。
-
 </Step>
 <Step>
+### 在安裝畫面安裝
 
+```sh
+sudo zeatend
+```
+
+安裝畫面分成四步。按 F2 可以在英文、繁體中文和簡體中文之間切換。
+
+1. **伺服器**：列出主機資訊和主機檢查。用上下鍵選 K3s、RKE2 或 KubeSolo，再按 Enter。要注意的檢查項目都會寫出怎麼處理。
+
+   ![伺服器畫面：主機資訊、K3s、RKE2 或 KubeSolo 的選項，以及主機檢查](../../screens/80x24/zh_TW-server.svg)
+
+2. **連線方式**：填你的電腦連到這台伺服器用的位址。要用 DNS 名稱連 API 伺服器，也一起填上。節點名稱可以不填。按 Tab 換到下一欄。
+3. **確認**：列出版本、位址和設定檔。按 Enter 後，Zeatend 會把你的選擇寫進 `/etc/zeatend/config.yaml`，開始安裝。
+
+   ![確認畫面：Kubernetes 版本、位址、DNS 名稱，以及接下來會做什麼](../../screens/80x24/zh_TW-review.svg)
+
+4. **安裝**：顯示進度，約需幾分鐘。安裝在 systemd 單元裡執行，按 Ctrl+C 關掉畫面或 SSH 斷線都會繼續；再執行一次 `sudo zeatend` 就能接著看。完成後，畫面會列出查看節點、從自己的電腦使用叢集的指令。
+
+   ![安裝畫面：安裝完成，叢集已經可以使用](../../screens/80x24/zh_TW-done.svg)
+
+這些指令裡的 kubeconfig 是叢集管理員的認證資訊，只能放在伺服器或你自己的電腦上。
+</Step>
+<Step>
+### 檢查叢集
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` 會再次檢查主機，再檢查服務、API 伺服器、安裝紀錄、節點，以及 kubelet 為系統保留的記憶體。K3s 和 RKE2 還會檢查機密變數是否加密儲存。每個非 `ok` 的項目都會列出要執行的指令。全部通過時結束碼為 0，有警告時為 1，有失敗時為 2。
+</Step>
+<Step>
+### 安裝 Zeabur 開源版
+
+使用 K3s 時，從 Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)裡的**用 Zeatend 裝好 Kubernetes** 開始操作。這一步會在 `/etc/zeatend/config.yaml` 加上 `apiServer.authenticationConfig`，讓 API 伺服器接受 Zeabur Identity 的登入，再執行一次 `zeatend apply`。接著用一個 `helm install` 就能安裝 Zeabur 開源版。
+
+使用 RKE2 或 KubeSolo 時，請照[把 Zeabur 開源版裝進既有叢集](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)操作。
+</Step>
+</Steps>
+
+## 用指令安裝
+
+要寫成腳本、交給 Agent，或想自己執行每一步時，可以不用安裝畫面，改用指令。先下載 Zeatend，再依序做下面三步，完成後回到[檢查叢集](#檢查叢集)。
+
+<Steps>
+<Step>
 ### 寫入設定檔
 
 Zeatend 會讀取 `/etc/zeatend/config.yaml`。沒有這個檔案時，會用預設值安裝 K3s，所以選用 K3s 可以略過這一步。
@@ -64,12 +112,8 @@ echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
 ```
 
 使用 KubeSolo 時，把 `rke2` 換成 `kubesolo`。如果也要用 DNS 名稱連到 API 伺服器，把名稱加到 `host.tlsSan`。[設定檔](../reference/configuration.mdx)列出所有設定。
-
-你也可以直接執行 `sudo zeatend`，不加子指令。安裝畫面會詢問發行版、API 伺服器的位址與 DNS 名稱，以及節點名稱，接著顯示安裝計畫、寫入設定檔，等你確認後安裝。介面支援英文、繁體中文與簡體中文，按 F2 可以切換語言。完成後，直接跳到[檢查叢集](#檢查叢集)。
-
 </Step>
 <Step>
-
 ### 檢查安裝計畫
 
 ```sh
@@ -88,10 +132,8 @@ sudo zeatend plan
 ```
 
 出現 `FAIL` 就會停止安裝。先解決該行指出的問題，再執行一次 `plan`。`warn` 不會阻止安裝，每一行都會列出解決問題的指令。
-
 </Step>
 <Step>
-
 ### 安裝叢集
 
 ```sh
@@ -122,27 +164,6 @@ Whoever has this file is cluster admin; keep it like an SSH key.
 ```
 
 輸出列出的 kubeconfig 是叢集管理員的認證資訊，只能放在伺服器或你自己的電腦上。`apply` 可以安全地重複執行，會把伺服器調整成設定檔指定的狀態。
-
-</Step>
-<Step>
-
-### 檢查叢集
-
-```sh
-sudo zeatend doctor
-```
-
-`doctor` 會再次檢查主機，再檢查服務、API 伺服器、安裝紀錄、節點，以及 kubelet 為系統保留的記憶體。K3s 和 RKE2 還會檢查機密變數是否加密儲存。每個非 `ok` 的項目都會列出要執行的指令。全部通過時結束碼為 0，有警告時為 1，有失敗時為 2。
-
-</Step>
-<Step>
-
-### 安裝 Zeabur 開源版
-
-使用 K3s 時，從 Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)裡的**用 Zeatend 裝好 Kubernetes** 開始操作。這一步會在 `/etc/zeatend/config.yaml` 加上 `apiServer.authenticationConfig`，讓 API 伺服器接受 Zeabur Identity 的登入，再執行一次 `zeatend apply`。接著用一個 `helm install` 就能安裝 Zeabur 開源版。
-
-使用 RKE2 或 KubeSolo 時，請照[把 Zeabur 開源版裝進既有叢集](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)操作。
-
 </Step>
 </Steps>
 
