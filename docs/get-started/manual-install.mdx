@@ -13,6 +13,7 @@ Most of the commands below are the same on every distribution. Where they differ
 
 - **The server**, with Zeatend installed and `/etc/zeatend/config.yaml` written, as in [Install a cluster](install.mdx) up to **Write the configuration**. On a server without access to GitHub, download Zeatend's archive on another computer, check it against `SHA256SUMS` and copy it over.
 - **`jq`** on the server. It reads the plan.
+- **No `version`** in the configuration, so Zeatend installs the pinned release. For a K3s or RKE2 `version` other than the pinned one, Zeatend has no digests built in, so `apply` downloads the files from GitHub again to check them against the release's own checksum list.
 - **A computer that reaches GitHub**, with `curl`, `jq` and `sha256sum`, and SSH access to the server. For KubeSolo it must also reach `dl.k8s.io`.
 
 Each section ends with `sudo zeatend doctor` and the lines it prints at that point. A line that isn't `ok` names what to fix. `doctor` doesn't change anything, so run it as often as you like.

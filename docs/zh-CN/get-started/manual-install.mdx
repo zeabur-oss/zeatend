@@ -13,6 +13,7 @@ description: 亲手逐步执行 zeatend apply 的每一步，从主机检查到�
 
 - **服务器**上已装好 Zeatend，并写好 `/etc/zeatend/config.yaml`，做法见[安装集群](install.mdx)中“编写配置”及之前的步骤。服务器访问不了 GitHub 时，在另一台电脑上下载 Zeatend 的压缩包，用 `SHA256SUMS` 校验后再复制过去。
 - 服务器上要有 **`jq`**，用来读取安装计划。
+- 配置中**不设置 `version`**，使用固定版本。K3s 或 RKE2 的 `version` 不是固定版本时，Zeatend 没有内置的哈希值，`apply` 会从 GitHub 重新下载，再用该发行版本自己的校验和列表校验。
 - **一台能访问 GitHub 的电脑**，装有 `curl`、`jq` 和 `sha256sum`，并能通过 SSH 连接服务器。使用 KubeSolo 时，这台电脑还要能访问 `dl.k8s.io`。
 
 每一节最后都会运行 `sudo zeatend doctor`，并列出此时应有的输出。不是 `ok` 的行会指出要修复什么。`doctor` 不会改动任何东西，随时都可以运行。
