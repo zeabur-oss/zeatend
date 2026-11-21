@@ -136,7 +136,7 @@ sudo zeatend doctor
 <Step>
 ### 安裝 Zeabur 開源版
 
-使用 K3s 時，從 Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)裡的**用 Zeatend 裝好 Kubernetes** 開始操作。這一步會在 `/etc/zeatend/config.yaml` 加上 `apiServer.authenticationConfig`，讓 API 伺服器接受 Zeabur Identity 的登入，再執行一次 `zeatend apply`。接著用一個 `helm install` 就能安裝 Zeabur 開源版。
+使用 K3s 時，從 Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)裡的**讓叢集信任登入**開始操作。這一步會在 `/etc/zeatend/config.yaml` 加上 `apiServer.authenticationConfig`，讓 API 伺服器接受 Zeabur Identity 的登入，再執行一次 `zeatend apply`。接著用一個 `helm install` 就能安裝 Zeabur 開源版。
 
 使用 RKE2 或 KubeSolo 時，請照[把 Zeabur 開源版裝進既有叢集](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)操作。
 </Step>
