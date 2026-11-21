@@ -255,7 +255,7 @@ fn standing_findings(distribution: Rancher, role: Role, token_pinned: bool) -> V
     if role == Role::Server {
         findings.push(Finding::ServersHa);
     }
-    // RKE2 has no storage class until the Zeabur catalog installs one.
+    // RKE2 has no storage class until the Zeabur Catalog installs one.
     if distribution == Rancher::K3s {
         findings.push(Finding::LocalStorage);
     }

@@ -909,7 +909,7 @@ impl Items {
 /// turns off, for zeatend's `disable`.
 ///
 /// zeabur-installer turns off Traefik, metrics-server and K3s's `local-storage`, as the Zeabur
-/// catalog installs its own; turning them on again would give two of each.
+/// Catalog installs its own; turning them on again would give two of each.
 ///
 /// # Errors
 ///
