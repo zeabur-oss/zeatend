@@ -3,6 +3,8 @@
 //! The same configuration and host facts give the same plan, byte for byte, so `plan` can be
 //! reviewed, diffed and tested.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
@@ -11,6 +13,7 @@ use crate::finding::{Check, Finding};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::precondition::Preconditions;
 use crate::record::{Changes, Record};
+use crate::registry::{self, Password, Proxy};
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, kubesolo, node_name};
@@ -53,6 +56,13 @@ pub struct Facts {
     /// See [`crate::kubesolo::Options::installer_webhook`].
     #[serde(default)]
     pub installer_webhook: bool,
+    /// The files of registry and proxy settings that zeatend wrote on the host before, among
+    /// [`crate::registry::optional_files`] and the `hosts.toml` files of `KubeSolo`.
+    #[serde(default)]
+    pub registry_files: Vec<String>,
+    /// The password of each registry host with a `passwordFile`, read on the host.
+    #[serde(skip)]
+    pub registry_passwords: BTreeMap<String, Password>,
 }
 
 impl Facts {
@@ -96,6 +106,8 @@ pub struct Plan {
     pub host_files: Vec<HostFile>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub removed_files: Vec<String>,
     /// What `apply` changes against the install record; `None` on a first install.
     pub changes: Option<Changes>,
     /// What to read before applying.
@@ -153,6 +165,8 @@ pub struct ClusterPlan {
     /// K3s's `install.sh`, always the pinned one: it writes the systemd unit and the uninstall
     /// script for any release.
     pub install_script: Option<Download>,
+    /// The proxy the downloads go through; `None` leaves it to the environment.
+    pub proxy: Option<Proxy>,
 }
 
 impl ClusterPlan {
@@ -178,6 +192,8 @@ pub struct KubeSoloPlan {
     pub download: Download,
     /// The kubectl zeatend uses; `KubeSolo` ships none.
     pub kubectl: Download,
+    /// The proxy the downloads go through; `None` leaves it to the environment.
+    pub proxy: Option<Proxy>,
 }
 
 /// One download.
@@ -222,12 +238,13 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
         memory(rancher, facts, &mut findings)?;
-        let cluster = cluster_plan(
+        let mut cluster = cluster_plan(
             rancher,
             config.version.as_deref(),
             &facts.arch,
             &mut findings,
         )?;
+        cluster.proxy.clone_from(&config.proxy);
         let mut files = rancher.server_files(&cluster::Options {
             tls_san: config.host.tls_san.clone(),
             tuning,
@@ -253,6 +270,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             kubernetes: KUBESOLO.kubernetes.to_owned(),
             download: KUBESOLO.archive(arch).ok_or_else(no_release)?.into(),
             kubectl: KUBECTL.binary(arch).ok_or_else(no_release)?.into(),
+            proxy: config.proxy.clone(),
         };
         let files = kubesolo::host_files(&kubesolo::Options {
             node_name: node_name.clone(),
@@ -264,6 +282,11 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         })?;
         (Release::KubeSolo(solo), files)
     };
+    host_files.extend(config.registry(&facts.registry_passwords).files(
+        config.distribution,
+        Role::Server,
+        &facts.node_ips,
+    )?);
     host_files.extend(facts.apparmor_profile());
     upgrade::check_release(
         facts.record.as_ref(),
@@ -285,6 +308,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         memory_tier,
         tuning,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
+        removed_files: registry::removed(&facts.registry_files, &host_files),
         host_files,
         changes,
         findings: findings.into_iter().map(Check::from).collect(),
@@ -393,6 +417,7 @@ pub(crate) fn cluster_plan(
         release,
         images,
         install_script,
+        proxy: None,
     })
 }
 
@@ -419,6 +444,8 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            registry_files: Vec::new(),
+            registry_passwords: BTreeMap::new(),
         }
     }
 

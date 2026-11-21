@@ -48,6 +48,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
     push(&mut s, "");
     s.push_str(&changes(plan.changes.as_ref(), unit));
     files(&mut s, &plan.host_file_paths, None);
+    removed(&mut s, &plan.removed_files);
     findings(&mut s, &plan.findings);
     s
 }
@@ -115,6 +116,7 @@ pub(crate) fn join_plan(plan: &JoinPlan) -> String {
         cluster.distribution.paths().join_token_file
     );
     files(&mut s, &plan.host_file_paths, Some(&token));
+    removed(&mut s, &plan.removed_files);
     match &plan.rtt {
         Some(rtt) => push(
             &mut s,
@@ -141,6 +143,18 @@ fn files(s: &mut String, paths: &[String], extra: Option<&str>) {
     }
     if let Some(extra) = extra {
         push(s, &format!("  {extra}"));
+    }
+    push(s, "");
+}
+
+/// The files of registry and proxy settings that `apply` removes, if any.
+fn removed(s: &mut String, paths: &[String]) {
+    if paths.is_empty() {
+        return;
+    }
+    push(s, "Removes");
+    for path in paths {
+        push(s, &format!("  {path}"));
     }
     push(s, "");
 }
@@ -273,6 +287,8 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            registry_files: Vec::new(),
+            registry_passwords: std::collections::BTreeMap::new(),
         }
     }
 

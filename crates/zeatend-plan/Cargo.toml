@@ -9,6 +9,7 @@ publish.workspace = true
 readme = "README.md"
 
 [dependencies]
+base64.workspace = true
 k8s-openapi.workspace = true
 semver.workspace = true
 serde.workspace = true

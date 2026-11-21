@@ -14,6 +14,7 @@ pub mod plan;
 pub mod ports;
 pub mod precondition;
 pub mod record;
+pub mod registry;
 pub mod rke2;
 pub mod token;
 pub mod tuning;

@@ -687,6 +687,7 @@ impl Rancher {
         paths
             .into_iter()
             .map(Remove::Tree)
+            .chain(crate::registry::footprint(self.distribution(), role))
             .chain([Remove::EmptyDir(parent(layout.state_dir))])
             .collect()
     }

@@ -103,6 +103,7 @@ async fn run_cluster(
     let install = ClusterInstall {
         cluster,
         files: &plan.host_files,
+        removed: &plan.removed_files,
         server: true,
         changed: false,
     };
@@ -199,6 +200,12 @@ pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> 
 pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
     let layout = config.distribution.layout();
     let mut facts = facts::read().await?;
+    crate::registry::read(
+        &mut facts,
+        config.distribution,
+        Role::Server,
+        &config.registry_hosts,
+    )?;
     facts.record = crate::installer::read_record(config.distribution).await?;
     if facts.record.is_some() {
         facts.kubernetes = running_kubernetes(&admin_kubectl(config.distribution)).await;
@@ -210,6 +217,7 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
                 let mut pending = pending(&ClusterInstall {
                     cluster,
                     files: &plan.host_files,
+                    removed: &plan.removed_files,
                     server: true,
                     changed: false,
                 })
@@ -221,7 +229,10 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
                 (pending, false)
             }
             Release::KubeSolo(solo) => (
-                changed_files(plan.host_files.iter()),
+                changed_files(plan.host_files.iter())
+                    .into_iter()
+                    .chain(plan.removed_files.iter().cloned())
+                    .collect(),
                 binary_outdated(Path::new(layout.binary), &solo.version).await,
             ),
         };
@@ -232,6 +243,7 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
     }
     plan.preconditions = preconditions(
         &plan.host_files,
+        &plan.removed_files,
         Path::new(layout.binary),
         plan.facts.record.as_ref(),
         &Record::new(plan.distribution, plan.release.version()),
@@ -247,6 +259,7 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
 /// on the host now and leaves there.
 pub(crate) async fn preconditions(
     files: &[HostFile],
+    removed: &[String],
     binary: &Path,
     found_record: Option<&Record>,
     record: &Record,
@@ -258,6 +271,13 @@ pub(crate) async fn preconditions(
             leaves: Some(download::sha256(file.content.as_bytes())),
         };
         found.insert(file.path.clone(), change);
+    }
+    for path in removed {
+        let change = Change {
+            found: file_sha256(Path::new(path))?,
+            leaves: None,
+        };
+        found.insert(path.clone(), change);
     }
     Ok(Preconditions {
         files: found,
@@ -471,6 +491,8 @@ async fn install_release(cluster: &ClusterPlan, server: bool) -> Result<(), Inst
 pub(crate) struct ClusterInstall<'a> {
     pub(crate) cluster: &'a ClusterPlan,
     pub(crate) files: &'a [HostFile],
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub(crate) removed: &'a [String],
     /// A server runs the control plane; an RKE2 server runs etcd as the `etcd` user.
     pub(crate) server: bool,
     /// Something the caller wrote already needs a restart.
@@ -491,6 +513,7 @@ impl ClusterInstall<'_> {
 /// The paths `install_cluster` would write; a running cluster restarts when there is one.
 async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallError> {
     let mut paths = changed_files(install.files.iter());
+    paths.extend(install.removed.iter().cloned());
     paths.extend(release_pending(install.cluster, install.unit()).await);
     Ok(paths)
 }
@@ -511,6 +534,7 @@ pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool
         unit,
         state_dir: distribution.distribution().layout().state_dir,
         files: install.files,
+        removed: install.removed,
         changed: install.changed || release,
     };
     converge
@@ -548,6 +572,8 @@ pub(crate) struct Converge<'a> {
     /// Where it records that a restart is owed.
     pub(crate) state_dir: &'static str,
     pub(crate) files: &'a [HostFile],
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub(crate) removed: &'a [String],
     /// The release or something the caller wrote already needs a restart.
     pub(crate) changed: bool,
 }
@@ -562,10 +588,12 @@ impl Converge<'_> {
     ) -> Result<bool, InstallError> {
         let changed = self.changed
             || restart_owed(self.state_dir)
+            || !self.removed.is_empty()
             || !changed_files(self.files.iter()).is_empty();
         if changed {
             owe_restart(self.state_dir)?;
         }
+        crate::registry::remove(self.removed)?;
         for file in self.files {
             files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
         }
@@ -604,7 +632,7 @@ pub(crate) async fn load_apparmor_profile<'a>(
 /// Downloads the release into `dir` and its image archives into the image directory, and checks
 /// each against its pinned digest or, for a release that is not pinned, the release's list.
 async fn fetch_release(cluster: &ClusterPlan, dir: &Path) -> Result<(), InstallError> {
-    let agent = download::agent();
+    let agent = download::agent(cluster.proxy.as_ref());
     let images = cluster.distribution.paths().images_dir;
     let mut list = None;
     for d in cluster.downloads() {
@@ -693,19 +721,27 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            registry_files: Vec::new(),
+            registry_passwords: std::collections::BTreeMap::new(),
         };
         let mut plan = plan::plan(&Config::parse("{}").unwrap(), &facts).unwrap();
-        plan.preconditions = preconditions(&files, &binary, None, &record).await.unwrap();
+        plan.preconditions = preconditions(&files, &[], &binary, None, &record)
+            .await
+            .unwrap();
         let plan_file = dir.path().join("plan.json");
         fs::write(&plan_file, serde_json::to_string_pretty(&plan).unwrap()).unwrap();
         let reviewed = read_reviewed(&plan_file).unwrap();
         assert_eq!(reviewed, plan.preconditions);
 
-        let now = preconditions(&files, &binary, None, &record).await.unwrap();
+        let now = preconditions(&files, &[], &binary, None, &record)
+            .await
+            .unwrap();
         check_reviewed(Some(&reviewed), &now).unwrap();
 
         fs::write(&path, "edited").unwrap();
-        let now = preconditions(&files, &binary, None, &record).await.unwrap();
+        let now = preconditions(&files, &[], &binary, None, &record)
+            .await
+            .unwrap();
         assert!(matches!(
             check_reviewed(Some(&reviewed), &now),
             Err(InstallError::Stale(Stale::File(changed))) if changed == files[0].path

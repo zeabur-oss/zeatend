@@ -33,6 +33,8 @@ fn facts() -> Facts {
         apparmor_restricts_unconfined: false,
         k3s_own_network: false,
         installer_webhook: false,
+        registry_files: Vec::new(),
+        registry_passwords: std::collections::BTreeMap::new(),
     }
 }
 

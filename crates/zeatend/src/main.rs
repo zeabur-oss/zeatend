@@ -10,6 +10,7 @@ mod kubesolo;
 mod load;
 mod node;
 mod output;
+mod registry;
 mod render;
 mod screens;
 mod uninstall;
