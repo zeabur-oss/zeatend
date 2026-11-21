@@ -69,6 +69,8 @@ impl Event {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{Value, json};
+
     use super::*;
 
     #[test]
@@ -78,19 +80,19 @@ mod tests {
                 Event::Step {
                     text: "Checking the host".to_owned(),
                 },
-                r#"{"event":"step","text":"Checking the host"}"#,
+                json!({"event": "step", "text": "Checking the host"}),
             ),
             (
                 Event::Note {
                     text: "ok   memory".to_owned(),
                 },
-                r#"{"event":"note","text":"ok   memory"}"#,
+                json!({"event": "note", "text": "ok   memory"}),
             ),
             (
                 Event::Line {
                     text: "K3s v1.37.2+k3s1\n  on node-1".to_owned(),
                 },
-                r#"{"event":"line","text":"K3s v1.37.2+k3s1\n  on node-1"}"#,
+                json!({"event": "line", "text": "K3s v1.37.2+k3s1\n  on node-1"}),
             ),
             (
                 Event::Download {
@@ -98,7 +100,7 @@ mod tests {
                     total: Some(4096),
                     rate: 512,
                 },
-                r#"{"event":"download","done":1024,"total":4096,"rate":512}"#,
+                json!({"event": "download", "done": 1024, "total": 4096, "rate": 512}),
             ),
             (
                 Event::Download {
@@ -106,20 +108,20 @@ mod tests {
                     total: None,
                     rate: 0,
                 },
-                r#"{"event":"download","done":1,"total":null,"rate":0}"#,
+                json!({"event": "download", "done": 1, "total": null, "rate": 0}),
             ),
-            (Event::DownloadEnd, r#"{"event":"download_end"}"#),
-            (Event::Done, r#"{"event":"done"}"#),
+            (Event::DownloadEnd, json!({"event": "download_end"})),
+            (Event::Done, json!({"event": "done"})),
             (
                 Event::Failed {
                     error: "the host is not ready".to_owned(),
                 },
-                r#"{"event":"failed","error":"the host is not ready"}"#,
+                json!({"event": "failed", "error": "the host is not ready"}),
             ),
         ];
-        for (event, json) in cases {
+        for (event, expected) in cases {
             let line = event.to_line();
-            assert_eq!(line, json);
+            assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), expected);
             assert!(!line.contains('\n'), "{line}");
             assert_eq!(Event::parse(&line), Some(event));
         }
@@ -130,13 +132,14 @@ mod tests {
         for line in [
             "",
             "thread 'main' panicked at src/main.rs:1:1",
-            r#"{"event":"progress_bar","value":3}"#,
-            r#"{"text":"no tag"}"#,
-            "[1,2,3]",
+            &json!({"event": "progress_bar", "value": 3}).to_string(),
+            &json!({"text": "no tag"}).to_string(),
+            &json!([1, 2, 3]).to_string(),
         ] {
             assert_eq!(Event::parse(line), None, "{line}");
         }
-        assert_eq!(Event::parse("{\"event\":\"done\"}\n"), Some(Event::Done));
+        let done = format!("{}\n", json!({"event": "done"}));
+        assert_eq!(Event::parse(&done), Some(Event::Done));
     }
 
     #[test]

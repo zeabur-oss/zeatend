@@ -393,11 +393,14 @@ mod tests {
 
     #[test]
     fn the_node_list_of_the_api_reads_as_nodes() {
-        let list: List<v1::Node> = serde_json::from_str(&format!(
-            r#"{{"apiVersion": "v1", "kind": "NodeList", "metadata": {{"resourceVersion": "812"}},
-                "items": [{}]}}"#,
-            include_str!("../fixtures/node.json")
-        ))
+        let node: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/node.json")).unwrap();
+        let list: List<v1::Node> = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "NodeList",
+            "metadata": {"resourceVersion": "812"},
+            "items": [node],
+        }))
         .unwrap();
         let describe = |name: &str| format!("sudo kubectl describe node {name}");
         assert_eq!(
@@ -426,11 +429,23 @@ mod tests {
 
     #[test]
     fn secrets_are_encrypted_only_when_the_first_provider_is_not_identity() {
-        let rke2 = r#"{"kind":"EncryptionConfiguration","apiVersion":"apiserver.config.k8s.io/v1",
-            "resources":[{"resources":["secrets"],
-            "providers":[{"aescbc":{"keys":[{"name":"aescbckey","secret":"x"}]}},{"identity":{}}]}]}"#;
+        let config = |first: &str| {
+            json!({
+                "kind": "EncryptionConfiguration",
+                "apiVersion": "apiserver.config.k8s.io/v1",
+                "resources": [{
+                    "resources": ["secrets"],
+                    "providers": [
+                        {(first): {"keys": [{"name": "aescbckey", "secret": "x"}]}},
+                        {"identity": {}},
+                    ],
+                }],
+            })
+            .to_string()
+        };
+        let rke2 = config("aescbc");
         assert_eq!(
-            secrets_encryption(Rancher::Rke2, Some(rke2)),
+            secrets_encryption(Rancher::Rke2, Some(&rke2)),
             Finding::SecretsEncrypted {
                 provider: "aescbc".to_owned()
             }
@@ -438,7 +453,7 @@ mod tests {
         let plain = Finding::SecretsPlain {
             distribution: Rancher::K3s,
         };
-        let identity = rke2.replacen("aescbc", "identity", 1);
+        let identity = config("identity");
         assert_eq!(secrets_encryption(Rancher::K3s, Some(&identity)), plain);
         assert_eq!(secrets_encryption(Rancher::K3s, Some("{}")), plain);
         assert_eq!(secrets_encryption(Rancher::K3s, None), plain);

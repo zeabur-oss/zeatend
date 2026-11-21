@@ -172,6 +172,8 @@ pub fn check_kubernetes(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::record::{Writer, ZEATEND_VERSION};
 
@@ -288,8 +290,11 @@ mod tests {
             Some("v1.36.5+rke2r1")
         );
         assert_eq!(
-            release_tag(r#"{"level":"info","version":"v1.2.3","message":"kubesolo version"}"#)
-                .as_deref(),
+            release_tag(
+                &json!({"level": "info", "version": "v1.2.3", "message": "kubesolo version"})
+                    .to_string()
+            )
+            .as_deref(),
             Some("v1.2.3")
         );
         assert_eq!(release_tag("no version here"), None);

@@ -175,19 +175,27 @@ fn show(text: &str, last: &mut Option<Event>) -> ControlFlow<()> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
     fn the_last_event_ends_the_follow() {
         let mut last = None;
         assert_eq!(
-            show(r#"{"event":"step","text":"Checking the host"}"#, &mut last),
+            show(
+                &json!({"event": "step", "text": "Checking the host"}).to_string(),
+                &mut last
+            ),
             ControlFlow::Continue(())
         );
         assert_eq!(show("not an event", &mut last), ControlFlow::Continue(()));
         assert_eq!(last, None);
         assert_eq!(
-            show(r#"{"event":"failed","error":"no"}"#, &mut last),
+            show(
+                &json!({"event": "failed", "error": "no"}).to_string(),
+                &mut last
+            ),
             ControlFlow::Break(())
         );
         assert_eq!(
