@@ -33,6 +33,10 @@ apiServer:
 | `version` | The release Zeatend pins | A K3s or RKE2 release, such as `v1.37.1+k3s1` or `v1.37.1+rke2r1`. Zeatend checks its downloads only against the release's own checksum list, so the plan marks it unsupported. KubeSolo takes none. |
 | `disable` | Nothing | Packaged components that K3s or RKE2 doesn't deploy: `traefik`, `metrics-server`, and on K3s `local-storage`, its local-path storage class. KubeSolo packages none of them. |
 | `apiServer.authenticationConfig` | None | The API server's [authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration), written as Kubernetes describes it. |
+| `proxy.https` | None | An HTTPS proxy, `http://<host>:<port>`, for Zeatend's downloads and the node's HTTPS connections. See [Install on a server without GitHub](../get-started/without-github.mdx). |
+| `proxy.noProxy` | None | Hosts and networks the node reaches directly, in addition to the ones the cluster needs. |
+| `registryMirrors` | None | For each registry, such as `docker.io`, or `"*"` for every other one, the mirrors containerd tries in turn before the registry itself. |
+| `registryHosts` | None | The `caFile`, `username` and `passwordFile` of a mirror or registry host, by `<host>` or `<host>:<port>`. |
 | `host.tlsSan` | None | More names and addresses for the API server's certificate, such as a DNS name. |
 | `host.nodeName` | The host name | The node's name in Kubernetes. |
 | `host.requireEncryptedDisk` | `false` | Stop the install when the cluster's data isn't on an encrypted disk. |
@@ -72,3 +76,4 @@ join:
 | `join.nodeNames` | The names of the cluster's nodes, so this node takes a different name. |
 | `disable`, `apiServer` | RKE2 servers only. Give every server the same values, because each one deploys the packaged components and runs an API server. |
 | `host` | As for the first server. `tlsSan` applies to servers only. |
+| `proxy`, `registryMirrors`, `registryHosts` | As for the first server. `zeatend node add` doesn't print them; copy them from the first server's file. |

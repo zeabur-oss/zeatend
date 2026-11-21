@@ -245,7 +245,7 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::KubeletReserves => "kubelet 保留資源",
         Topic::SecretsEncryption => "Secret 加密",
         Topic::Downloads => "下載",
-        Topic::Mirrors => "映像檔鏡像",
+        Topic::Mirrors => "鏡像站",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
@@ -361,12 +361,12 @@ fn finding(finding: &Finding) -> String {
         }
         Finding::DownloadsOk { url } => format!("{url} 可以連線"),
         Finding::DownloadsNo { url, reason } => format!(
-            "{url} 連不上（{reason}），在設定檔設定 proxy.https，或照「沒有 GitHub 的伺服器」指南在\
-             別台電腦下載版本"
+            "{url} 連不上（{reason}），照 \
+             https://oss.zeabur.com/zh-TW/docs/zeatend/get-started/without-github/ 在設定檔設定 proxy.https 代理伺服器"
         ),
-        Finding::MirrorOk { endpoint } => format!("鏡像 {endpoint} 可以連線"),
+        Finding::MirrorOk { endpoint } => format!("鏡像站 {endpoint} 可以連線"),
         Finding::MirrorNo { endpoint, reason } => format!(
-            "鏡像 {endpoint} 連不上（{reason}），映像檔會改從下一個鏡像或 registry 本身下載"
+            "鏡像站 {endpoint} 連不上（{reason}），映像檔會改從下一個鏡像站或映像檔倉庫本身下載"
         ),
         Finding::ServiceRunning { unit } => format!("{unit} 正在執行"),
         Finding::ServiceStopped { unit } => format!(

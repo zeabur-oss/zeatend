@@ -338,6 +338,23 @@ fn memory(rancher: Rancher, facts: &Facts, findings: &mut Vec<Finding>) -> Resul
     Ok(())
 }
 
+/// The URLs of the pinned release files `apply` downloads to install `distribution` on `arch`;
+/// none for an architecture zeatend does not install.
+#[must_use]
+pub fn release_urls(distribution: Distribution, arch: &str) -> Vec<String> {
+    let Some(rancher) = distribution.rancher() else {
+        return [KUBESOLO.archive(arch), KUBECTL.binary(arch)]
+            .into_iter()
+            .flatten()
+            .map(|asset| asset.url)
+            .collect();
+    };
+    cluster_plan(rancher, None, arch, &mut Vec::new()).map_or_else(
+        |_| Vec::new(),
+        |cluster| cluster.downloads().map(|d| d.url.clone()).collect(),
+    )
+}
+
 /// The release of `distribution` and its downloads: the pinned one, or `version` checked against
 /// its own checksum list, with a warning.
 pub(crate) fn cluster_plan(
@@ -426,6 +443,38 @@ mod tests {
     use super::*;
     use crate::finding::Topic;
     use crate::record::{self, Writer};
+
+    #[test]
+    fn the_release_urls_are_the_downloads_of_the_pinned_release() {
+        let k3s = release_urls(Distribution::K3s, "arm64");
+        assert!(k3s.iter().any(|url| url.ends_with("/k3s-arm64")), "{k3s:?}");
+        assert!(
+            k3s.iter().any(|url| url.ends_with("/install.sh")),
+            "{k3s:?}"
+        );
+        let rke2 = release_urls(Distribution::Rke2, "amd64");
+        assert!(
+            rke2.iter().any(|url| url.contains("rke2-images-core")),
+            "{rke2:?}"
+        );
+        let kubesolo = release_urls(Distribution::KubeSolo, "amd64");
+        assert!(
+            kubesolo
+                .iter()
+                .any(|url| url.starts_with("https://dl.k8s.io/")),
+            "{kubesolo:?}"
+        );
+        for distribution in [
+            Distribution::K3s,
+            Distribution::Rke2,
+            Distribution::KubeSolo,
+        ] {
+            assert!(
+                release_urls(distribution, "riscv64").is_empty(),
+                "{distribution:?}"
+            );
+        }
+    }
 
     fn config(yaml: &str) -> Config {
         Config::parse(yaml).unwrap()

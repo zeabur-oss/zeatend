@@ -6,8 +6,6 @@
 //! signature is where trust starts. Another RKE2 version can still be chosen, but
 //! the plan marks it unsupported and checks it only against the release's list.
 
-use crate::cluster::Distribution;
-
 /// An RKE2 release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rke2 {
@@ -132,36 +130,6 @@ pub fn k3s_install_script_url(version: &str) -> String {
     )
 }
 
-/// The URLs of the files `apply` downloads to install `distribution` on `arch`, or none for an
-/// architecture zeatend does not install.
-#[must_use]
-pub fn downloads(distribution: Distribution, arch: &str) -> Vec<String> {
-    match distribution {
-        Distribution::K3s => K3S
-            .binary
-            .get(arch)
-            .map(|_| {
-                [
-                    k3s_url(K3S.version, &K3s::binary_file(arch)),
-                    k3s_install_script_url(K3S.version),
-                ]
-            })
-            .into_iter()
-            .flatten()
-            .collect(),
-        Distribution::Rke2 => RKE2
-            .files(arch)
-            .map(|_| rke2_url(RKE2.version, &format!("rke2.linux-{arch}.tar.gz")))
-            .into_iter()
-            .collect(),
-        Distribution::KubeSolo => [KUBESOLO.archive(arch), KUBECTL.binary(arch)]
-            .into_iter()
-            .flatten()
-            .map(|asset| asset.url)
-            .collect(),
-    }
-}
-
 /// A file of a GitHub release and its SHA-256.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Asset {
@@ -268,31 +236,5 @@ impl Kubectl {
             file: "kubectl".to_owned(),
             sha256,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_downloads_of_an_install_are_the_pinned_release_files() {
-        for distribution in [
-            Distribution::K3s,
-            Distribution::Rke2,
-            Distribution::KubeSolo,
-        ] {
-            let urls = downloads(distribution, "arm64");
-            assert!(!urls.is_empty(), "{distribution:?}");
-            assert!(
-                urls.iter().all(|url| url.starts_with("https://")),
-                "{urls:?}"
-            );
-            assert!(
-                downloads(distribution, "riscv64").is_empty(),
-                "{distribution:?}"
-            );
-        }
-        assert!(downloads(Distribution::Rke2, "amd64")[0].contains("rke2.linux-amd64.tar.gz"));
     }
 }

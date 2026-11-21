@@ -387,8 +387,8 @@ pub(crate) fn finding(finding: &Finding) -> String {
             .to_owned(),
         Finding::DownloadsOk { url } => format!("{url} answers"),
         Finding::DownloadsNo { url, reason } => format!(
-            "{url} does not answer ({reason}); set proxy.https in the configuration, or download \
-             the release on another computer as the guide for servers without GitHub says"
+            "{url} does not answer ({reason}); set proxy.https in the configuration, as \
+             https://oss.zeabur.com/docs/zeatend/get-started/without-github/ says"
         ),
         Finding::MirrorOk { endpoint } => format!("the mirror {endpoint} answers"),
         Finding::MirrorNo { endpoint, reason } => format!(

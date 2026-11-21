@@ -23,7 +23,7 @@ use zeatend_host::{HostError, download, facts, preflight, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::{Check, Finding, Kept, Status};
-use zeatend_plan::pins;
+use zeatend_plan::plan;
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::registry::{self, Proxy, RegistryHost};
 use zeatend_plan::tuning::OS_IDLE_MIB;
@@ -114,7 +114,7 @@ impl Network {
         if downloads {
             let agent = download::agent(self.proxy.as_ref());
             let arch = facts::arch(std::env::consts::ARCH);
-            for url in pins::downloads(self.distribution, arch) {
+            for url in plan::release_urls(self.distribution, arch) {
                 findings.push(match agent.status(&url).await {
                     Ok(status) if status < 400 => Finding::DownloadsOk { url },
                     Ok(status) => Finding::DownloadsNo {
