@@ -92,16 +92,21 @@ pub struct Plan {
     /// What the host's memory class sets.
     pub tuning: HostTuning,
     /// Files written before the distribution starts.
-    #[serde(skip)]
     pub host_files: Vec<HostFile>,
-    /// Their paths, for the JSON form.
-    pub host_file_paths: Vec<String>,
     /// What `apply` changes against the install record; `None` on a first install.
     pub changes: Option<Changes>,
     /// What to read before applying.
     pub findings: Vec<Check>,
     /// What the plan found on the host and what it writes; `apply` fills it.
     pub preconditions: Preconditions,
+}
+
+impl Plan {
+    /// The paths of [`Self::host_files`].
+    #[must_use]
+    pub fn host_file_paths(&self) -> Vec<String> {
+        self.host_files.iter().map(|f| f.path.clone()).collect()
+    }
 }
 
 /// The release a plan installs.
@@ -284,7 +289,6 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         release,
         memory_tier,
         tuning,
-        host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         host_files,
         changes,
         findings: findings.into_iter().map(Check::from).collect(),
@@ -460,7 +464,7 @@ mod tests {
         assert!(cluster.install_script.is_some());
         assert_eq!(plan.memory_tier, MemoryTier::Standard);
         assert_eq!(
-            plan.host_file_paths,
+            plan.host_file_paths(),
             [
                 "/etc/sysctl.d/60-k3s-cis.conf",
                 "/etc/rancher/k3s/audit-policy.yaml",
@@ -511,7 +515,7 @@ mod tests {
         assert!(solo.download.file.ends_with("-linux-arm64-offline.tar.gz"));
         assert_eq!(solo.kubectl.file, "kubectl");
         assert_eq!(
-            plan.host_file_paths,
+            plan.host_file_paths(),
             [kubesolo::CONFIG_FILE, kubesolo::UNIT_FILE]
         );
         let small = Facts {
@@ -584,7 +588,7 @@ mod tests {
         assert_eq!(plan.tuning.gomemlimit_mib, Some(600));
         assert!(plan.findings.is_empty(), "{:?}", plan.findings);
         assert!(
-            plan.host_file_paths
+            plan.host_file_paths()
                 .contains(&crate::k3s::MEMORY_DROP_IN.to_owned())
         );
     }

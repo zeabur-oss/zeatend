@@ -20,6 +20,7 @@ use unicode_width::UnicodeWidthStr as _;
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::precondition::Stale;
+use zeatend_plan::steps::Step;
 
 /// The messages of the output that is English in every language.
 pub(crate) const ENGLISH: &Messages = Lang::En.messages();
@@ -195,8 +196,10 @@ pub(crate) struct Messages {
     pub(crate) starting_unit: fn(&str) -> String,
     /// The unit of the cluster restarts for a new configuration.
     pub(crate) restarting_unit: fn(&str) -> String,
-    /// The step that waits until the node is Ready.
+    /// The node that [`Step::WaitReady`] waits for, as a note under the step.
     pub(crate) waiting_for_node: fn(&str) -> String,
+    /// A step of an install.
+    pub(crate) step: fn(Step) -> &'static str,
     /// The last step of an install.
     pub(crate) done: &'static str,
     /// What to do with a cluster once its server runs.

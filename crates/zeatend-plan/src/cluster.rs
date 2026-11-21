@@ -693,14 +693,24 @@ impl Rancher {
 }
 
 /// A file zeatend owns.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostFile {
     /// Absolute path.
     pub path: String,
-    /// Unix mode.
+    /// Unix mode; in the JSON form, octal digits such as `0600`, as `install -m` takes them.
+    #[serde(serialize_with = "octal")]
     pub mode: u32,
     /// Exact content.
     pub content: String,
+}
+
+/// `mode` as four octal digits.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "`serialize_with` passes a reference"
+)]
+fn octal<S: serde::Serializer>(mode: &u32, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format!("{mode:04o}"))
 }
 
 impl HostFile {

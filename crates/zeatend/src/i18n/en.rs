@@ -5,6 +5,7 @@ use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::join::{RTT_CRITICAL_US, RTT_WARN_US, ms};
 use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
+use zeatend_plan::steps::Step;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib};
 
@@ -27,6 +28,7 @@ pub(super) const MESSAGES: Messages = Messages {
     starting_unit,
     restarting_unit,
     waiting_for_node,
+    step,
     done: DONE,
     ready,
     joined,
@@ -181,7 +183,24 @@ fn restarting_unit(unit: &str) -> String {
 }
 
 fn waiting_for_node(node: &str) -> String {
-    format!("Waiting for node {node} to be Ready")
+    format!("node {node}")
+}
+
+const fn step(step: Step) -> &'static str {
+    match step {
+        Step::CheckHost => "Checking the host",
+        Step::Download => "Downloading the release",
+        Step::WriteFiles => "Writing the configuration files",
+        Step::PrepareHost => "Preparing the host",
+        Step::InstallRelease => "Installing the release",
+        Step::StartService => "Starting the service",
+        Step::WaitReady => "Waiting for the node to be Ready",
+        Step::WaitRemoved => "Waiting for the turned-off components to be removed",
+        Step::ProtectCertificates => "Making the certificates readable by root only",
+        Step::WaitAddons => "Waiting for CoreDNS and local-path storage",
+        Step::WriteRecord => "Writing the install record",
+        Step::WriteKubeconfig => "Writing the kubeconfig",
+    }
 }
 
 fn ready(r: &Ready<'_>) -> String {

@@ -3,7 +3,7 @@
 # translations' nav.yaml refers to it, and it is part of each page's URL.
 - group: get-started
   label: Get started
-  pages: [install]
+  pages: [install, manual-install]
 - group: operations
   label: Operate
   pages: [add-nodes, maintain, uninstall]

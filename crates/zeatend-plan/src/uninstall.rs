@@ -484,7 +484,7 @@ mod tests {
                         };
                         let node = Node::new(config.distribution, Role::Server, false);
                         let layout = config.distribution.layout();
-                        let mut paths = plan.host_file_paths;
+                        let mut paths = plan.host_file_paths();
                         paths.push(format!("{}/record", layout.state_dir));
                         paths.push(format!("{}/downloads/v1/file", layout.state_dir));
                         match config.distribution {

@@ -1,0 +1,438 @@
+---
+title: 手动安装
+description: 亲手逐步执行 zeatend apply 的每一步，从主机检查到安装记录，每一步都用 zeatend doctor 确认。
+---
+
+本页把 `sudo zeatend apply` 拆成一步一步执行，所用的文件、下载内容和命令都和 `apply` 相同。想在每项改动发生前先看清楚，或者服务器访问不了 GitHub、需要在另一台电脑上下载发行版再复制过去时，可以按本页操作。
+
+`apply` 运行时也会输出同样的步骤和编号，例如 `==> 3/10 Writing the configuration files`。最后运行 `sudo zeatend apply`，它会发现每一步都已完成，不做任何改动，只写入安装记录。此后 Zeatend 会把这个集群当作自己安装的来维护。
+
+各发行版的命令大多相同，有差别的地方用标签页分别列出。只有 K3s 和 RKE2 才有的步骤，以及只有 KubeSolo 才有的步骤，会在开头注明。
+
+## 准备工作
+
+- **服务器**上已装好 Zeatend，并写好 `/etc/zeatend/config.yaml`，做法见[安装集群](install.mdx)中“编写配置”及之前的步骤。服务器访问不了 GitHub 时，在另一台电脑上下载 Zeatend 的压缩包，用 `SHA256SUMS` 校验后再复制过去。
+- 服务器上要有 **`jq`**，用来读取安装计划。
+- **一台能访问 GitHub 的电脑**，装有 `curl`、`jq` 和 `sha256sum`，并能通过 SSH 连接服务器。使用 KubeSolo 时，这台电脑还要能访问 `dl.k8s.io`。
+
+每一节最后都会运行 `sudo zeatend doctor`，并列出此时应有的输出。不是 `ok` 的行会指出要修复什么。`doctor` 不会改动任何东西，随时都可以运行。
+
+<Steps>
+<Step>
+
+### 检查主机
+
+{/* step: check-host */}
+
+在服务器上运行主机检查，并保存安装计划：
+
+```sh
+sudo zeatend plan
+sudo zeatend plan --json > plan.json
+```
+
+`plan` 会输出 `apply` 最先运行的检查。出现 `FAIL` 时 `apply` 会停止，先修复再继续。`plan.json` 列出安装时写入的每个文件，包括路径、权限和内容，也列出每个下载项的网址和 SHA-256。本页后面的步骤都从这个文件读取。
+
+安装计划取决于配置文件和主机。修改 `/etc/zeatend/config.yaml` 后，要重新运行 `plan --json`，再从“按计划写入文件”开始重做。
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+安装发行版之前，`service` 一直显示 `FAIL`。
+
+</Step>
+<Step>
+
+### 下载发行版
+
+{/* step: download */}
+
+把 `plan.json` 复制到能访问 GitHub 的电脑上，把每个文件下载到新目录，再对照安装计划校验：
+
+```sh
+scp <you>@<server>:plan.json .
+mkdir release && cd release
+downloads='.release[] | [.release, .installScript, .download, .kubectl] + (.images // []) | .[] | select(.)'
+jq -r "$downloads | \"\\(.file) \\(.url)\"" ../plan.json |
+  while read -r file url; do curl -fsSL -o "$file" "$url"; done
+jq -r "$downloads | \"\\(.sha256)  \\(.file)\"" ../plan.json | sha256sum -c -
+```
+
+每个文件都会显示 `OK`。这些哈希值内置在 Zeatend 中，校验通过的文件就是 `apply` 会安装的文件。把文件复制到服务器：
+
+```sh
+scp * <you>@<server>:
+```
+
+在服务器上，把每个文件放到 `apply` 存放的位置：
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+```sh
+version=$(jq -r '.release.cluster.version' plan.json)
+release=$(jq -r '.release.cluster.release.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/rancher/zeatend/downloads/$version" "$release" install.sh
+jq -r '.release.cluster.images[].file' plan.json |
+  xargs sudo install -D -m 0644 -t /var/lib/rancher/k3s/agent/images
+```
+
+</Tab>
+<Tab value="RKE2">
+
+```sh
+version=$(jq -r '.release.cluster.version' plan.json)
+release=$(jq -r '.release.cluster.release.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/rancher/zeatend/downloads/$version" "$release"
+jq -r '.release.cluster.images[].file' plan.json |
+  xargs sudo install -D -m 0644 -t /var/lib/rancher/rke2/agent/images
+```
+
+</Tab>
+<Tab value="KubeSolo">
+
+```sh
+version=$(jq -r '.release.kubeSolo.version' plan.json)
+release=$(jq -r '.release.kubeSolo.download.file' plan.json)
+sudo install -D -m 0644 -t "/var/lib/zeatend/downloads/$version" "$release"
+sudo install -D -m 0755 kubectl /var/lib/zeatend/bin/kubectl
+```
+
+</Tab>
+</Tabs>
+
+K3s 和 RKE2 的镜像压缩包里有组件启动时需要的镜像，KubeSolo 的压缩包也包含这些镜像，所以集群不依赖镜像仓库也能启动。不要关闭这个终端，后面的步骤会用到 `$version` 和 `$release`。
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+</Step>
+<Step>
+
+### 按计划写入文件
+
+{/* step: write-files */}
+
+按安装计划写入每个文件，权限和内容都要完全一致，再让 systemd 读取新的单元和附加配置：
+
+```sh
+jq -c '.hostFiles[]' plan.json | while read -r file; do
+  path=$(jq -r '.path' <<<"$file")
+  jq -j '.content' <<<"$file" | sudo install -D -m "$(jq -r '.mode' <<<"$file")" /dev/stdin "$path"
+  echo "$path"
+done
+sudo systemctl daemon-reload
+```
+
+命令会输出每个路径。K3s 和 RKE2 写入的是发行版的配置和 CIS 配置，包括审计策略、Pod Security 准入配置、网络策略、内核参数，以及服务的内存上限。KubeSolo 写入的是它的配置和 systemd 单元。
+
+```sh
+sudo zeatend doctor
+```
+
+K3s 和 RKE2 此时还什么都没安装：
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+```
+
+KubeSolo 的单元已经写入，所以 `doctor` 会运行主机检查，并发现服务没有运行：
+
+```text
+FAIL service            kubesolo is not running; `sudo journalctl -u kubesolo -n 100` shows why, and `sudo systemctl restart kubesolo` starts it again
+```
+
+这一行上方还会输出主机检查，和 `plan` 一样。
+
+</Step>
+<Step>
+
+### 准备主机
+
+{/* step: prepare-host */}
+
+安装计划中有 AppArmor 配置文件时，先加载它。在 AppArmor 会限制无配置文件程序的主机上（例如 Ubuntu 24.04），Zeatend 会写入这个配置文件，containerd 自己的配置文件才能生效：
+
+```sh
+if [ -f /etc/apparmor.d/cri-containerd.apparmor.d ]; then
+  sudo apparmor_parser --replace /etc/apparmor.d/cri-containerd.apparmor.d
+fi
+```
+
+接着，K3s 和 RKE2 要加载 kubelet 会检查的内核参数，并创建服务器需要的内容：
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+```sh
+sudo sysctl --quiet --load=/etc/sysctl.d/60-k3s-cis.conf
+sudo install -d -m 0700 /var/lib/rancher/k3s/server/logs
+```
+
+这个目录存放 API 服务器的审计日志。
+
+</Tab>
+<Tab value="RKE2">
+
+```sh
+sudo sysctl --quiet --load=/etc/sysctl.d/60-rke2-cis.conf
+id etcd || sudo useradd -r -c "etcd user" -s /sbin/nologin -M etcd -U
+```
+
+RKE2 的 CIS 配置文件以本地用户 `etcd` 运行 etcd。
+
+</Tab>
+<Tab value="KubeSolo">
+
+KubeSolo 不需要其他准备。
+
+</Tab>
+</Tabs>
+
+```sh
+sudo zeatend doctor
+```
+
+输出和上一步相同。
+
+</Step>
+<Step>
+
+### 安装发行版
+
+{/* step: install-release */}
+
+<Tabs items={["K3s", "RKE2", "KubeSolo"]}>
+<Tab value="K3s">
+
+安装二进制文件，再运行 K3s 的 `install.sh`，但不让它下载、启用或启动任何东西。`install.sh` 会写入 `k3s.service` 单元、`kubectl` 链接和 `k3s-uninstall.sh`：
+
+```sh
+dir=/var/lib/rancher/zeatend/downloads/$version
+sudo install -m 0755 "$dir/$release" /usr/local/bin/k3s
+sudo INSTALL_K3S_SKIP_DOWNLOAD=true INSTALL_K3S_SKIP_ENABLE=true INSTALL_K3S_SKIP_START=true \
+  INSTALL_K3S_SKIP_SELINUX_RPM=true sh "$dir/install.sh" server
+sudo systemctl daemon-reload
+```
+
+</Tab>
+<Tab value="RKE2">
+
+把压缩包解压到 `/usr/local`。里面有二进制文件、`rke2-server.service` 单元和 `rke2-uninstall.sh`：
+
+```sh
+sudo tar -xzf "/var/lib/rancher/zeatend/downloads/$version/$release" -C /usr/local
+sudo systemctl daemon-reload
+```
+
+</Tab>
+<Tab value="KubeSolo">
+
+从压缩包中取出二进制文件并安装：
+
+```sh
+tar -xzf "/var/lib/zeatend/downloads/$version/$release" kubesolo
+sudo install -m 0755 kubesolo /usr/local/bin/kubesolo
+```
+
+</Tab>
+</Tabs>
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` 此时会找到发行版，输出主机检查，并发现服务没有运行：
+
+```text
+ok   root               running as root
+ok   systemd            systemd is the init system
+...
+FAIL service            k3s is not running; `sudo journalctl -u k3s -n 100` shows why, and `sudo systemctl restart k3s` starts it again
+```
+
+RKE2 的单元是 `rke2-server`，KubeSolo 的单元是 `kubesolo`。
+
+</Step>
+<Step>
+
+### 启动服务
+
+{/* step: start-service */}
+
+```sh
+sudo systemctl enable --now k3s
+```
+
+RKE2 要启用 `rke2-server`，KubeSolo 要启用 `kubesolo`。第一次启动需要几分钟。
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   service            k3s is running
+ok   Kubernetes API     the API server answers /readyz
+warn install record     no install record at /var/lib/rancher/zeatend/record.json: zeatend did not install this node, or apply stopped before the end. Run `sudo zeatend apply`.
+FAIL nodes              vps-1 is not Ready; `sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml describe node vps-1` shows why
+```
+
+服务启动后，节点大约要一分钟才会就绪，所以 `nodes` 此时可能显示 `FAIL` 或 `the cluster has no nodes`。最后一步之前，`install record` 一直显示这一行。KubeSolo 的安装记录在 `/var/lib/zeatend/record.json`。
+
+</Step>
+<Step>
+
+### 等待节点就绪
+
+{/* step: wait-ready */}
+
+等节点完成注册，再等它进入 Ready 状态：
+
+```sh
+kubectl="sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml"
+node=$(jq -r '.nodeName' plan.json)
+$kubectl wait --for=create "node/$node" --timeout=10m
+$kubectl wait --for=condition=Ready "node/$node" --timeout=10m
+```
+
+RKE2 改设 `kubectl="sudo /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml"`，KubeSolo 改设 `kubectl="sudo /var/lib/zeatend/bin/kubectl --kubeconfig /var/lib/kubesolo/pki/admin/admin.kubeconfig"`。后面的步骤也会用到 `$kubectl`。
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   nodes              vps-1 is Ready
+```
+
+`nodes` 以下的每一行都是 `ok`。KubeSolo 的 `kubelet reserves` 会显示警告，因为 Zeatend 还没有在 KubeSolo 上设置 kubelet 的预留资源（[#4](https://github.com/zeabur-oss/zeatend/issues/4)）。
+
+</Step>
+<Step>
+
+### 等待已关闭的组件移除
+
+{/* step: wait-removed k3s rke2 */}
+
+只有 K3s 和 RKE2 需要这一步。`/etc/zeatend/config.yaml` 中没有 `disable` 列表时，跳过这一步。有的话，服务器第一次启动时会移除列表中的组件，例如 Traefik。等这些组件的附加组件消失：
+
+```sh
+$kubectl get addons,helmcharts -n kube-system
+```
+
+`disable` 列出的组件不再出现在列表中，就完成了。
+
+```sh
+sudo zeatend doctor
+```
+
+输出和上一步相同。
+
+</Step>
+<Step>
+
+### 把证书改为仅 root 可读
+
+{/* step: protect-certificates k3s rke2 */}
+
+只有 K3s 和 RKE2 需要这一步。CIS Benchmark 要求服务器证书的权限为 0600，但服务器第一次启动时写入的权限是 0644：
+
+```sh
+sudo find /var/lib/rancher/k3s/server/tls -maxdepth 1 -type f -name '*.crt' -exec chmod 0600 {} +
+```
+
+RKE2 的目录是 `/var/lib/rancher/rke2/server/tls`。
+
+```sh
+sudo zeatend doctor
+```
+
+输出和上一步相同。
+
+</Step>
+<Step>
+
+### 等待 CoreDNS 和 local-path 存储
+
+{/* step: wait-addons kubesolo */}
+
+只有 KubeSolo 需要这一步。
+
+```sh
+$kubectl wait --for=create -n kube-system deployment/coredns --timeout=10m
+$kubectl rollout status -n kube-system deployment/coredns --timeout=10m
+$kubectl wait --for=create -n local-path-storage deployment/local-path-provisioner --timeout=10m
+$kubectl rollout status -n local-path-storage deployment/local-path-provisioner --timeout=10m
+```
+
+```sh
+sudo zeatend doctor
+```
+
+输出和上一步相同。
+
+</Step>
+<Step>
+
+### 写入安装记录
+
+{/* step: write-record */}
+
+让 `apply` 检查你完成的每一步，并写入安装记录：
+
+```sh
+sudo zeatend apply
+```
+
+`apply` 会把每一步再运行一遍，每一步都会发现已经完成：下载的文件与哈希值一致，配置文件与安装计划一致，服务也在用这些文件运行，所以不会重启。然后它写入 `record.json`，下次 `plan` 会读取这个文件，判断是升级还是首次安装。如果某一步确实有改动，例如漏写了一个文件，`apply` 会补上并重启服务。
+
+```sh
+sudo zeatend doctor
+```
+
+`install record` 此时变为 `ok`，与集群相关的每一行也都是 `ok`：
+
+```text
+ok   service            k3s is running
+ok   Kubernetes API     the API server answers /readyz
+ok   install record     zeatend 0.2.0 wrote the install record
+ok   nodes              vps-1 is Ready
+ok   kubelet reserves   the kubelet on vps-1 keeps at least the memory the OS needs from pods
+ok   Secrets encryption the API server stores Secrets encrypted (aescbc)
+```
+
+主机检查仍有警告时（例如 `swap`），该行会列出修复的命令。此后运行 `sudo zeatend plan`，“Changes since the last apply”下方会显示 `nothing`，`apply` 也会把这个集群当作自己安装的来维护。
+
+</Step>
+<Step>
+
+### 写入 kubeconfig
+
+{/* step: write-kubeconfig kubesolo */}
+
+在 KubeSolo 上，同一次 `apply` 会根据管理员 kubeconfig 生成 `/etc/zeatend/kubeconfig.yaml`，集群以节点命名，并输出复制到你电脑上的方法。确认文件存在，并且只有 root 可读：
+
+```sh
+sudo ls -l /etc/zeatend/kubeconfig.yaml
+sudo zeatend doctor
+```
+
+`doctor` 的输出和上一步相同。
+
+</Step>
+</Steps>
+
+## 下一步
+
+- [添加节点](../operations/add-nodes.mdx)，在更多服务器上运行服务。
+- [维护集群](../operations/maintain.mdx)：升级、证书与备份。
