@@ -1,25 +1,25 @@
 ---
 title: Install a cluster and Zeabur OSS
-description: Download Zeatend on a Linux server, choose K3s, RKE2 or KubeSolo on its screens or with commands, install the cluster, then install Zeabur OSS.
+description: Download Zeatend on a Linux server, install K3s, RKE2 or KubeSolo on its install screens, then install Zeabur OSS.
 ---
 
 When you finish this page, a Linux server runs a Kubernetes cluster that Zeatend set up, and `zeatend doctor` reports it healthy. The last step links to the Zeabur OSS install.
 
 To install Zeabur OSS on a new server in one go, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/). That page runs the steps of this one for K3s. This page covers every distribution and explains each step.
 
-Most people install on Zeatend's screens. You can also hand the install to an agent, or run each step as a command, under [Install with commands](#install-with-commands).
+This page installs on Zeatend's install screens. To install from a script, or to run each step yourself, see [Install with commands](install-with-commands.mdx).
 
 ## Let an agent do it
 
 Paste this prompt into Claude Code or Codex on a computer that can reach the server over SSH, and tell it the server's address:
 
 ```text
-Set up Kubernetes on my server with Zeatend by following https://oss.zeabur.com/docs/zeatend/get-started/install.md.
+Set up Kubernetes on my server with Zeatend by following https://oss.zeabur.com/docs/zeatend/get-started/install-with-commands.md.
 ```
 
 The agent shows you the plan and the host checks and asks before it installs.
 
-The agent uses the commands in [Install with commands](#install-with-commands), since it can't use the screens.
+The agent can't use the install screens, so it follows [Install with commands](install-with-commands.mdx).
 
 ## Before you begin
 
@@ -53,28 +53,76 @@ curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/ze
 `sha256sum` prints `OK` when the download matches the release. `zeatend` is one static file and needs no other packages.
 </Step>
 <Step>
-### Install on the screens
+### Open the install screens
 
 ```sh
 sudo zeatend
 ```
 
-The screens take you through four steps. Press F2 to switch between English, 繁體中文 and 简体中文.
+The top line shows the four steps: 1 Server, 2 Access, 3 Review, 4 Install. The bottom line shows the keys you can press now:
 
-1. **Server** shows the host's facts and the host checks. Choose K3s, RKE2 or KubeSolo with the arrow keys, then press Enter. Each check that needs attention says what to do.
+| Key | What it does |
+| --- | --- |
+| Up and Down | Choose a distribution |
+| Tab | Go to the next field |
+| Enter | Continue. On Review, start the install |
+| Esc | Go back one step |
+| F2 | Change the language: English, 繁體中文 or 简体中文. The screens change at once |
+| Ctrl+C | Quit. After the install starts, it only closes the screens and the install goes on |
 
-   ![The Server screen: the host's facts, the choice of K3s, RKE2 or KubeSolo, and the host checks](../screens/80x24/en-server.svg)
+![The language menu: English, 繁體中文 and 简体中文](../screens/80x24/en-language.svg)
+</Step>
+<Step>
+### Choose a distribution
 
-2. **Access** asks for the address your computer uses to reach the server. To reach the API server by a DNS name, enter it too. The node name is optional. Tab moves to the next field.
-3. **Review** lists the version, the address and the configuration file. Press Enter: Zeatend writes your choices to `/etc/zeatend/config.yaml` and starts the install.
+The first screen is **Server**. Its top half shows this server's host name, system, CPUs, memory and addresses.
 
-   ![The Review screen: the Kubernetes version, the address, the DNS name and what happens next](../screens/80x24/en-review.svg)
+Under **Which Kubernetes to install**, choose K3s, RKE2 or KubeSolo with the arrow keys. Each choice says when it fits. If you aren't sure, choose K3s.
 
-4. **Install** shows the progress, in a few minutes. The install runs in a systemd unit, so it goes on when you press Ctrl+C or your SSH session drops. Run `sudo zeatend` again to watch it. At the end, the screen prints the commands to list the nodes and to use the cluster from your own computer.
+**Host checks** lists the result of each check. A check that needs attention says what to do and does not stop the install. If a check fails, Enter does not continue: fix what that line names, then run `sudo zeatend` again.
 
-   ![The Install screen: the install is done and the cluster is ready](../screens/80x24/en-done.svg)
+Press Enter to continue.
+
+![The Server screen: the host's facts, the choice of K3s, RKE2 or KubeSolo, and the host checks](../screens/80x24/en-server.svg)
+</Step>
+<Step>
+### Enter the address
+
+The **Access** screen asks which address your computer uses to reach this server. kubectl on your computer connects to this address later.
+
+- **Address**: when the server has a public IP address, it is filled in. Change it if your computer uses another one. When the server has only private addresses, enter the IP address your computer reaches it at. The API server's certificate covers this address.
+- **DNS name**: optional. Enter it to reach the API server by a domain name. The certificate covers it too.
+- **Node name**: optional. Left empty, the node takes the host name.
+
+Press Tab to go to the next field and Enter to continue. A field that isn't in the right form says what it expects.
+
+![The Access screen: the address, the DNS name and the node name](../screens/80x24/en-access.svg)
+</Step>
+<Step>
+### Review and start the install
+
+The **Review** screen lists the Kubernetes version, the address, the DNS name, the node name, the configuration file and what happens next. To change something, press Esc.
+
+Press Enter to start the install. Zeatend writes your choices to `/etc/zeatend/config.yaml`. If the file is already there, it changes only these settings and keeps the others.
+
+![The Review screen: the Kubernetes version, the address, the DNS name and what happens next](../screens/80x24/en-review.svg)
+</Step>
+<Step>
+### Wait for the install
+
+The **Install** screen shows the current step, the time so far and the log. The install takes a few minutes.
+
+![The Install screen while it installs: the steps, the time so far and the log](../screens/80x24/en-install.svg)
+
+The install runs in the systemd unit `zeatend-install-<id>.service`. Ctrl+C only closes the screens, and so does a dropped SSH session: the install goes on. Run `sudo zeatend` again to watch it.
+
+When it is done, the screen says "The cluster is ready." **Next** lists the commands to list the nodes and to use the cluster from your own computer. Press Enter to close the screens; the terminal then prints the whole text, so you can copy it.
+
+![The Install screen: the install is done and the cluster is ready](../screens/80x24/en-done.svg)
 
 The kubeconfig in those commands makes whoever has it a cluster admin. Keep it only on the server or your own computer.
+
+If the screen says "The install stopped.", the last lines of the log give the cause. For the whole output, run `journalctl -u 'zeatend-install-*'`. Fix the cause, then run `sudo zeatend` again.
 </Step>
 <Step>
 ### Check the cluster
@@ -91,79 +139,6 @@ sudo zeatend doctor
 On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
 
 On RKE2 or KubeSolo, follow [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
-</Step>
-</Steps>
-
-## Install with commands
-
-For a script, an agent, or when you want to run each step yourself, use commands instead of the screens. Download Zeatend first, then follow these steps. When they're done, go back to [Check the cluster](#check-the-cluster).
-
-<Steps>
-<Step>
-### Write the configuration
-
-Zeatend reads `/etc/zeatend/config.yaml`. Without the file, it installs K3s with the defaults, so for K3s you can skip this step.
-
-For RKE2 or KubeSolo, write the file:
-
-```sh
-sudo mkdir -p /etc/zeatend
-echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
-```
-
-Replace `rke2` with `kubesolo` for KubeSolo. To reach the API server at a DNS name too, add it under `host.tlsSan`. [Configuration file](../reference/configuration.mdx) lists every setting.
-</Step>
-<Step>
-### Check the plan
-
-```sh
-sudo zeatend plan
-```
-
-`plan` changes nothing. It prints the release it installs, the node name and addresses, the files it writes, and the host checks:
-
-```text
-==> Checking the host
-    ok   root               running as root
-    ok   systemd            systemd is the init system
-    warn swap               swap is on; the kubelet expects it off (swapoff -a, and remove it from /etc/fstab)
-    ok   ports              80, 443, 6443 and 10250 are free
-    ok   disk space         95.0 GiB free under /var/lib
-```
-
-A `FAIL` line stops the install. Fix what it names and run `plan` again. A `warn` line doesn't stop the install, and each one names the command that fixes it.
-</Step>
-<Step>
-### Install the cluster
-
-```sh
-sudo zeatend apply
-```
-
-`apply` downloads the distribution, checks each file against the digest built into Zeatend, writes the configuration, starts the service and waits until the node is `Ready`. It takes a few minutes.
-
-The install runs in a systemd unit, `zeatend-install-<id>.service`, so it goes on if your SSH session drops. Run `sudo zeatend apply` again to follow it. `journalctl -u 'zeatend-install-*'` has the full output.
-
-When it ends, it prints the release and the node, and the commands to go on with:
-
-```text
-==> Waiting for node vps-1 to be Ready
-K3s v1.37.2+k3s1 runs on vps-1.
-
-List the nodes on this server:
-  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
-
-Use the cluster from your own computer:
-  mkdir -p ~/.kube
-  (umask 077; ssh <you>@203.0.113.10 sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/vps-1.yaml)
-  sed -i.bak 's#https://127.0.0.1:6443#https://203.0.113.10:6443#' ~/.kube/vps-1.yaml
-  KUBECONFIG=~/.kube/vps-1.yaml kubectl get nodes
-
-Whoever has this file is cluster admin; keep it like an SSH key.
-==> Done
-```
-
-The kubeconfig it names is the cluster's admin credential. Keep it on the server, or on your own computer only. `apply` is safe to run again: it brings the server in line with the configuration.
 </Step>
 </Steps>
 

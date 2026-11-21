@@ -2,6 +2,7 @@
   label: 开始使用
   pages:
     install: 安装集群和 Zeabur 开源版
+    install-with-commands: 用命令安装
 - group: operations
   label: 运维
   pages:

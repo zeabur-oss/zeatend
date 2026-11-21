@@ -1,25 +1,25 @@
 ---
 title: 安裝叢集與 Zeabur 開源版
-description: 在 Linux 伺服器上下載 Zeatend，在安裝畫面或用指令選擇 K3s、RKE2 或 KubeSolo 並安裝叢集，再安裝 Zeabur 開源版。
+description: 在 Linux 伺服器上下載 Zeatend，在安裝畫面裝好 K3s、RKE2 或 KubeSolo，再安裝 Zeabur 開源版。
 ---
 
 照這一頁做完，Linux 伺服器上就會有 Zeatend 建立的 Kubernetes 叢集，`zeatend doctor` 也會回報叢集運作正常。最後一步會連到 Zeabur 開源版的安裝文件。
 
 想在新伺服器上一次裝好 Zeabur 開源版，請照[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)操作。那份文件會用 K3s 完成本頁的步驟；本頁則涵蓋所有發行版，並說明每個步驟。
 
-大多數人用 Zeatend 的安裝畫面安裝。也可以交給 Agent，或照[用指令安裝](#用指令安裝)一步步執行指令。
+這一頁用 Zeatend 的安裝畫面安裝。要寫成腳本，或想自己執行每一步，見[用指令安裝](install-with-commands.mdx)。
 
 ## 交給 Agent 安裝
 
 在能用 SSH 連上伺服器的電腦上，把這段提示貼到 Claude Code 或 Codex，並提供伺服器位址：
 
 ```text
-請依照 https://oss.zeabur.com/docs/zeatend/get-started/install.md 在我的伺服器上用 Zeatend 安裝 Kubernetes。
+請依照 https://oss.zeabur.com/docs/zeatend/get-started/install-with-commands.md 在我的伺服器上用 Zeatend 安裝 Kubernetes。
 ```
 
 Agent 會顯示安裝計畫與主機檢查結果，等你確認後才安裝。
 
-Agent 不能操作安裝畫面，會改用[用指令安裝](#用指令安裝)的步驟。
+Agent 不能操作安裝畫面，會照[用指令安裝](install-with-commands.mdx)的步驟執行。
 
 ## 開始之前
 
@@ -53,28 +53,76 @@ curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/ze
 下載內容與發行檔相符時，`sha256sum` 會印出 `OK`。`zeatend` 是單一靜態執行檔，不需要其他套件。
 </Step>
 <Step>
-### 在安裝畫面安裝
+### 開啟安裝畫面
 
 ```sh
 sudo zeatend
 ```
 
-安裝畫面分成四步。按 F2 可以在英文、繁體中文和簡體中文之間切換。
+畫面最上面是接下來的四步：1 伺服器、2 連線方式、3 確認、4 安裝。最下面一列是現在能按的鍵：
 
-1. **伺服器**：列出主機資訊和主機檢查。用上下鍵選 K3s、RKE2 或 KubeSolo，再按 Enter。要注意的檢查項目都會寫出怎麼處理。
+| 按鍵 | 作用 |
+| --- | --- |
+| 上、下 | 選擇發行版 |
+| Tab | 換到下一欄 |
+| Enter | 繼續。在確認畫面按下就開始安裝 |
+| Esc | 回上一步 |
+| F2 | 切換語言：English、繁體中文或简体中文，選了馬上切換 |
+| Ctrl+C | 離開。開始安裝後只會關掉畫面，安裝會繼續 |
 
-   ![伺服器畫面：主機資訊、K3s、RKE2 或 KubeSolo 的選項，以及主機檢查](../../screens/80x24/zh_TW-server.svg)
+![語言選單：English、繁體中文和简体中文](../../screens/80x24/zh_TW-language.svg)
+</Step>
+<Step>
+### 選擇發行版
 
-2. **連線方式**：填你的電腦連到這台伺服器用的位址。要用 DNS 名稱連 API 伺服器，也一起填上。節點名稱可以不填。按 Tab 換到下一欄。
-3. **確認**：列出版本、位址和設定檔。按 Enter 後，Zeatend 會把你的選擇寫進 `/etc/zeatend/config.yaml`，開始安裝。
+第一個畫面是**伺服器**。上半部是這台伺服器的主機名稱、系統、CPU、記憶體和位址。
 
-   ![確認畫面：Kubernetes 版本、位址、DNS 名稱，以及接下來會做什麼](../../screens/80x24/zh_TW-review.svg)
+在**要安裝哪一種 Kubernetes** 用上下鍵選 K3s、RKE2 或 KubeSolo，每個選項都寫著適合什麼情況。不確定就選 K3s。
 
-4. **安裝**：顯示進度，約需幾分鐘。安裝在 systemd 單元裡執行，按 Ctrl+C 關掉畫面或 SSH 斷線都會繼續；再執行一次 `sudo zeatend` 就能接著看。完成後，畫面會列出查看節點、從自己的電腦使用叢集的指令。
+**主機檢查**列出每一項檢查的結果。要注意的項目會寫出怎麼處理，不會擋住安裝。有項目失敗時，按 Enter 不會繼續：照那一行的說明修好，再執行一次 `sudo zeatend`。
 
-   ![安裝畫面：安裝完成，叢集已經可以使用](../../screens/80x24/zh_TW-done.svg)
+按 Enter 繼續。
+
+![伺服器畫面：主機資訊、K3s、RKE2 或 KubeSolo 的選項，以及主機檢查](../../screens/80x24/zh_TW-server.svg)
+</Step>
+<Step>
+### 填寫位址
+
+**連線方式**畫面問你的電腦用哪個位址連到這台伺服器。之後在自己的電腦上用 kubectl，就是連到這個位址。
+
+- **位址**：伺服器有公開 IP 時會先填好，你的電腦用別的位址再修改。伺服器只有內網位址時，填你的電腦連到它用的 IP。API 伺服器的憑證會包含這個位址。
+- **DNS 名稱**：可以不填。要用網域名稱連到 API 伺服器時填上，憑證也會包含它。
+- **節點名稱**：可以不填，不填就用主機名稱。
+
+按 Tab 換欄，按 Enter 繼續。格式不對時，欄位下方會寫出該怎麼填。
+
+![連線方式畫面：位址、DNS 名稱和節點名稱](../../screens/80x24/zh_TW-access.svg)
+</Step>
+<Step>
+### 確認並開始安裝
+
+**確認**畫面列出要安裝的 Kubernetes 版本、位址、DNS 名稱、節點名稱、設定檔，以及接下來會做什麼。要修改就按 Esc 回上一步。
+
+按 Enter 開始安裝。Zeatend 會把你的選擇寫進 `/etc/zeatend/config.yaml`；檔案已經存在時，只改這幾項，其他設定不變。
+
+![確認畫面：Kubernetes 版本、位址、DNS 名稱，以及接下來會做什麼](../../screens/80x24/zh_TW-review.svg)
+</Step>
+<Step>
+### 等安裝完成
+
+**安裝**畫面顯示目前的步驟、經過的時間和紀錄，約需幾分鐘。
+
+![安裝畫面：安裝中的步驟、經過的時間和紀錄](../../screens/80x24/zh_TW-install.svg)
+
+安裝在 systemd 單元 `zeatend-install-<id>.service` 裡執行。按 Ctrl+C 只會關掉畫面，SSH 斷線也一樣，安裝都會繼續。再執行一次 `sudo zeatend` 就能接著看進度。
+
+完成時畫面會顯示「叢集已經可以使用。」，**接下來**列出查看節點、從自己的電腦使用叢集的指令。按 Enter 關閉畫面後，終端機會印出完整內容，方便複製。
+
+![安裝畫面：安裝完成，叢集已經可以使用](../../screens/80x24/zh_TW-done.svg)
 
 這些指令裡的 kubeconfig 是叢集管理員的認證資訊，只能放在伺服器或你自己的電腦上。
+
+畫面顯示「安裝停止了。」時，紀錄的最後幾行會寫出原因。完整輸出可以用 `journalctl -u 'zeatend-install-*'` 查看。修好後再執行一次 `sudo zeatend`。
 </Step>
 <Step>
 ### 檢查叢集
@@ -91,79 +139,6 @@ sudo zeatend doctor
 使用 K3s 時，從 Zeabur 開源版的[用 Zeatend 安裝](https://oss.zeabur.com/zh-TW/docs/zeabur/install/one-command/)裡的**用 Zeatend 裝好 Kubernetes** 開始操作。這一步會在 `/etc/zeatend/config.yaml` 加上 `apiServer.authenticationConfig`，讓 API 伺服器接受 Zeabur Identity 的登入，再執行一次 `zeatend apply`。接著用一個 `helm install` 就能安裝 Zeabur 開源版。
 
 使用 RKE2 或 KubeSolo 時，請照[把 Zeabur 開源版裝進既有叢集](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/)操作。
-</Step>
-</Steps>
-
-## 用指令安裝
-
-要寫成腳本、交給 Agent，或想自己執行每一步時，可以不用安裝畫面，改用指令。先下載 Zeatend，再依序做下面三步，完成後回到[檢查叢集](#檢查叢集)。
-
-<Steps>
-<Step>
-### 寫入設定檔
-
-Zeatend 會讀取 `/etc/zeatend/config.yaml`。沒有這個檔案時，會用預設值安裝 K3s，所以選用 K3s 可以略過這一步。
-
-要用 RKE2 或 KubeSolo，先寫入設定檔：
-
-```sh
-sudo mkdir -p /etc/zeatend
-echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
-```
-
-使用 KubeSolo 時，把 `rke2` 換成 `kubesolo`。如果也要用 DNS 名稱連到 API 伺服器，把名稱加到 `host.tlsSan`。[設定檔](../reference/configuration.mdx)列出所有設定。
-</Step>
-<Step>
-### 檢查安裝計畫
-
-```sh
-sudo zeatend plan
-```
-
-`plan` 不會修改任何內容，只會印出要安裝的版本、節點名稱與位址、要寫入的檔案，以及主機檢查結果：
-
-```text
-==> Checking the host
-    ok   root               running as root
-    ok   systemd            systemd is the init system
-    warn swap               swap is on; the kubelet expects it off (swapoff -a, and remove it from /etc/fstab)
-    ok   ports              80, 443, 6443 and 10250 are free
-    ok   disk space         95.0 GiB free under /var/lib
-```
-
-出現 `FAIL` 就會停止安裝。先解決該行指出的問題，再執行一次 `plan`。`warn` 不會阻止安裝，每一行都會列出解決問題的指令。
-</Step>
-<Step>
-### 安裝叢集
-
-```sh
-sudo zeatend apply
-```
-
-`apply` 會下載發行版，用 Zeatend 內建的雜湊摘要驗證每個檔案，寫入設定、啟動服務，再等節點進入 `Ready` 狀態，約需幾分鐘。
-
-安裝會在 systemd 單元 `zeatend-install-<id>.service` 中執行，即使 SSH 工作階段斷線也會繼續。再執行一次 `sudo zeatend apply` 就能接著看進度，完整輸出可用 `journalctl -u 'zeatend-install-*'` 檢視。
-
-結束時會印出版本、節點，以及接下來可執行的指令：
-
-```text
-==> Waiting for node vps-1 to be Ready
-K3s v1.37.2+k3s1 runs on vps-1.
-
-List the nodes on this server:
-  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
-
-Use the cluster from your own computer:
-  mkdir -p ~/.kube
-  (umask 077; ssh <you>@203.0.113.10 sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/vps-1.yaml)
-  sed -i.bak 's#https://127.0.0.1:6443#https://203.0.113.10:6443#' ~/.kube/vps-1.yaml
-  KUBECONFIG=~/.kube/vps-1.yaml kubectl get nodes
-
-Whoever has this file is cluster admin; keep it like an SSH key.
-==> Done
-```
-
-輸出列出的 kubeconfig 是叢集管理員的認證資訊，只能放在伺服器或你自己的電腦上。`apply` 可以安全地重複執行，會把伺服器調整成設定檔指定的狀態。
 </Step>
 </Steps>
 
