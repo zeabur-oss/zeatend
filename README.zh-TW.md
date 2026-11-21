@@ -12,7 +12,7 @@
 
 Zeatend 是管理 Kubernetes 叢集的工具，概念和 [k3sup](https://github.com/alexellis/k3sup) 相近。它透過 SSH 在主機上安裝並管理 K3s、RKE2 和 KubeSolo 叢集，也提供終端機介面。
 
-Zeatend 由 Zeabur 專案開發，目前還在早期開發階段。
+Zeatend 屬於 Zeabur 的開源專案，目前還在早期開發階段。
 
 ## 安裝
 

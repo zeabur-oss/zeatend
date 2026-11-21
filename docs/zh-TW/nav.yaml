@@ -1,7 +1,7 @@
 - group: get-started
   label: 開始使用
   pages:
-    install: 安裝叢集與 Zeabur
+    install: 安裝叢集與 Zeabur 開源版
 - group: operations
   label: 維運
   pages:
