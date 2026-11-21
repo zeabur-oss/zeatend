@@ -1,11 +1,11 @@
 ---
-title: Install a cluster and Zeabur
-description: Download Zeatend to a Linux server, choose K3s, RKE2 or KubeSolo, check the plan, install the cluster, and go on to install Zeabur.
+title: Install a cluster and Zeabur OSS
+description: Download Zeatend to a Linux server, choose K3s, RKE2 or KubeSolo, check the plan, install the cluster, and go on to install Zeabur OSS.
 ---
 
-When you finish this page, a Linux server runs a Kubernetes cluster that Zeatend set up, and `zeatend doctor` reports it healthy. The last step links to the Zeabur install.
+When you finish this page, a Linux server runs a Kubernetes cluster that Zeatend set up, and `zeatend doctor` reports it healthy. The last step links to the Zeabur OSS install.
 
-To install Zeabur on a new server in one go, follow Zeabur's [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/). That page runs the steps of this one for K3s. This page covers every distribution and explains each step.
+To install Zeabur OSS on a new server in one go, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/). That page runs the steps of this one for K3s. This page covers every distribution and explains each step.
 
 ## Let an agent do it
 
@@ -137,11 +137,11 @@ sudo zeatend doctor
 </Step>
 <Step>
 
-### Install Zeabur
+### Install Zeabur OSS
 
-On K3s, follow Zeabur's [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur.
+On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
 
-On RKE2 or KubeSolo, follow [Install Zeabur in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
+On RKE2 or KubeSolo, follow [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
 
 </Step>
 </Steps>

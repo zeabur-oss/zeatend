@@ -12,7 +12,7 @@
 
 Zeatend 是管理 Kubernetes 集群的工具，思路和 [k3sup](https://github.com/alexellis/k3sup) 相近。它通过 SSH 在主机上安装和管理 K3s、RKE2 和 KubeSolo 集群，并提供终端界面。
 
-Zeatend 由 Zeabur 项目开发，目前还处在早期开发阶段。
+Zeatend 属于 Zeabur 的开源项目，目前还处在早期开发阶段。
 
 ## 安装
 

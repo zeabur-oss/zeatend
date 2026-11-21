@@ -47,7 +47,7 @@ KubeSolo always takes the host name, so `host.nodeName` can only repeat it. To n
 
 Zeatend checks only `apiVersion` and `kind`, writes the rest to a file unchanged, and gives the file to the API server. Kubernetes checks the other fields when the API server starts. On K3s and RKE2, a configuration without an `anonymous` section gets `anonymous: {enabled: false}`, so anonymous requests stay off. A change takes effect on the next `apply`.
 
-Zeabur's [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) writes this section with `zeabur-identityctl kube-config`, so the API server accepts sign-ins from Zeabur Identity.
+[Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) in the Zeabur OSS docs writes this section with `zeabur-identityctl kube-config`, so the API server accepts sign-ins from Zeabur Identity.
 
 ## A node that joins
 

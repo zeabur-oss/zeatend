@@ -5,4 +5,4 @@ vulnerability reporting) on this repository. Do not open public issues for secur
 
 ## Support
 
-Zeabur Zeatend has no release yet. Until it does, fixes land on `main` only.
+Zeatend has no release yet. Until it does, fixes land on `main` only.
