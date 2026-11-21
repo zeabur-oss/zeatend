@@ -1,6 +1,6 @@
 # Contributing
 
-Zeabur Zeatend is a Kubernetes cluster manager for K3s, RKE2 and KubeSolo over SSH, with a
+Zeatend is a Kubernetes cluster manager for K3s, RKE2 and KubeSolo over SSH, with a
 terminal UI.
 
 ## Developer Certificate of Origin
