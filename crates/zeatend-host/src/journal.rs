@@ -4,7 +4,8 @@ use std::ops::ControlFlow;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 use tokio::io::{AsyncBufReadExt as _, BufReader};
 use tokio::process::Command;
 
@@ -35,28 +36,42 @@ impl Entry {
     /// (systemd.journal-fields(7), "JSON format" in journalctl(1)).
     #[must_use]
     pub fn parse(line: &str, unit: &str) -> Option<Self> {
-        let value: Value = serde_json::from_str(line).ok()?;
-        let cursor = value.get("__CURSOR")?.as_str()?.to_owned();
-        let from_unit = value.get("_SYSTEMD_UNIT").and_then(Value::as_str) == Some(unit);
-        let output = from_unit.then(|| message(value.get("MESSAGE")));
-        Some(Self { cursor, output })
+        let line: Line = serde_json::from_str(line).ok()?;
+        let from_unit = line.unit.as_deref() == Some(unit);
+        Some(Self {
+            cursor: line.cursor,
+            output: from_unit.then(|| line.message.map_or_else(String::new, Message::into_text)),
+        })
     }
 }
 
-/// The text of a `MESSAGE` field.
-fn message(field: Option<&Value>) -> String {
-    match field {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(bytes)) => {
-            let bytes: Vec<u8> = bytes
-                .iter()
-                .filter_map(Value::as_u64)
-                .filter_map(|b| u8::try_from(b).ok())
-                .collect();
-            String::from_utf8_lossy(&bytes).into_owned()
-        }
-        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_)) | None => {
-            String::new()
+/// The fields of a journal entry that [`Entry`] reads.
+#[derive(Deserialize)]
+struct Line {
+    #[serde(rename = "__CURSOR")]
+    cursor: String,
+    #[serde(rename = "_SYSTEMD_UNIT")]
+    unit: Option<String>,
+    #[serde(rename = "MESSAGE")]
+    message: Option<Message>,
+}
+
+/// A `MESSAGE` field.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum Message {
+    Text(String),
+    Bytes(Vec<u8>),
+    /// A value journald does not write, read as empty.
+    Other(IgnoredAny),
+}
+
+impl Message {
+    fn into_text(self) -> String {
+        match self {
+            Self::Text(text) => text,
+            Self::Bytes(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Self::Other(_) => String::new(),
         }
     }
 }

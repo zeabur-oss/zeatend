@@ -269,7 +269,7 @@ mod tests {
             server["control-plane-resource-requests"],
             serde_json::json!(["etcd-memory=256Mi", "kube-controller-manager-memory=128Mi"])
         );
-        let agent: serde_json::Value =
+        let agent: serde_json::Map<String, serde_json::Value> =
             serde_saphyr::from_str(&agent_files(&tuning()).unwrap()[1].content).unwrap();
         let args = agent["kubelet-arg"].as_array().unwrap();
         assert!(args.contains(&serde_json::json!("system-reserved=memory=350Mi")));
@@ -281,7 +281,7 @@ mod tests {
                 .iter()
                 .any(|a| a.as_str().unwrap().starts_with("kube-reserved="))
         );
-        assert!(agent.get("control-plane-resource-requests").is_none());
+        assert!(!agent.contains_key("control-plane-resource-requests"));
     }
 
     #[test]
@@ -304,14 +304,14 @@ mod tests {
             parsed["disable"],
             serde_json::json!(["rke2-metrics-server"])
         );
-        let plain: serde_json::Value = serde_saphyr::from_str(
+        let plain: serde_json::Map<String, serde_json::Value> = serde_saphyr::from_str(
             &config(&options(Vec::new()))
                 .file(String::new())
                 .unwrap()
                 .content,
         )
         .unwrap();
-        assert!(plain.get("ingress-controller").is_none());
-        assert!(plain.get("disable").is_none());
+        assert!(!plain.contains_key("ingress-controller"));
+        assert!(!plain.contains_key("disable"));
     }
 }
