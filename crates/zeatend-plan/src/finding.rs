@@ -5,6 +5,7 @@
 use serde::Serialize;
 
 use crate::cluster::{Distribution, PortUse, Rancher};
+use crate::longhorn::Need;
 
 /// How a finding weighs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -420,6 +421,15 @@ pub enum Finding {
     /// The token has no CA hash, so the node trusts any server at the address.
     #[serde(rename = "join.token.unpinned")]
     TokenUnpinned,
+    /// The node has what Longhorn needs.
+    #[serde(rename = "longhorn.ready")]
+    LonghornReady,
+    /// The node lacks what Longhorn needs.
+    #[serde(rename = "longhorn.missing")]
+    LonghornMissing {
+        /// What it lacks.
+        needs: Vec<Need>,
+    },
 }
 
 impl Finding {
@@ -469,7 +479,9 @@ impl Finding {
                 Topic::Firewall
             }
             Self::ServersHa => Topic::HighAvailability,
-            Self::LocalStorage => Topic::Storage,
+            Self::LocalStorage | Self::LonghornReady | Self::LonghornMissing { .. } => {
+                Topic::Storage
+            }
             Self::TokenUnpinned => Topic::JoinToken,
         }
     }
@@ -493,7 +505,8 @@ impl Finding {
             | Self::RecordOk { .. }
             | Self::NodesReady { .. }
             | Self::ReservesSet { .. }
-            | Self::SecretsEncrypted { .. } => Status::Pass,
+            | Self::SecretsEncrypted { .. }
+            | Self::LonghornReady => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -534,7 +547,8 @@ impl Finding {
             | Self::NodesNone { .. }
             | Self::NodesUnknown { .. }
             | Self::SecretsPlain { .. }
-            | Self::ServerUnreachable { .. } => Status::Fail,
+            | Self::ServerUnreachable { .. }
+            | Self::LonghornMissing { .. } => Status::Fail,
         }
     }
 }

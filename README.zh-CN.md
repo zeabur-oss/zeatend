@@ -97,6 +97,8 @@ K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安装 Kubernetes 1.37。Ku
 
 K3s 和 RKE2 按上游的默认设置，部署自带的组件，例如 Traefik。要改用自己安装的版本，就用 `disable` 关闭，例如 `disable: [traefik, metrics-server]`。`local-storage` 会关闭 K3s 的 local-path 存储类。KubeSolo 没有这些组件。
 
+`storage: {longhorn: true}` 会为主机准备好 Longhorn 需要的环境，Zeabur Catalog 会在多节点集群上安装 Longhorn：`apply` 用 apt 或 dnf 安装 iSCSI initiator 和 NFS 客户端，设置开机时加载 `iscsi_tcp` 和 `dm_crypt`，启动 `iscsid`，并让 multipathd 避开 Longhorn 的磁盘。节点缺少其中任何一项时，`zeatend doctor` 会报告；`zeatend node add` 会让新节点沿用同样的设置。
+
 `apiServer.authenticationConfig` 是 API 服务器的[认证配置](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，按 Kubernetes 文档的格式写，例如让 API 服务器接受某个 OpenID Connect 签发者的令牌：
 
 ```yaml

@@ -121,6 +121,12 @@ K3s and RKE2 deploy their packaged components as upstream ships them, Traefik am
 your own instead, turn them off with `disable`, such as `disable: [traefik, metrics-server]`.
 `local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these.
 
+`storage: {longhorn: true}` prepares the host for Longhorn, which the Zeabur catalog installs on
+clusters of more than one node: `apply` installs the iSCSI initiator and the NFS client with apt
+or dnf, loads `iscsi_tcp` and `dm_crypt` at boot, starts `iscsid` and keeps multipathd off
+Longhorn's disks. `zeatend doctor` reports a node that lacks one of these, and `zeatend node add`
+gives a new node the same `storage` setting.
+
 `apiServer.authenticationConfig` is the API server's
 [authentication configuration](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration),
 written as Kubernetes describes it, such as an OpenID Connect issuer whose tokens the API server

@@ -361,10 +361,15 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
             NodeRole::Worker => Role::Worker,
             NodeRole::Server => Role::Server,
         };
+        let storage = match load::document_or_defaults(config)?.0 {
+            Document::Install(config) => config.storage,
+            Document::Join(config) => config.storage,
+        };
         return node::add(&node::AddOptions {
             role,
             address: address.clone(),
             ttl: *ttl,
+            storage,
         })
         .await;
     }

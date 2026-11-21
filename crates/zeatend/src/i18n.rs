@@ -172,6 +172,8 @@ pub(crate) fn messages() -> &'static Messages {
 pub(crate) struct Messages {
     /// The step that runs the preflight checks.
     pub(crate) checking_host: &'static str,
+    /// The step that prepares the node for Longhorn.
+    pub(crate) preparing_longhorn: &'static str,
     /// After the checks of `plan`, when one failed.
     pub(crate) apply_stops: &'static str,
     /// The error of `apply` when a check failed.

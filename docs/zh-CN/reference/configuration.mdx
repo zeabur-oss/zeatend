@@ -36,6 +36,7 @@ apiServer:
 | `host.tlsSan` | 无 | 为 API 服务器证书添加的名称和地址，例如 DNS 名称。 |
 | `host.nodeName` | 主机名 | 节点在 Kubernetes 中的名称。 |
 | `host.requireEncryptedDisk` | `false` | 集群数据不在加密磁盘上时，停止安装。 |
+| `storage.longhorn` | `false` | 为 Longhorn 准备节点，详见 [Longhorn](#longhorn)。仅限 K3s 和 RKE2。 |
 
 ### 节点名称
 
@@ -48,6 +49,18 @@ KubeSolo 始终使用主机名，因此 `host.nodeName` 只能填写相同的名
 Zeatend 只检查 `apiVersion` 和 `kind`，其余内容原样写入文件，再将文件交给 API 服务器。API 服务器启动时，Kubernetes 会检查其他字段。在 K3s 和 RKE2 上，如果配置中没有 `anonymous` 部分，Zeatend 会添加 `anonymous: {enabled: false}`，保持匿名请求关闭。修改会在下次运行 `apply` 时生效。
 
 Zeabur 开源版的[使用 Zeatend 安装](https://oss.zeabur.com/zh-CN/docs/zeabur/install/one-command/)会用 `zeabur-identityctl kube-config` 写入这一部分，让 API 服务器接受 Zeabur Identity 的登录。
+
+
+### Longhorn
+
+Zeabur Catalog 会在多节点集群上安装 Longhorn。Longhorn 通过 iSCSI 把每个卷连接到运行 Pod 的节点，所以每个节点都要先装好一些软件包和服务，Longhorn 才能在上面运行。设置 `storage: {longhorn: true}` 后，`apply` 会为节点做好这些准备：
+
+- 安装 iSCSI initiator 和 NFS 客户端：用 apt 安装 `open-iscsi` 和 `nfs-common`，或用 dnf 安装 `iscsi-initiator-utils` 和 `nfs-utils`。如果主机既没有 apt 也没有 dnf，`plan` 和 `apply` 会停下来，列出需要自行安装的软件包。
+- 通过 `/etc/modules-load.d/zeatend-longhorn.conf` 立即加载 `iscsi_tcp` 和 `dm_crypt`，之后每次开机也会加载。
+- 启用并启动 `iscsid`。
+- 如果 multipathd 正在运行，就写入 `/etc/multipath/conf.d/zeatend-longhorn.conf`，让 multipathd 避开 Longhorn 的磁盘；这个文件有变更时才重启 multipathd。
+
+`plan` 只列出节点缺少的项目，所以紧接着再运行一次 `apply` 不会有任何变更。`zeatend doctor` 会报告节点缺少什么。Zeatend 本身不安装 Longhorn。`uninstall` 会删除这两个文件，但保留软件包。
 
 ## 加入集群的节点
 
@@ -72,3 +85,4 @@ join:
 | `join.nodeNames` | 集群已有节点的名称，当前节点会避开这些名称。 |
 | `disable`、`apiServer` | 仅适用于 RKE2 服务器节点。每台服务器都会部署内置组件并运行 API 服务器，因此所有服务器必须使用相同的值。 |
 | `host` | 与第一台服务器相同。`tlsSan` 仅适用于服务器节点。 |
+| `storage` | 与第一台服务器相同。`zeatend node add` 会沿用服务器的设置。 |

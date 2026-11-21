@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::cluster::{self, Distribution, HostFile, Rancher};
 use crate::config::{Config, Role};
 use crate::finding::{Check, Finding};
+use crate::longhorn::{self, Storage};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::precondition::Preconditions;
 use crate::record::{Changes, Record};
@@ -53,6 +54,9 @@ pub struct Facts {
     /// See [`crate::kubesolo::Options::installer_webhook`].
     #[serde(default)]
     pub installer_webhook: bool,
+    /// What the host has of what Longhorn needs; read only when `storage.longhorn` asks for it.
+    #[serde(skip)]
+    pub longhorn: Option<longhorn::HostState>,
 }
 
 impl Facts {
@@ -61,6 +65,19 @@ impl Facts {
     pub fn apparmor_profile(&self) -> Option<HostFile> {
         self.apparmor_restricts_unconfined
             .then(cluster::apparmor_profile)
+    }
+
+    /// What `apply` does for Longhorn, when `storage` asks for it and the host was read.
+    ///
+    /// # Errors
+    ///
+    /// [`PlanError::NoPackageManager`].
+    pub fn longhorn(&self, storage: Storage) -> Result<Option<longhorn::Prep>, PlanError> {
+        self.longhorn
+            .as_ref()
+            .filter(|_| storage.longhorn)
+            .map(longhorn::prepare)
+            .transpose()
     }
 
     /// Stops when a newer zeatend applied, as the record says.
@@ -96,6 +113,8 @@ pub struct Plan {
     pub host_files: Vec<HostFile>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
+    /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
+    pub longhorn: Option<longhorn::Prep>,
     /// What `apply` changes against the install record; `None` on a first install.
     pub changes: Option<Changes>,
     /// What to read before applying.
@@ -277,6 +296,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         .record
         .as_ref()
         .map(|r| Changes::new(r, release.version()));
+    let longhorn = facts.longhorn(config.storage)?;
     Ok(Plan {
         facts: facts.clone(),
         distribution: config.distribution,
@@ -286,6 +306,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         tuning,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         host_files,
+        longhorn,
         changes,
         findings: findings.into_iter().map(Check::from).collect(),
         preconditions: Preconditions::default(),
@@ -419,6 +440,7 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            longhorn: None,
         }
     }
 
@@ -549,6 +571,49 @@ mod tests {
         let upgrade = plan(&config("{}"), &installed).unwrap();
         assert_eq!(topics(&upgrade), [Topic::Memory]);
         assert!(upgrade.changes.is_some_and(|c| c.restart));
+    }
+
+    fn bare_host() -> longhorn::HostState {
+        longhorn::HostState {
+            package_manager: Some(longhorn::PackageManager::Dnf),
+            missing_packages: longhorn::PACKAGES.to_vec(),
+            unloaded_modules: longhorn::MODULES.to_vec(),
+            ..longhorn::HostState::default()
+        }
+    }
+
+    #[test]
+    fn storage_longhorn_lists_what_apply_installs_without_touching_the_cluster_files() {
+        let read = Facts {
+            longhorn: Some(bare_host()),
+            ..facts()
+        };
+        let without = plan(&config("{}"), &read).unwrap();
+        assert_eq!(without.longhorn, None);
+        let with = plan(&config("storage: {longhorn: true}\n"), &read).unwrap();
+        let prep = with.longhorn.as_ref().unwrap();
+        assert_eq!(
+            prep.steps[0],
+            longhorn::Step::Install {
+                manager: longhorn::PackageManager::Dnf,
+                packages: vec!["iscsi-initiator-utils", "nfs-utils"],
+            }
+        );
+        assert_eq!(with.host_files, without.host_files);
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["longhorn"]["steps"][0]["step"], "install");
+
+        let no_manager = Facts {
+            longhorn: Some(longhorn::HostState {
+                package_manager: None,
+                ..bare_host()
+            }),
+            ..facts()
+        };
+        assert!(matches!(
+            plan(&config("storage: {longhorn: true}\n"), &no_manager),
+            Err(PlanError::NoPackageManager { .. })
+        ));
     }
 
     #[test]

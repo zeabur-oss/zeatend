@@ -673,6 +673,8 @@ impl Rancher {
             self.node_name_path(),
             self.node_ip_path(),
             APPARMOR_PROFILE.to_owned(),
+            crate::longhorn::MODULES_FILE.to_owned(),
+            crate::longhorn::MULTIPATH_FILE.to_owned(),
         ];
         if role == Role::Server {
             paths.push(self.servicelb_policy_path());

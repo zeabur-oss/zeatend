@@ -18,10 +18,11 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use zeatend_host::kubectl::Kubectl;
-use zeatend_host::{facts, preflight, systemd};
+use zeatend_host::{facts, longhorn, preflight, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::{Check, Finding, Kept, Status};
+use zeatend_plan::longhorn::HostState;
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
 use zeatend_plan::tuning::OS_IDLE_MIB;
 use zeatend_plan::uninstall::{self, Node};
@@ -39,16 +40,16 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
         output::line(i18n::messages().doctor_needs_root);
         return ExitCode::from(UNKNOWN);
     }
-    let require_encrypted_disk = match load::document_or_defaults(config) {
-        Ok((Document::Install(config), _)) => config.host.require_encrypted_disk,
-        Ok((Document::Join(config), _)) => config.host.require_encrypted_disk,
+    let (require_encrypted_disk, storage) = match load::document_or_defaults(config) {
+        Ok((Document::Install(config), _)) => (config.host.require_encrypted_disk, config.storage),
+        Ok((Document::Join(config), _)) => (config.host.require_encrypted_disk, config.storage),
         Err(error) => {
             output::line(&format!("{config}: {error}", config = config.display()));
             return ExitCode::from(UNKNOWN);
         }
     };
     let root = Path::new("/");
-    let checks = match uninstall::detect(|path| crate::uninstall::exists(root, path))
+    let mut checks = match uninstall::detect(|path| crate::uninstall::exists(root, path))
         .first()
         .copied()
     {
@@ -65,11 +66,24 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
             checks
         }
     };
+    if storage.longhorn {
+        checks.push(longhorn_check(&longhorn::read().await).into());
+    }
     let messages = i18n::messages();
     for check in &checks {
         output::line(&messages.check_line(&check.finding));
     }
     ExitCode::from(exit_code(&checks))
+}
+
+/// Whether the node has what Longhorn needs.
+fn longhorn_check(host: &HostState) -> Finding {
+    let needs = zeatend_plan::longhorn::needs(host);
+    if needs.is_empty() {
+        Finding::LonghornReady
+    } else {
+        Finding::LonghornMissing { needs }
+    }
 }
 
 /// The exit code of the worst check.

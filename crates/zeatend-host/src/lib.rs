@@ -7,6 +7,7 @@ pub mod facts;
 pub mod files;
 pub mod journal;
 pub mod kubectl;
+pub mod longhorn;
 pub mod network;
 pub mod preflight;
 pub mod progress;
