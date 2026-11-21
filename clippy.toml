@@ -9,3 +9,14 @@ avoid-breaking-exported-api = false
 
 # Proper nouns that doc_markdown would otherwise ask to wrap in backticks.
 doc-valid-idents = ["GitHub", "KubeSolo", "RKE2", "K3s", ".."]
+
+# Known shapes are typed structs, not `serde_json::Value` accessors. A field that is renamed or
+# misspelled then fails to compile instead of reading `None`.
+disallowed-methods = [
+    { path = "serde_json::Value::get", reason = "read a known shape through a typed struct: a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+    { path = "serde_json::Value::get_mut", reason = "edit a known shape through a typed struct: a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+    { path = "serde_json::Value::pointer", reason = "read a known shape through a typed struct: a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+    { path = "serde_json::Value::pointer_mut", reason = "edit a known shape through a typed struct: a `k8s_openapi` type or a local `#[derive(Deserialize)]` struct" },
+    { path = "serde_json::Value::as_object_mut", reason = "build or edit a known shape as a typed struct: a `k8s_openapi` type or a local `#[derive(Serialize)]` struct" },
+    { path = "serde_json::Value::as_array_mut", reason = "build or edit a known shape as a typed struct: a `k8s_openapi` type or a local `#[derive(Serialize)]` struct" },
+]
