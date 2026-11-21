@@ -8,6 +8,7 @@
 //! only, with the kubelet's credentials.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -18,11 +19,13 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use zeatend_host::kubectl::Kubectl;
-use zeatend_host::{facts, preflight, systemd};
+use zeatend_host::{HostError, download, facts, preflight, systemd};
 use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::{Check, Finding, Kept, Status};
+use zeatend_plan::plan;
 use zeatend_plan::record::{RECORD_FILE, Record, Writer, check_zeatend_version};
+use zeatend_plan::registry::{self, Proxy, RegistryHost};
 use zeatend_plan::tuning::OS_IDLE_MIB;
 use zeatend_plan::uninstall::{self, Node};
 
@@ -39,19 +42,37 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
         output::line(i18n::messages().doctor_needs_root);
         return ExitCode::from(UNKNOWN);
     }
-    let require_encrypted_disk = match load::document_or_defaults(config) {
-        Ok((Document::Install(config), _)) => config.host.require_encrypted_disk,
-        Ok((Document::Join(config), _)) => config.host.require_encrypted_disk,
+    let (require_encrypted_disk, network) = match load::document_or_defaults(config) {
+        Ok((Document::Install(config), _)) => (
+            config.host.require_encrypted_disk,
+            Network {
+                distribution: config.distribution,
+                version: config.version,
+                mirrors: config.registry_mirrors,
+                hosts: config.registry_hosts,
+                proxy: config.proxy,
+            },
+        ),
+        Ok((Document::Join(config), _)) => (
+            config.host.require_encrypted_disk,
+            Network {
+                distribution: config.distribution,
+                version: config.version,
+                mirrors: config.registry_mirrors,
+                hosts: config.registry_hosts,
+                proxy: config.proxy,
+            },
+        ),
         Err(error) => {
             output::line(&format!("{config}: {error}", config = config.display()));
             return ExitCode::from(UNKNOWN);
         }
     };
     let root = Path::new("/");
-    let checks = match uninstall::detect(|path| crate::uninstall::exists(root, path))
+    let installed = uninstall::detect(|path| crate::uninstall::exists(root, path))
         .first()
-        .copied()
-    {
+        .copied();
+    let mut checks = match installed {
         None => vec![Finding::NotInstalled.into()],
         Some(node) => {
             let mut checks = preflight::run(preflight::Options {
@@ -65,11 +86,90 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
             checks
         }
     };
+    checks.extend(
+        network
+            .check(installed.is_none())
+            .await
+            .into_iter()
+            .map(Check::from),
+    );
     let messages = i18n::messages();
     for check in &checks {
         output::line(&messages.check_line(&check.finding));
     }
     ExitCode::from(exit_code(&checks))
+}
+
+/// What `doctor` checks the network with, from the configuration.
+struct Network {
+    distribution: Distribution,
+    /// The configured K3s or RKE2 release; `None` for the pinned one.
+    version: Option<String>,
+    mirrors: BTreeMap<String, Vec<String>>,
+    hosts: BTreeMap<String, RegistryHost>,
+    proxy: Option<Proxy>,
+}
+
+impl Network {
+    /// Whether each registry mirror answers and, before an install, each release download.
+    /// Any HTTP answer from a mirror passes: a mirror may ask for credentials at `/v2/`.
+    async fn check(&self, downloads: bool) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        if downloads {
+            let agent = download::agent(self.proxy.as_ref(), &[]);
+            let arch = facts::arch(std::env::consts::ARCH);
+            for url in plan::release_urls(self.distribution, self.version.as_deref(), arch) {
+                findings.push(match agent.status(&url).await {
+                    Ok(status) if status < 400 => Finding::DownloadsOk { url },
+                    Ok(status) => Finding::DownloadsNo {
+                        url,
+                        reason: format!("HTTP {status}"),
+                    },
+                    Err(error) => Finding::DownloadsNo {
+                        url,
+                        reason: reason(&error),
+                    },
+                });
+            }
+        }
+        let direct = facts::addresses().await;
+        for endpoint in self.mirrors.values().flatten() {
+            let Some((url, host)) = registry::probe(endpoint) else {
+                continue;
+            };
+            let ca = self.hosts.get(host).and_then(|h| h.ca_file.as_deref());
+            let agent = match ca.map(fs::read) {
+                None => download::agent(self.proxy.as_ref(), &direct),
+                Some(Ok(pem)) => download::agent_trusting(self.proxy.as_ref(), &direct, &pem),
+                Some(Err(error)) => {
+                    findings.push(Finding::MirrorNo {
+                        endpoint: endpoint.clone(),
+                        reason: format!("{}: {error}", ca.unwrap_or_default()),
+                    });
+                    continue;
+                }
+            };
+            findings.push(match agent.status(&url).await {
+                Ok(_) => Finding::MirrorOk {
+                    endpoint: endpoint.clone(),
+                },
+                Err(error) => Finding::MirrorNo {
+                    endpoint: endpoint.clone(),
+                    reason: reason(&error),
+                },
+            });
+        }
+        findings
+    }
+}
+
+/// The cause of a failed download, without the URL the finding names already.
+fn reason(error: &HostError) -> String {
+    if let HostError::Download { reason, .. } = error {
+        reason.clone()
+    } else {
+        error.to_string()
+    }
 }
 
 /// The exit code of the worst check.
@@ -127,7 +227,7 @@ async fn cluster(node: Node) -> Vec<Finding> {
     }
     if let (Some(rancher), Role::Server) = (node.distribution.rancher(), node.role) {
         let path = format!("{}/server/cred/encryption-config.json", layout.data_dir);
-        let config = std::fs::read_to_string(path).ok();
+        let config = fs::read_to_string(path).ok();
         found.push(secrets_encryption(rancher, config.as_deref()));
     }
     found

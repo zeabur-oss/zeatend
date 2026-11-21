@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::{APPARMOR_PROFILE, Distribution, HostFile, PortUse};
+use crate::config::Role;
 use crate::installer::{self, KUBESOLO_WEBHOOK_SCRIPT};
 use crate::tuning::HostTuning;
 use crate::uninstall::{Remove, parent};
@@ -142,6 +143,10 @@ pub fn footprint() -> Vec<Remove> {
     trees
         .map(|path| Remove::Tree(path.to_owned()))
         .into_iter()
+        .chain(crate::registry::footprint(
+            Distribution::KubeSolo,
+            Role::Server,
+        ))
         .chain(dirs.map(|path| Remove::EmptyDir(parent(path))))
         .collect()
 }

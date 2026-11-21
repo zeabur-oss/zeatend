@@ -456,6 +456,8 @@ mod tests {
             apparmor_restricts_unconfined: variant,
             k3s_own_network: variant,
             installer_webhook: variant,
+            registry_files: Vec::new(),
+            registry_passwords: std::collections::BTreeMap::new(),
         }
     }
 

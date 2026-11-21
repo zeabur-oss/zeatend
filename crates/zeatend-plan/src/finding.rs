@@ -68,6 +68,10 @@ pub enum Topic {
     Storage,
     /// The join token.
     JoinToken,
+    /// The release downloads answer, before an install.
+    Downloads,
+    /// The registry mirrors answer.
+    Mirrors,
 }
 
 /// Files of another Kubernetes distribution.
@@ -241,6 +245,34 @@ pub enum Finding {
     /// K3s, RKE2 and `KubeSolo` are not installed.
     #[serde(rename = "service.none")]
     NotInstalled,
+    /// A download of the release answers.
+    #[serde(rename = "downloads.ok")]
+    DownloadsOk {
+        /// The download.
+        url: String,
+    },
+    /// A download of the release does not answer, so `apply` cannot install it.
+    #[serde(rename = "downloads.no")]
+    DownloadsNo {
+        /// The download.
+        url: String,
+        /// What failed: the connection, TLS, the proxy or an HTTP status.
+        reason: String,
+    },
+    /// A registry mirror answers.
+    #[serde(rename = "mirror.ok")]
+    MirrorOk {
+        /// The mirror endpoint.
+        endpoint: String,
+    },
+    /// A registry mirror does not answer; containerd tries the next one, then the registry.
+    #[serde(rename = "mirror.no")]
+    MirrorNo {
+        /// The mirror endpoint.
+        endpoint: String,
+        /// What failed: the connection, TLS or the proxy.
+        reason: String,
+    },
     /// The service runs.
     #[serde(rename = "service.running")]
     ServiceRunning {
@@ -471,6 +503,8 @@ impl Finding {
             Self::ServersHa => Topic::HighAvailability,
             Self::LocalStorage => Topic::Storage,
             Self::TokenUnpinned => Topic::JoinToken,
+            Self::DownloadsOk { .. } | Self::DownloadsNo { .. } => Topic::Downloads,
+            Self::MirrorOk { .. } | Self::MirrorNo { .. } => Topic::Mirrors,
         }
     }
 
@@ -493,7 +527,9 @@ impl Finding {
             | Self::RecordOk { .. }
             | Self::NodesReady { .. }
             | Self::ReservesSet { .. }
-            | Self::SecretsEncrypted { .. } => Status::Pass,
+            | Self::SecretsEncrypted { .. }
+            | Self::DownloadsOk { .. }
+            | Self::MirrorOk { .. } => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -518,7 +554,8 @@ impl Finding {
             | Self::UdpUnchecked { .. }
             | Self::ServersHa
             | Self::LocalStorage
-            | Self::TokenUnpinned => Status::Warn,
+            | Self::TokenUnpinned
+            | Self::MirrorNo { .. } => Status::Warn,
             Self::RootNo
             | Self::SystemdNo
             | Self::PortsBusy { .. }
@@ -528,6 +565,7 @@ impl Finding {
             | Self::DockerFound { .. }
             | Self::ForwardDrop
             | Self::NotInstalled
+            | Self::DownloadsNo { .. }
             | Self::ServiceStopped { .. }
             | Self::ApiDown { .. }
             | Self::NodesNotReady { .. }

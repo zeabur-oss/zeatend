@@ -244,6 +244,8 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Nodes => "节点",
         Topic::KubeletReserves => "kubelet 预留资源",
         Topic::SecretsEncryption => "Secret 加密",
+        Topic::Downloads => "下载",
+        Topic::Mirrors => "镜像源",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
@@ -356,6 +358,17 @@ fn finding(finding: &Finding) -> String {
             .to_owned(),
         Finding::NotInstalled => {
             "这台主机没有安装 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安装".to_owned()
+        }
+        Finding::DownloadsOk { url } => format!("{url} 可以连接"),
+        Finding::DownloadsNo { url, reason } => format!(
+            "{url} 连不上（{reason}），按 \
+             https://oss.zeabur.com/zh-CN/docs/zeatend/get-started/without-github/ 在配置文件里设置 proxy.https 代理"
+        ),
+        Finding::MirrorOk { endpoint } => format!("镜像源 {endpoint} 可以连接"),
+        Finding::MirrorNo { endpoint, reason } => {
+            format!(
+                "镜像源 {endpoint} 连不上（{reason}），镜像会改从下一个镜像源或镜像仓库本身拉取"
+            )
         }
         Finding::ServiceRunning { unit } => format!("{unit} 正在运行"),
         Finding::ServiceStopped { unit } => format!(

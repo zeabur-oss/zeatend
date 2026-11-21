@@ -156,6 +156,8 @@ pub struct JoinPlan {
     pub host_files: Vec<HostFile>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub removed_files: Vec<String>,
     /// Round trips to the server.
     pub rtt: Option<Rtt>,
     /// Ports on the server, and UDP ports that cannot be checked.
@@ -282,12 +284,13 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     )?;
     let distribution = config.rancher()?;
     let mut findings = Vec::new();
-    let cluster = cluster_plan(
+    let mut cluster = cluster_plan(
         distribution,
         config.version.as_deref(),
         &facts.facts.arch,
         &mut findings,
     )?;
+    cluster.proxy.clone_from(&config.proxy);
 
     upgrade::check_release(
         facts.facts.record.as_ref(),
@@ -325,6 +328,13 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     host_files.push(distribution.join_file(&join.server)?);
     host_files.push(distribution.node_name_file(&node_name)?);
     host_files.extend(distribution.node_ip_file(&facts.facts.node_ips)?);
+    let mut direct = facts.facts.node_ips.clone();
+    direct.push(crate::config::server_address(&join.server, distribution.join_port())?.0);
+    host_files.extend(config.registry(&facts.facts.registry_passwords).files(
+        distribution.into(),
+        join.role,
+        &direct,
+    )?);
     host_files.extend(facts.facts.apparmor_profile());
 
     findings.push(Finding::SameRegion);
@@ -354,6 +364,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         unit,
         cluster,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
+        removed_files: crate::registry::removed(&facts.facts.registry_files, &host_files),
         host_files,
         rtt,
         ports,
@@ -403,6 +414,8 @@ mod tests {
                 apparmor_restricts_unconfined: false,
                 k3s_own_network: false,
                 installer_webhook: false,
+                registry_files: Vec::new(),
+                registry_passwords: std::collections::BTreeMap::new(),
             },
             rtt_us: rtt_us.to_vec(),
             ports: vec![(9345, true), (6443, true), (10250, false)],

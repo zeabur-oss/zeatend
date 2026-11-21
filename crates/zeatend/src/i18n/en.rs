@@ -269,6 +269,8 @@ pub(super) const fn topic(topic: Topic) -> &'static str {
         Topic::HighAvailability => "high availability",
         Topic::Storage => "storage",
         Topic::JoinToken => "join token",
+        Topic::Downloads => "downloads",
+        Topic::Mirrors => "registry mirrors",
     }
 }
 
@@ -383,6 +385,16 @@ pub(crate) fn finding(finding: &Finding) -> String {
         Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
                                   with `sudo zeatend apply`"
             .to_owned(),
+        Finding::DownloadsOk { url } => format!("{url} answers"),
+        Finding::DownloadsNo { url, reason } => format!(
+            "{url} does not answer ({reason}); set proxy.https in the configuration, as \
+             https://oss.zeabur.com/docs/zeatend/get-started/without-github/ says"
+        ),
+        Finding::MirrorOk { endpoint } => format!("the mirror {endpoint} answers"),
+        Finding::MirrorNo { endpoint, reason } => format!(
+            "the mirror {endpoint} does not answer ({reason}); images come from the next mirror \
+             or the registry itself"
+        ),
         Finding::ServiceRunning { unit } => format!("{unit} is running"),
         Finding::ServiceStopped { unit } => format!(
             "{unit} is not running; `sudo journalctl -u {unit} -n 100` shows why, and `sudo \

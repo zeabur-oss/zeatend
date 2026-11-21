@@ -101,7 +101,7 @@ pub(crate) async fn run(
 /// whether it started or restarted the unit.
 async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError> {
     output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
-    let agent = download::agent();
+    let agent = download::agent(solo.proxy.as_ref(), &[]);
     let kubectl = Path::new(KUBECTL);
     output::note(&solo.kubectl.url);
     download::fetch(
@@ -120,6 +120,7 @@ async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError>
         unit: UNIT,
         state_dir: STATE_DIR,
         files: &plan.host_files,
+        removed: &plan.removed_files,
         changed: outdated,
     };
     converge
