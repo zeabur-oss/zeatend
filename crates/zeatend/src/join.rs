@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::{self, Kubectl};
-use zeatend_host::{facts, files, network, systemd};
+use zeatend_host::{facts, files, longhorn, network, systemd};
 use zeatend_plan::cluster::Rancher;
 use zeatend_plan::config::{self, JoinConfig, Role};
 use zeatend_plan::finding::Status;
@@ -49,6 +49,9 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
     }
     let unit = distribution.distribution().layout().unit(config.join.role);
     let mut facts = facts::read().await?;
+    if config.storage.longhorn {
+        facts.longhorn = Some(longhorn::read().await);
+    }
     facts.record = crate::installer::read_record(distribution.into()).await?;
     if facts.record.is_some() {
         facts.kubernetes = apply::running_kubernetes(&own_kubectl(distribution)).await;
@@ -68,7 +71,7 @@ async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallErr
     let mut plan = join::plan(config, &facts)?;
     let distribution = plan.cluster.distribution;
     plan.preconditions = apply::preconditions(
-        &plan.host_files,
+        &apply::written_files(&plan.host_files, plan.longhorn.as_ref()),
         Path::new(distribution.distribution().layout().binary),
         plan.facts.record.as_ref(),
         &Record::new(distribution.into(), &plan.cluster.version),
@@ -121,6 +124,7 @@ pub(crate) async fn apply(
         config.host.require_encrypted_disk,
     )
     .await?;
+    apply::prepare_longhorn(plan.longhorn.as_ref()).await?;
 
     let distribution = plan.cluster.distribution;
     let layout = distribution.distribution().layout();

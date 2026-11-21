@@ -456,6 +456,11 @@ mod tests {
             apparmor_restricts_unconfined: variant,
             k3s_own_network: variant,
             installer_webhook: variant,
+            longhorn: Some(crate::longhorn::HostState {
+                package_manager: Some(crate::longhorn::PackageManager::Apt),
+                multipathd_running: variant,
+                ..crate::longhorn::HostState::default()
+            }),
         }
     }
 
@@ -468,6 +473,7 @@ mod tests {
                 "",
                 "disable: [traefik, metrics-server]\n",
                 "disable: [traefik, metrics-server, local-storage]\n",
+                "storage: {longhorn: true}\n",
                 "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n",
             ] {
                 // Not every distribution takes every component.
@@ -485,6 +491,12 @@ mod tests {
                         let node = Node::new(config.distribution, Role::Server, false);
                         let layout = config.distribution.layout();
                         let mut paths = plan.host_file_paths;
+                        paths.extend(
+                            plan.longhorn
+                                .iter()
+                                .flat_map(|p| &p.files)
+                                .map(|f| f.path.clone()),
+                        );
                         paths.push(format!("{}/record", layout.state_dir));
                         paths.push(format!("{}/downloads/v1/file", layout.state_dir));
                         match config.distribution {
@@ -505,7 +517,7 @@ mod tests {
         for (distribution, role) in [("k3s", "worker"), ("rke2", "worker"), ("rke2", "server")] {
             let yaml = format!(
                 "distribution: {distribution}\njoin:\n  server: https://10.0.0.5:9345\n  \
-                 role: {role}\n  tokenFile: /etc/zeatend/join-token\n{}",
+                 role: {role}\n  tokenFile: /etc/zeatend/join-token\nstorage: {{longhorn: true}}\n{}",
                 if role == "server" {
                     "apiServer:\n  authenticationConfig:\n    apiVersion: apiserver.config.k8s.io/v1\n    kind: AuthenticationConfiguration\n    jwt:\n      - issuer: {url: \"https://identity.example.com\", audiences: [kubernetes]}\n        claimMappings: {username: {claim: sub, prefix: \"zeabur:\"}}\n"
                 } else {
@@ -530,6 +542,12 @@ mod tests {
                 let rancher = plan.cluster.distribution;
                 let node = Node::new(rancher.into(), config.join.role, true);
                 let mut paths = plan.host_file_paths;
+                paths.extend(
+                    plan.longhorn
+                        .iter()
+                        .flat_map(|p| &p.files)
+                        .map(|f| f.path.clone()),
+                );
                 paths.push(rancher.paths().join_token_file.to_owned());
                 paths.push(format!(
                     "{}/record",

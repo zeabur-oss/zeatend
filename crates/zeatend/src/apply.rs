@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use k8s_openapi::apimachinery::pkg::version::Info;
 use zeatend_host::kubectl::{self, Kubectl};
-use zeatend_host::{HostError, archive, cmd, download, facts, files, preflight, systemd};
+use zeatend_host::{HostError, archive, cmd, download, facts, files, longhorn, preflight, systemd};
 use zeatend_plan::cluster::{
     self, APPARMOR_PROFILE, Addon, Distribution, HelmChart, HostFile, ObjectList, Rancher,
 };
 use zeatend_plan::config::{Component, Config, Role};
 use zeatend_plan::finding::Status;
+use zeatend_plan::longhorn::Prep;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::precondition::{Change, Preconditions, RecordState};
 use zeatend_plan::record::{RECORD_FILE, Record};
@@ -85,6 +86,7 @@ pub(crate) async fn run(
         config.host.require_encrypted_disk,
     )
     .await?;
+    prepare_longhorn(plan.longhorn.as_ref()).await?;
     match &plan.release {
         Release::Cluster(cluster) => run_cluster(config, &plan, cluster).await,
         Release::KubeSolo(solo) => crate::kubesolo::run(config, &plan, solo).await,
@@ -199,6 +201,9 @@ pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> 
 pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
     let layout = config.distribution.layout();
     let mut facts = facts::read().await?;
+    if config.storage.longhorn {
+        facts.longhorn = Some(longhorn::read().await);
+    }
     facts.record = crate::installer::read_record(config.distribution).await?;
     if facts.record.is_some() {
         facts.kubernetes = running_kubernetes(&admin_kubectl(config.distribution)).await;
@@ -231,7 +236,7 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
         }
     }
     plan.preconditions = preconditions(
-        &plan.host_files,
+        &written_files(&plan.host_files, plan.longhorn.as_ref()),
         Path::new(layout.binary),
         plan.facts.record.as_ref(),
         &Record::new(plan.distribution, plan.release.version()),
@@ -241,6 +246,26 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
         crate::kubesolo::add_kubeconfig(&mut plan)?;
     }
     Ok(plan)
+}
+
+/// The files a plan writes: the distribution's, then Longhorn's.
+pub(crate) fn written_files(host_files: &[HostFile], longhorn: Option<&Prep>) -> Vec<HostFile> {
+    host_files
+        .iter()
+        .chain(longhorn.into_iter().flat_map(|prep| &prep.files))
+        .cloned()
+        .collect()
+}
+
+/// Makes the changes Longhorn needs on this node, before the distribution starts, so that
+/// Longhorn finds them on every node it schedules to.
+pub(crate) async fn prepare_longhorn(prep: Option<&Prep>) -> Result<(), InstallError> {
+    let Some(prep) = prep.filter(|prep| !prep.steps.is_empty()) else {
+        return Ok(());
+    };
+    output::step(i18n::messages().preparing_longhorn);
+    longhorn::apply(prep, |step| output::note(&render::longhorn_step(step))).await?;
+    Ok(())
 }
 
 /// What a plan that writes `files`, installs the release over `binary` and writes `record` finds
@@ -693,6 +718,7 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            longhorn: None,
         };
         let mut plan = plan::plan(&Config::parse("{}").unwrap(), &facts).unwrap();
         plan.preconditions = preconditions(&files, &binary, None, &record).await.unwrap();

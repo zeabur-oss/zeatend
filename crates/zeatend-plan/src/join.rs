@@ -156,6 +156,8 @@ pub struct JoinPlan {
     pub host_files: Vec<HostFile>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
+    /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
+    pub longhorn: Option<crate::longhorn::Prep>,
     /// Round trips to the server.
     pub rtt: Option<Rtt>,
     /// Ports on the server, and UDP ports that cannot be checked.
@@ -355,6 +357,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         cluster,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         host_files,
+        longhorn: facts.facts.longhorn(config.storage)?,
         rtt,
         ports,
         local_ports: distribution
@@ -403,6 +406,7 @@ mod tests {
                 apparmor_restricts_unconfined: false,
                 k3s_own_network: false,
                 installer_webhook: false,
+                longhorn: None,
             },
             rtt_us: rtt_us.to_vec(),
             ports: vec![(9345, true), (6443, true), (10250, false)],
@@ -466,6 +470,23 @@ mod tests {
         assert!(p.findings.iter().all(|c| c.status == Status::Warn));
         let udp = p.ports.iter().find(|p| p.protocol == "udp").unwrap();
         assert_eq!(udp.open, None);
+    }
+
+    #[test]
+    fn a_joining_node_is_prepared_for_longhorn_as_the_first_one() {
+        let mut read = facts(&[600]);
+        read.facts.longhorn = Some(crate::longhorn::HostState {
+            package_manager: Some(crate::longhorn::PackageManager::Apt),
+            iscsid_running: false,
+            ..crate::longhorn::HostState::default()
+        });
+        let p = plan(&config("storage: {longhorn: true}\n"), &read).unwrap();
+        let steps = p.longhorn.unwrap().steps;
+        assert!(
+            steps.contains(&crate::longhorn::Step::StartIscsid),
+            "{steps:?}"
+        );
+        assert_eq!(plan(&config(""), &read).unwrap().longhorn, None);
     }
 
     #[test]

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::PlanError;
 use crate::authentication::ApiServer;
 use crate::cluster::Distribution;
+use crate::longhorn::Storage;
 use crate::token::JoinToken;
 
 /// The configuration of the first node of a cluster.
@@ -32,6 +33,9 @@ pub struct Config {
     /// The API server's settings.
     #[serde(default, skip_serializing_if = "ApiServer::is_empty")]
     pub api_server: ApiServer,
+    /// What the host prepares for storage that the Zeabur catalog installs.
+    #[serde(default, skip_serializing_if = "Storage::is_empty")]
+    pub storage: Storage,
     /// Host settings.
     #[serde(default)]
     pub host: Host,
@@ -152,6 +156,9 @@ pub struct JoinConfig {
     /// API server.
     #[serde(default)]
     pub api_server: ApiServer,
+    /// What the host prepares for storage. Give each node the same as the first one.
+    #[serde(default)]
+    pub storage: Storage,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
@@ -398,6 +405,13 @@ impl Config {
     pub fn check(&self) -> Result<(), PlanError> {
         check_version(self.distribution, self.version.as_deref())?;
         check_disable(self.distribution, &self.disable)?;
+        if self.distribution == Distribution::KubeSolo && self.storage.longhorn {
+            return Err(PlanError::Config(
+                "storage.longhorn: KubeSolo runs one node, and Longhorn keeps copies of a volume \
+                 on other nodes; remove it"
+                    .to_owned(),
+            ));
+        }
         self.api_server.check()?;
         self.host.check()
     }
@@ -416,6 +430,27 @@ mod tests {
         assert_eq!(solo.distribution, Distribution::KubeSolo);
         assert!(Config::parse("typo: 1\n").is_err());
         assert!(Config::parse("use: personal\n").is_err());
+    }
+
+    #[test]
+    fn storage_longhorn_prepares_k3s_and_rke2_nodes_but_not_kubesolo() {
+        assert!(
+            Config::parse("storage: {longhorn: true}\n")
+                .unwrap()
+                .storage
+                .longhorn
+        );
+        assert!(!Config::parse("{}\n").unwrap().storage.longhorn);
+        let Document::Join(joined) = join("storage: {longhorn: true}\n").unwrap() else {
+            panic!("not a join");
+        };
+        assert!(joined.storage.longhorn);
+        assert!(Config::parse("storage: {longhorn: yes-please}\n").is_err());
+        assert!(Config::parse("storage: {ceph: true}\n").is_err());
+        let error = Config::parse("distribution: kubesolo\nstorage: {longhorn: true}\n")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("KubeSolo runs one node"), "{error}");
     }
 
     #[test]

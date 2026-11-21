@@ -8,6 +8,7 @@ pub mod installer;
 pub mod join;
 pub mod k3s;
 pub mod kubesolo;
+pub mod longhorn;
 pub mod node_name;
 pub mod pins;
 pub mod plan;
@@ -54,6 +55,15 @@ pub enum PlanError {
         min: u64,
         /// What the host has.
         have: u64,
+    },
+    /// `storage.longhorn` needs packages, and the host has no package manager zeatend uses.
+    #[error(
+        "storage.longhorn: this host has neither apt-get nor dnf. Install {packages} with its \
+         package manager, and run apply again"
+    )]
+    NoPackageManager {
+        /// Each missing program and its package names.
+        packages: String,
     },
     /// A host file that cannot be serialised.
     #[error("{path}: {reason}")]

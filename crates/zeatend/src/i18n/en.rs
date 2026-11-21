@@ -3,6 +3,7 @@
 use zeatend_plan::cluster::{Distribution, PortUse, Rancher};
 use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::join::{RTT_CRITICAL_US, RTT_WARN_US, ms};
+use zeatend_plan::longhorn::{MODULES_FILE, MULTIPATH_FILE, Need};
 use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
 
@@ -10,6 +11,7 @@ use super::{Joined, Key, Messages, Ready, Screen, Screens, gib};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "Checking the host",
+    preparing_longhorn: "Preparing this node for Longhorn",
     apply_stops: "apply stops until what failed is fixed.",
     host_not_ready: "the host is not ready; fix what failed and run apply again",
     not_plan: |path, reason| {
@@ -523,6 +525,30 @@ pub(crate) fn finding(finding: &Finding) -> String {
                                    whichever server answers at that address. Use the token with \
                                    its CA hash, as the server's token file holds it."
             .to_owned(),
+        Finding::LonghornReady => {
+            "this node has the iSCSI initiator, the NFS client, the modules and iscsid that \
+             Longhorn needs"
+                .to_owned()
+        }
+        Finding::LonghornMissing { needs } => format!(
+            "Longhorn cannot attach volumes on this node: it lacks {}. Run `sudo zeatend apply`",
+            and_list(&needs.iter().map(need).collect::<Vec<_>>())
+        ),
+    }
+}
+
+/// Something a node lacks for Longhorn.
+fn need(need: &Need) -> String {
+    match need {
+        Need::Package { program, apt, dnf } => {
+            format!("{program} (package {apt}, or {dnf} on RHEL)")
+        }
+        Need::ModulesFile => format!("{MODULES_FILE}, which loads Longhorn's modules at boot"),
+        Need::Module { module } => format!("the {module} module"),
+        Need::Iscsid => "iscsid enabled and running".to_owned(),
+        Need::MultipathBlacklist => {
+            format!("{MULTIPATH_FILE}, which keeps multipathd off Longhorn's disks")
+        }
     }
 }
 

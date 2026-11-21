@@ -169,6 +169,7 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            longhorn: None,
         }
     }
 

@@ -4,6 +4,7 @@ use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::Role;
 use zeatend_plan::finding::{Check, Status};
 use zeatend_plan::join::{self, JoinPlan};
+use zeatend_plan::longhorn::{ISCSID, MODULES, MODULES_FILE, MULTIPATH_FILE, Prep, Step};
 use zeatend_plan::plan::{Plan, Release};
 use zeatend_plan::record::Changes;
 
@@ -48,8 +49,42 @@ pub(crate) fn plan(plan: &Plan) -> String {
     push(&mut s, "");
     s.push_str(&changes(plan.changes.as_ref(), unit));
     files(&mut s, &plan.host_file_paths, None);
+    longhorn(&mut s, plan.longhorn.as_ref());
     findings(&mut s, &plan.findings);
     s
+}
+
+/// What `apply` does on this node for Longhorn.
+fn longhorn(s: &mut String, prep: Option<&Prep>) {
+    let Some(prep) = prep else {
+        return;
+    };
+    push(s, "Longhorn on this node (storage.longhorn)");
+    for step in &prep.steps {
+        push(s, &format!("  {}", longhorn_step(step)));
+    }
+    if prep.steps.is_empty() {
+        push(s, "  ready: nothing to change");
+    }
+    push(s, "");
+}
+
+/// One change for Longhorn, as `plan` lists it and `apply` announces it.
+pub(crate) fn longhorn_step(step: &Step) -> String {
+    match step {
+        Step::Install { manager, packages } => {
+            format!("install {} with {}", packages.join(", "), manager.program())
+        }
+        Step::WriteModulesFile => format!(
+            "write {MODULES_FILE}: load {} at boot",
+            MODULES.join(" and ")
+        ),
+        Step::LoadModules { modules } => format!("load {}", modules.join(" and ")),
+        Step::StartIscsid => format!("enable and start {ISCSID}"),
+        Step::BlacklistMultipath => format!(
+            "write {MULTIPATH_FILE} and restart multipathd, which would claim Longhorn's disks"
+        ),
+    }
 }
 
 /// What `apply` changes for `unit` against the install record on the host; empty on a first
@@ -115,6 +150,7 @@ pub(crate) fn join_plan(plan: &JoinPlan) -> String {
         cluster.distribution.paths().join_token_file
     );
     files(&mut s, &plan.host_file_paths, Some(&token));
+    longhorn(&mut s, plan.longhorn.as_ref());
     match &plan.rtt {
         Some(rtt) => push(
             &mut s,
@@ -273,6 +309,7 @@ mod tests {
             apparmor_restricts_unconfined: false,
             k3s_own_network: false,
             installer_webhook: false,
+            longhorn: None,
         }
     }
 

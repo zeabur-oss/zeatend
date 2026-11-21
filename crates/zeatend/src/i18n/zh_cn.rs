@@ -2,6 +2,7 @@
 
 use zeatend_plan::cluster::{Distribution, PortUse};
 use zeatend_plan::finding::{Finding, Status, Topic};
+use zeatend_plan::longhorn::{MODULES_FILE, MULTIPATH_FILE, Need};
 use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
 
@@ -9,6 +10,7 @@ use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在检查主机",
+    preparing_longhorn: "正在为 Longhorn 准备这个节点",
     apply_stops: "修复失败的项目之前，apply 不会继续运行。",
     host_not_ready: "主机还没准备好，修复失败的项目后再运行一次 apply",
     not_plan: |path, reason| {
@@ -244,14 +246,27 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Nodes => "节点",
         Topic::KubeletReserves => "kubelet 预留资源",
         Topic::SecretsEncryption => "Secret 加密",
+        Topic::Storage => "存储",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
         | Topic::Server
         | Topic::Firewall
         | Topic::HighAvailability
-        | Topic::Storage
         | Topic::JoinToken => super::en::topic(topic),
+    }
+}
+
+/// Something a node lacks for Longhorn.
+fn need(need: &Need) -> String {
+    match need {
+        Need::Package { program, apt, dnf } => {
+            format!("{program}（软件包 {apt}，RHEL 上是 {dnf}）")
+        }
+        Need::ModulesFile => format!("开机时加载模块的 {MODULES_FILE}"),
+        Need::Module { module } => format!("{module} 模块"),
+        Need::Iscsid => "已启用并在运行的 iscsid".to_owned(),
+        Need::MultipathBlacklist => format!("让 multipathd 避开 Longhorn 磁盘的 {MULTIPATH_FILE}"),
     }
 }
 
@@ -414,6 +429,13 @@ fn finding(finding: &Finding) -> String {
         Finding::SecretsPlain { distribution } => format!(
             "API 服务器以未加密形式存储 Secret，用 `sudo {} secrets-encrypt status` 查看状态",
             distribution.distribution().id()
+        ),
+        Finding::LonghornReady => {
+            "这个节点已有 Longhorn 需要的 iSCSI initiator、NFS 客户端、内核模块和 iscsid".to_owned()
+        }
+        Finding::LonghornMissing { needs } => format!(
+            "这个节点缺少{}，Longhorn 无法在这里连接卷。请运行 `sudo zeatend apply`",
+            and_list(&needs.iter().map(need).collect::<Vec<_>>())
         ),
         // Plan findings stay in English until zeatend#32 words them.
         Finding::MemoryLow { .. }
