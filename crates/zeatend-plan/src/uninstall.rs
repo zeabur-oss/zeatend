@@ -11,7 +11,7 @@ use crate::cluster::{Distribution, Rancher};
 use crate::config::Role;
 use crate::{installer, k3s, kubesolo, rke2};
 
-/// The volumes of Zeabur's local storage.
+/// The volumes of the local storage of Zeabur OSS.
 pub const ZEABUR_STORAGE: &str = "/var/lib/zeabur/storage";
 /// Longhorn's replicas.
 pub const LONGHORN: &str = "/var/lib/longhorn";

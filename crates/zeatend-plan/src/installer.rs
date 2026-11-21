@@ -3,7 +3,7 @@
 //! zeabur-installer (zeabur-oss/zeabur, `crates/zeabur-installer` at v0.2.0) installs K3s or RKE2
 //! for a team (`use: team`, the default) and `KubeSolo` for one person (`use: personal`). Its
 //! configuration has the keys of zeatend's and more. zeatend reads the keys it knows, and leaves
-//! what the installer put on the cluster, such as Zeabur and its catalog components, as it is.
+//! what the installer put on the cluster, such as Zeabur OSS and its catalog components, as it is.
 
 use serde_json::{Map, Value};
 
