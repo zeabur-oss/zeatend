@@ -24,6 +24,9 @@ pub const MODULES: [&str; 2] = ["iscsi_tcp", "dm_crypt"];
 pub const ISCSID: &str = "iscsid";
 /// The multipath daemon.
 pub const MULTIPATHD: &str = "multipathd";
+/// Says that [`MULTIPATH_FILE`] changed and multipathd has not restarted since. It is in the
+/// K3s and RKE2 state directory, which `uninstall` removes.
+pub const MULTIPATH_RESTART_OWED: &str = "/var/lib/rancher/zeatend/longhorn-multipath-restart-owed";
 
 /// Longhorn's disks report this SCSI vendor and product. Blacklisting them alone leaves every
 /// other disk to multipathd, unlike the `devnode "^sd[a-z0-9]+"` of Longhorn's knowledge base.
@@ -136,6 +139,8 @@ pub struct HostState {
     pub modules_file: Option<String>,
     /// The content of [`MULTIPATH_FILE`], when there is one.
     pub multipath_file: Option<String>,
+    /// [`MULTIPATH_RESTART_OWED`] exists.
+    pub multipath_restart_owed: bool,
 }
 
 /// Something the node lacks.
@@ -164,7 +169,8 @@ pub enum Need {
     },
     /// `iscsid` is not enabled and active.
     Iscsid,
-    /// multipathd runs, and [`MULTIPATH_FILE`] is missing or differs.
+    /// multipathd runs, and [`MULTIPATH_FILE`] is missing, differs, or changed after multipathd
+    /// started.
     MultipathBlacklist,
 }
 
@@ -248,7 +254,10 @@ pub fn needs(host: &HostState) -> Vec<Need> {
     if !host.iscsid_running {
         needs.push(Need::Iscsid);
     }
-    if host.multipathd_running && host.multipath_file.as_deref() != Some(MULTIPATH_BLACKLIST) {
+    if host.multipathd_running
+        && (host.multipath_file.as_deref() != Some(MULTIPATH_BLACKLIST)
+            || host.multipath_restart_owed)
+    {
         needs.push(Need::MultipathBlacklist);
     }
     needs
@@ -318,6 +327,7 @@ mod tests {
             multipathd_running: true,
             modules_file: None,
             multipath_file: None,
+            multipath_restart_owed: false,
         }
     }
 
@@ -337,6 +347,7 @@ mod tests {
             multipathd_running: host.multipathd_running,
             modules_file: file(MODULES_FILE),
             multipath_file: file(MULTIPATH_FILE).or_else(|| host.multipath_file.clone()),
+            multipath_restart_owed: false,
         }
     }
 
@@ -407,6 +418,16 @@ mod tests {
         assert!(!prep.steps.contains(&Step::BlacklistMultipath));
         assert!(prep.files.iter().all(|f| f.path != MULTIPATH_FILE));
         assert_eq!(needs(&applied(&prep, &host)), []);
+    }
+
+    #[test]
+    fn multipathd_restarts_on_the_next_apply_when_the_last_one_stopped_before_it() {
+        let prep = prepare(&fresh()).unwrap();
+        let stopped = HostState {
+            multipath_restart_owed: true,
+            ..applied(&prep, &fresh())
+        };
+        assert_eq!(prepare(&stopped).unwrap().steps, [Step::BlacklistMultipath]);
     }
 
     #[test]

@@ -5,8 +5,8 @@ use std::fs;
 use std::path::Path;
 
 use zeatend_plan::longhorn::{
-    HostState, ISCSID, MODULES, MODULES_FILE, MULTIPATH_FILE, MULTIPATHD, PACKAGES, PackageManager,
-    Prep, Step,
+    HostState, ISCSID, MODULES, MODULES_FILE, MULTIPATH_FILE, MULTIPATH_RESTART_OWED, MULTIPATHD,
+    PACKAGES, PackageManager, Prep, Step,
 };
 
 use crate::{HostError, cmd, files, systemd};
@@ -39,11 +39,15 @@ pub async fn read() -> HostState {
         multipathd_running: systemd::is_active(MULTIPATHD).await,
         modules_file: fs::read_to_string(MODULES_FILE).ok(),
         multipath_file: fs::read_to_string(MULTIPATH_FILE).ok(),
+        multipath_restart_owed: Path::new(MULTIPATH_RESTART_OWED).exists(),
     }
 }
 
-/// Makes the changes of `prep`, calling `note` before each. Writes its files every time, and
-/// restarts multipathd only when its file changed.
+/// Makes the changes of `prep`, calling `note` before each.
+///
+/// Writes its files every time. Before it writes the multipath file, it records that multipathd
+/// owes a restart, so an `apply` that stops before the restart restarts multipathd on the next
+/// run.
 ///
 /// # Errors
 ///
@@ -55,10 +59,13 @@ pub async fn apply(prep: &Prep, mut note: impl FnMut(&Step)) -> Result<(), HostE
             install(*manager, packages).await?;
         }
     }
-    let mut multipath_changed = false;
+    let restart_multipathd = prep.steps.contains(&Step::BlacklistMultipath);
+    let owed = Path::new(MULTIPATH_RESTART_OWED);
+    if restart_multipathd {
+        files::write(owed, 0o600, b"")?;
+    }
     for file in &prep.files {
-        let changed = files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
-        multipath_changed |= changed && file.path == MULTIPATH_FILE;
+        files::write(Path::new(&file.path), file.mode, file.content.as_bytes())?;
     }
     for step in &prep.steps {
         match step {
@@ -76,8 +83,9 @@ pub async fn apply(prep: &Prep, mut note: impl FnMut(&Step)) -> Result<(), HostE
             Step::BlacklistMultipath => note(step),
         }
     }
-    if multipath_changed {
+    if restart_multipathd {
         systemd::restart(MULTIPATHD).await?;
+        files::remove(owed)?;
     }
     Ok(())
 }
