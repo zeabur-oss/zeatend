@@ -3,8 +3,7 @@
 
 use std::cmp::Ordering;
 
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
 use crate::PlanError;
 use crate::cluster::Distribution;
@@ -61,6 +60,15 @@ impl Serialize for Record {
     }
 }
 
+/// The JSON of [`RECORD_FILE`].
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordFile {
+    zeatend_version: Option<String>,
+    distribution: Option<String>,
+    version: Option<String>,
+}
+
 impl Record {
     /// The record of this zeatend installing `version` of `distribution`.
     #[must_use]
@@ -72,15 +80,15 @@ impl Record {
         }
     }
 
-    /// Reads the record from the JSON of [`RECORD_FILE`]. `None` when it names no zeatend
-    /// version.
+    /// Reads the record from the JSON of [`RECORD_FILE`]. `None` when it is not a record or names
+    /// no zeatend version.
     #[must_use]
-    pub fn from_data(data: &Value) -> Option<Self> {
-        let text = |key: &str| data.get(key).and_then(Value::as_str).map(str::to_owned);
+    pub fn parse(json: &str) -> Option<Self> {
+        let file: RecordFile = serde_json::from_str(json).ok()?;
         Some(Self {
-            writer: Writer::Zeatend(text("zeatendVersion")?),
-            distribution: text("distribution"),
-            version: text("version"),
+            writer: Writer::Zeatend(file.zeatend_version?),
+            distribution: file.distribution,
+            version: file.version,
         })
     }
 
@@ -235,7 +243,7 @@ mod tests {
                 to: "v1.1.0+k3s1".to_owned()
             })
         );
-        assert_eq!(Record::from_data(&serde_json::json!({})), None);
+        assert_eq!(Record::parse("{}"), None);
     }
 
     #[test]
@@ -250,6 +258,6 @@ mod tests {
                 "version": "v1.0.0+rke2r1",
             })
         );
-        assert_eq!(Record::from_data(&json), Some(record));
+        assert_eq!(Record::parse(&json.to_string()), Some(record));
     }
 }

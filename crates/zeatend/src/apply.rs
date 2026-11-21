@@ -373,9 +373,7 @@ pub(crate) fn read_record(state_dir: &Path) -> Result<Option<Record>, InstallErr
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(source) => return Err(HostError::Io { path, source }.into()),
     };
-    serde_json::from_str(&text)
-        .ok()
-        .and_then(|data| Record::from_data(&data))
+    Record::parse(&text)
         .map(Some)
         .ok_or(InstallError::NotRecord(path))
 }

@@ -336,7 +336,7 @@ fn policy(
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     use super::*;
     use crate::cluster::Distribution;
@@ -356,7 +356,7 @@ mod tests {
         }
     }
 
-    fn config_of(files: &[HostFile]) -> Value {
+    fn config_of(files: &[HostFile]) -> Map<String, Value> {
         yaml(
             &files
                 .iter()
@@ -366,7 +366,7 @@ mod tests {
         )
     }
 
-    fn yaml(content: &str) -> Value {
+    fn yaml(content: &str) -> Map<String, Value> {
         serde_saphyr::from_str(content).unwrap()
     }
 
@@ -385,7 +385,7 @@ mod tests {
             assert!(apiserver.contains(&json!(arg)), "{arg}");
         }
         // K3s's own defaults: Traefik, metrics-server, local-path and ServiceLB all run.
-        assert!(config.get("disable").is_none());
+        assert!(!config.contains_key("disable"));
         assert_eq!(config["tls-san"], json!(["k8s.example.com"]));
     }
 
@@ -457,7 +457,12 @@ mod tests {
             dns["spec"]["podSelector"]["matchLabels"]["k8s-app"],
             "kube-dns"
         );
-        assert!(dns["spec"]["ingress"][0].get("from").is_none());
+        assert!(
+            !dns["spec"]["ingress"][0]
+                .as_object()
+                .unwrap()
+                .contains_key("from")
+        );
         let metrics = policy("kube-system", "default-network-metrics-server-policy").unwrap();
         assert_eq!(
             metrics["spec"]["podSelector"]["matchLabels"]["k8s-app"],
@@ -496,15 +501,15 @@ mod tests {
                 .iter()
                 .any(|a| a.as_str().unwrap().starts_with("kube-reserved="))
         );
-        assert!(config.get("secrets-encryption").is_none());
-        assert!(config.get("kube-apiserver-arg").is_none());
+        assert!(!config.contains_key("secrets-encryption"));
+        assert!(!config.contains_key("kube-apiserver-arg"));
     }
 
     #[test]
     fn a_new_cluster_runs_flannel_and_the_policy_controller() {
         let config = config_of(&host_files(&options()).unwrap());
-        assert!(config.get("flannel-backend").is_none());
-        assert!(config.get("disable-network-policy").is_none());
+        assert!(!config.contains_key("flannel-backend"));
+        assert!(!config.contains_key("disable-network-policy"));
         assert!(!runs_own_network(&serde_json::to_string(&config).unwrap()));
     }
 

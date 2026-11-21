@@ -1,7 +1,7 @@
 //! The experience program (docs/reference/telemetry.mdx): the events zeatend may send, their
 //! request body and the switch that turns them off. Sending is in `zeatend-host`.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::cluster::Distribution;
@@ -287,6 +287,12 @@ impl Event {
     }
 }
 
+/// A finding's `code` tag, without its values.
+#[derive(Deserialize)]
+struct Code {
+    code: String,
+}
+
 /// The codes of `findings`, such as `disk.low`: a fixed list, with none of a finding's values.
 #[must_use]
 pub fn codes<'a>(findings: impl IntoIterator<Item = &'a Finding>) -> Vec<String> {
@@ -294,7 +300,7 @@ pub fn codes<'a>(findings: impl IntoIterator<Item = &'a Finding>) -> Vec<String>
         .into_iter()
         .filter_map(|finding| {
             let value = serde_json::to_value(finding).ok()?;
-            value.get("code")?.as_str().map(str::to_owned)
+            serde_json::from_value::<Code>(value).ok().map(|c| c.code)
         })
         .collect()
 }
@@ -412,7 +418,7 @@ mod tests {
         let started = Event::ApplyStarted { run: run() };
         assert_eq!(started.name(), "zeatend_apply_started");
         assert_eq!(properties(&started)["distribution"], "rke2");
-        assert!(properties(&started).get("result").is_none());
+        assert_eq!(properties(&started)["result"], Value::Null);
     }
 
     #[test]
