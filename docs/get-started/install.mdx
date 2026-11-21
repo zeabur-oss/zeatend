@@ -1,11 +1,13 @@
 ---
 title: Install a cluster and Zeabur OSS
-description: Download Zeatend to a Linux server, choose K3s, RKE2 or KubeSolo, check the plan, install the cluster, and go on to install Zeabur OSS.
+description: Download Zeatend on a Linux server, choose K3s, RKE2 or KubeSolo on its screens or with commands, install the cluster, then install Zeabur OSS.
 ---
 
 When you finish this page, a Linux server runs a Kubernetes cluster that Zeatend set up, and `zeatend doctor` reports it healthy. The last step links to the Zeabur OSS install.
 
 To install Zeabur OSS on a new server in one go, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/). That page runs the steps of this one for K3s. This page covers every distribution and explains each step.
+
+Most people install on Zeatend's screens. You can also hand the install to an agent, or run each step as a command, under [Install with commands](#install-with-commands).
 
 ## Let an agent do it
 
@@ -16,6 +18,8 @@ Set up Kubernetes on my server with Zeatend by following https://oss.zeabur.com/
 ```
 
 The agent shows you the plan and the host checks and asks before it installs.
+
+The agent uses the commands in [Install with commands](#install-with-commands), since it can't use the screens.
 
 ## Before you begin
 
@@ -31,7 +35,6 @@ The agent shows you the plan and the host checks and asks before it installs.
 
 <Steps>
 <Step>
-
 ### Download Zeatend
 
 Run these commands on the server. The first line gets the latest version from [GitHub Releases](https://github.com/zeabur-oss/zeatend/releases). To install a given version, replace it with `version=v0.2.0` or the version you want.
@@ -48,10 +51,55 @@ curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/ze
 ```
 
 `sha256sum` prints `OK` when the download matches the release. `zeatend` is one static file and needs no other packages.
-
 </Step>
 <Step>
+### Install on the screens
 
+```sh
+sudo zeatend
+```
+
+The screens take you through four steps. Press F2 to switch between English, 繁體中文 and 简体中文.
+
+1. **Server** shows the host's facts and the host checks. Choose K3s, RKE2 or KubeSolo with the arrow keys, then press Enter. Each check that needs attention says what to do.
+
+   ![The Server screen: the host's facts, the choice of K3s, RKE2 or KubeSolo, and the host checks](../screens/80x24/en-server.svg)
+
+2. **Access** asks for the address your computer uses to reach the server. To reach the API server by a DNS name, enter it too. The node name is optional. Tab moves to the next field.
+3. **Review** lists the version, the address and the configuration file. Press Enter: Zeatend writes your choices to `/etc/zeatend/config.yaml` and starts the install.
+
+   ![The Review screen: the Kubernetes version, the address, the DNS name and what happens next](../screens/80x24/en-review.svg)
+
+4. **Install** shows the progress, in a few minutes. The install runs in a systemd unit, so it goes on when you press Ctrl+C or your SSH session drops. Run `sudo zeatend` again to watch it. At the end, the screen prints the commands to list the nodes and to use the cluster from your own computer.
+
+   ![The Install screen: the install is done and the cluster is ready](../screens/80x24/en-done.svg)
+
+The kubeconfig in those commands makes whoever has it a cluster admin. Keep it only on the server or your own computer.
+</Step>
+<Step>
+### Check the cluster
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` runs the host checks again, then checks the service, the API server, the install record, the nodes, the memory the kubelet keeps for the system and, on K3s and RKE2, that Secrets are stored encrypted. Each line that isn't `ok` names the command to run. It exits 0 when every check passes, 1 when one warns and 2 when one fails.
+</Step>
+<Step>
+### Install Zeabur OSS
+
+On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
+
+On RKE2 or KubeSolo, follow [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
+</Step>
+</Steps>
+
+## Install with commands
+
+For a script, an agent, or when you want to run each step yourself, use commands instead of the screens. Download Zeatend first, then follow these steps. When they're done, go back to [Check the cluster](#check-the-cluster).
+
+<Steps>
+<Step>
 ### Write the configuration
 
 Zeatend reads `/etc/zeatend/config.yaml`. Without the file, it installs K3s with the defaults, so for K3s you can skip this step.
@@ -64,12 +112,8 @@ echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
 ```
 
 Replace `rke2` with `kubesolo` for KubeSolo. To reach the API server at a DNS name too, add it under `host.tlsSan`. [Configuration file](../reference/configuration.mdx) lists every setting.
-
-You can also run `sudo zeatend` with no command. Its screens ask for the distribution, the API server's address and DNS name and the node name, show the plan, write the file and install when you confirm. They speak English, 繁體中文 or 简体中文; F2 changes the language. Then skip to [Check the cluster](#check-the-cluster).
-
 </Step>
 <Step>
-
 ### Check the plan
 
 ```sh
@@ -88,10 +132,8 @@ sudo zeatend plan
 ```
 
 A `FAIL` line stops the install. Fix what it names and run `plan` again. A `warn` line doesn't stop the install, and each one names the command that fixes it.
-
 </Step>
 <Step>
-
 ### Install the cluster
 
 ```sh
@@ -122,27 +164,6 @@ Whoever has this file is cluster admin; keep it like an SSH key.
 ```
 
 The kubeconfig it names is the cluster's admin credential. Keep it on the server, or on your own computer only. `apply` is safe to run again: it brings the server in line with the configuration.
-
-</Step>
-<Step>
-
-### Check the cluster
-
-```sh
-sudo zeatend doctor
-```
-
-`doctor` runs the host checks again, then checks the service, the API server, the install record, the nodes, the memory the kubelet keeps for the system and, on K3s and RKE2, that Secrets are stored encrypted. Each line that isn't `ok` names the command to run. It exits 0 when every check passes, 1 when one warns and 2 when one fails.
-
-</Step>
-<Step>
-
-### Install Zeabur OSS
-
-On K3s, follow [Install with Zeatend](https://oss.zeabur.com/docs/zeabur/install/one-command/) from **Set up Kubernetes with Zeatend**. That step adds `apiServer.authenticationConfig` to `/etc/zeatend/config.yaml`, so the API server accepts sign-ins from Zeabur Identity, and runs `zeatend apply` again. Then one `helm install` installs Zeabur OSS.
-
-On RKE2 or KubeSolo, follow [Install Zeabur OSS in an existing cluster](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/).
-
 </Step>
 </Steps>
 

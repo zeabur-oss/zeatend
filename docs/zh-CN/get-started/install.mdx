@@ -1,11 +1,13 @@
 ---
 title: 安装集群和 Zeabur 开源版
-description: 将 Zeatend 下载到 Linux 服务器，选择 K3s、RKE2 或 KubeSolo，检查安装计划并安装集群，然后继续安装 Zeabur 开源版。
+description: 在 Linux 服务器上下载 Zeatend，在安装界面或用命令选择 K3s、RKE2 或 KubeSolo 并安装集群，再安装 Zeabur 开源版。
 ---
 
 照这一页做完，Linux 服务器上会运行 Zeatend 创建的 Kubernetes 集群，`zeatend doctor` 会报告集群运行正常。最后一步会链接到 Zeabur 开源版的安装文档。
 
 要在新服务器上一次装好 Zeabur 开源版，见[用 Zeatend 安装](https://oss.zeabur.com/zh-CN/docs/zeabur/install/one-command/)。该文档用 K3s 完成本页的步骤。本页涵盖所有发行版，并解释每一步。
+
+大多数人用 Zeatend 的安装界面安装。也可以交给 Agent，或按[用命令安装](#用命令安装)逐步运行命令。
 
 ## 交给 Agent 安装
 
@@ -16,6 +18,8 @@ description: 将 Zeatend 下载到 Linux 服务器，选择 K3s、RKE2 或 KubeS
 ```
 
 Agent 会显示安装计划和主机检查结果，征得你的同意后再安装。
+
+Agent 无法操作安装界面，会改用[用命令安装](#用命令安装)的步骤。
 
 ## 开始前
 
@@ -31,7 +35,6 @@ Agent 会显示安装计划和主机检查结果，征得你的同意后再安�
 
 <Steps>
 <Step>
-
 ### 下载 Zeatend
 
 在服务器上运行这些命令。第一行从 [GitHub Releases](https://github.com/zeabur-oss/zeatend/releases) 获取最新版本。要安装指定版本，将第一行换成 `version=v0.2.0` 或你需要的版本。
@@ -48,10 +51,55 @@ curl -fsSLO "https://github.com/zeabur-oss/zeatend/releases/download/$version/ze
 ```
 
 下载的文件与发行文件一致时，`sha256sum` 会输出 `OK`。`zeatend` 是一个静态二进制文件，不需要其他软件包。
-
 </Step>
 <Step>
+### 在安装界面安装
 
+```sh
+sudo zeatend
+```
+
+安装界面分为四步。按 F2 可以在英语、繁体中文和简体中文之间切换。
+
+1. **服务器**：列出主机信息和主机检查。用上下键选择 K3s、RKE2 或 KubeSolo，再按 Enter。需要注意的检查项都会写出处理方法。
+
+   ![服务器界面：主机信息、K3s、RKE2 或 KubeSolo 的选项，以及主机检查](../../screens/80x24/zh_CN-server.svg)
+
+2. **访问方式**：填写你的电脑连接这台服务器所用的地址。要用 DNS 名称连接 API 服务器，也一起填上。节点名称可以不填。按 Tab 切换到下一项。
+3. **确认**：列出版本、地址和配置文件。按 Enter 后，Zeatend 会把你的选择写入 `/etc/zeatend/config.yaml`，开始安装。
+
+   ![确认界面：Kubernetes 版本、地址、DNS 名称，以及接下来会做什么](../../screens/80x24/zh_CN-review.svg)
+
+4. **安装**：显示进度，大约需要几分钟。安装在 systemd 单元中运行，按 Ctrl+C 关闭界面或 SSH 断开都会继续；再运行一次 `sudo zeatend` 就能继续查看。完成后，界面会列出查看节点、从自己的电脑使用集群的命令。
+
+   ![安装界面：安装完成，集群已经可以使用](../../screens/80x24/zh_CN-done.svg)
+
+这些命令里的 kubeconfig 是集群管理员的凭据，只能放在服务器或你自己的电脑上。
+</Step>
+<Step>
+### 检查集群
+
+```sh
+sudo zeatend doctor
+```
+
+`doctor` 会再次运行主机检查，再检查服务、API 服务器、安装记录、节点、kubelet 为系统预留的内存；使用 K3s 和 RKE2 时，还会检查机密变量是否加密存储。每行非 `ok` 的结果都会给出要运行的命令。所有检查通过时，退出码为 0；有警告时为 1；有失败时为 2。
+</Step>
+<Step>
+### 安装 Zeabur 开源版
+
+使用 K3s 时，打开 Zeabur 开源版的[用 Zeatend 安装](https://oss.zeabur.com/zh-CN/docs/zeabur/install/one-command/)，从**用 Zeatend 装好 Kubernetes** 这一步继续。该步骤会向 `/etc/zeatend/config.yaml` 添加 `apiServer.authenticationConfig`，让 API 服务器接受 Zeabur Identity 的登录，再次运行 `zeatend apply`，然后用一条 `helm install` 安装 Zeabur 开源版。
+
+使用 RKE2 或 KubeSolo 时，见[将 Zeabur 开源版安装到已有集群](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/)。
+</Step>
+</Steps>
+
+## 用命令安装
+
+要写成脚本、交给 Agent，或想自己运行每一步时，可以不用安装界面，改用命令。先下载 Zeatend，再依次完成下面三步，完成后回到[检查集群](#检查集群)。
+
+<Steps>
+<Step>
 ### 编写配置
 
 Zeatend 读取 `/etc/zeatend/config.yaml`。文件不存在时，会按默认配置安装 K3s，因此使用 K3s 可以跳过这一步。
@@ -64,12 +112,8 @@ echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
 ```
 
 使用 KubeSolo 时，将 `rke2` 换成 `kubesolo`。要同时用 DNS 名称访问 API 服务器，将名称添加到 `host.tlsSan`。[配置文件](../reference/configuration.mdx)列出了所有设置。
-
-也可以直接运行 `sudo zeatend`，不带子命令。安装界面会询问发行版、API 服务器的地址和 DNS 名称，以及节点名称，然后显示安装计划、写入配置文件，等你确认后安装。界面支持英语、繁体中文和简体中文，按 F2 切换语言。完成后直接跳到[检查集群](#检查集群)。
-
 </Step>
 <Step>
-
 ### 检查安装计划
 
 ```sh
@@ -88,10 +132,8 @@ sudo zeatend plan
 ```
 
 出现 `FAIL` 时，安装会停止。解决该行指出的问题，再运行 `plan`。`warn` 不会阻止安装，每行警告都会给出修复命令。
-
 </Step>
 <Step>
-
 ### 安装集群
 
 ```sh
@@ -122,27 +164,6 @@ Whoever has this file is cluster admin; keep it like an SSH key.
 ```
 
 输出中提到的 kubeconfig 是集群的管理员凭证，只保存在服务器或你自己的电脑上。`apply` 可以安全地重复运行，让服务器与配置保持一致。
-
-</Step>
-<Step>
-
-### 检查集群
-
-```sh
-sudo zeatend doctor
-```
-
-`doctor` 会再次运行主机检查，再检查服务、API 服务器、安装记录、节点、kubelet 为系统预留的内存；使用 K3s 和 RKE2 时，还会检查机密变量是否加密存储。每行非 `ok` 的结果都会给出要运行的命令。所有检查通过时，退出码为 0；有警告时为 1；有失败时为 2。
-
-</Step>
-<Step>
-
-### 安装 Zeabur 开源版
-
-使用 K3s 时，打开 Zeabur 开源版的[用 Zeatend 安装](https://oss.zeabur.com/zh-CN/docs/zeabur/install/one-command/)，从**用 Zeatend 装好 Kubernetes** 这一步继续。该步骤会向 `/etc/zeatend/config.yaml` 添加 `apiServer.authenticationConfig`，让 API 服务器接受 Zeabur Identity 的登录，再次运行 `zeatend apply`，然后用一条 `helm install` 安装 Zeabur 开源版。
-
-使用 RKE2 或 KubeSolo 时，见[将 Zeabur 开源版安装到已有集群](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/)。
-
 </Step>
 </Steps>
 
