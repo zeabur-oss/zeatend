@@ -1,0 +1,92 @@
+---
+title: Install with commands
+description: Install the cluster with zeatend plan and zeatend apply instead of the install screens, for scripts and agents.
+---
+
+Use `zeatend plan` and `zeatend apply` instead of the install screens: in a script, from an agent, or when the server has no terminal for the screens. For a normal install, use the install screens in [Install a cluster and Zeabur OSS](install.mdx).
+
+You need the same server as in [Before you begin](install.mdx#before-you-begin).
+
+<Steps>
+<Step>
+### Download Zeatend
+
+Download and check `zeatend` as in [Download Zeatend](install.mdx#download-zeatend).
+</Step>
+<Step>
+### Write the configuration
+
+Zeatend reads `/etc/zeatend/config.yaml`. Without the file, it installs K3s with the defaults, so for K3s you can skip this step.
+
+For RKE2 or KubeSolo, write the file:
+
+```sh
+sudo mkdir -p /etc/zeatend
+echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
+```
+
+Replace `rke2` with `kubesolo` for KubeSolo. To reach the API server at a DNS name too, add it under `host.tlsSan`. [Configuration file](../reference/configuration.mdx) lists every setting.
+</Step>
+<Step>
+### Check the plan
+
+```sh
+sudo zeatend plan
+```
+
+`plan` changes nothing. It prints the release it installs, the node name and addresses, the files it writes, and the host checks:
+
+```text
+==> Checking the host
+    ok   root               running as root
+    ok   systemd            systemd is the init system
+    warn swap               swap is on; the kubelet expects it off (swapoff -a, and remove it from /etc/fstab)
+    ok   ports              80, 443, 6443 and 10250 are free
+    ok   disk space         95.0 GiB free under /var/lib
+```
+
+A `FAIL` line stops the install. Fix what it names and run `plan` again. A `warn` line doesn't stop the install, and each one names the command that fixes it.
+</Step>
+<Step>
+### Install the cluster
+
+```sh
+sudo zeatend apply
+```
+
+`apply` downloads the distribution, checks each file against the digest built into Zeatend, writes the configuration, starts the service and waits until the node is `Ready`. It takes a few minutes.
+
+The install runs in a systemd unit, `zeatend-install-<id>.service`, so it goes on if your SSH session drops. Run `sudo zeatend apply` again to follow it. `journalctl -u 'zeatend-install-*'` has the full output.
+
+When it ends, it prints the release and the node, and the commands to go on with:
+
+```text
+==> Waiting for node vps-1 to be Ready
+K3s v1.37.2+k3s1 runs on vps-1.
+
+List the nodes on this server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+
+Use the cluster from your own computer:
+  mkdir -p ~/.kube
+  (umask 077; ssh <you>@203.0.113.10 sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/vps-1.yaml)
+  sed -i.bak 's#https://127.0.0.1:6443#https://203.0.113.10:6443#' ~/.kube/vps-1.yaml
+  KUBECONFIG=~/.kube/vps-1.yaml kubectl get nodes
+
+Whoever has this file is cluster admin; keep it like an SSH key.
+==> Done
+```
+
+The kubeconfig it names is the cluster's admin credential. Keep it on the server, or on your own computer only. `apply` is safe to run again: it brings the server in line with the configuration.
+</Step>
+<Step>
+### Check the cluster and install Zeabur OSS
+
+Go on with [Check the cluster](install.mdx#check-the-cluster) and [Install Zeabur OSS](install.mdx#install-zeabur-oss).
+</Step>
+</Steps>
+
+## Next
+
+- [Add nodes](../operations/add-nodes.mdx) to run services on more servers.
+- [Maintain the cluster](../operations/maintain.mdx): upgrades, certificates and backups.

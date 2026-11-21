@@ -1,0 +1,92 @@
+---
+title: 用指令安裝
+description: 不用安裝畫面，改用 zeatend plan 和 zeatend apply 安裝叢集，適合腳本和 Agent。
+---
+
+不用安裝畫面，改用 `zeatend plan` 和 `zeatend apply` 安裝：寫成腳本、交給 Agent，或伺服器沒有能開啟畫面的終端機時。一般安裝請照[安裝叢集與 Zeabur 開源版](install.mdx)用安裝畫面操作。
+
+伺服器的需求和[開始之前](install.mdx#開始之前)相同。
+
+<Steps>
+<Step>
+### 下載 Zeatend
+
+照[下載 Zeatend](install.mdx#下載-zeatend)下載並驗證 `zeatend`。
+</Step>
+<Step>
+### 寫入設定檔
+
+Zeatend 會讀取 `/etc/zeatend/config.yaml`。沒有這個檔案時，會用預設值安裝 K3s，所以選用 K3s 可以略過這一步。
+
+要用 RKE2 或 KubeSolo，先寫入設定檔：
+
+```sh
+sudo mkdir -p /etc/zeatend
+echo 'distribution: rke2' | sudo tee /etc/zeatend/config.yaml
+```
+
+使用 KubeSolo 時，把 `rke2` 換成 `kubesolo`。如果也要用 DNS 名稱連到 API 伺服器，把名稱加到 `host.tlsSan`。[設定檔](../reference/configuration.mdx)列出所有設定。
+</Step>
+<Step>
+### 檢查安裝計畫
+
+```sh
+sudo zeatend plan
+```
+
+`plan` 不會修改任何內容，只會印出要安裝的版本、節點名稱與位址、要寫入的檔案，以及主機檢查結果：
+
+```text
+==> Checking the host
+    ok   root               running as root
+    ok   systemd            systemd is the init system
+    warn swap               swap is on; the kubelet expects it off (swapoff -a, and remove it from /etc/fstab)
+    ok   ports              80, 443, 6443 and 10250 are free
+    ok   disk space         95.0 GiB free under /var/lib
+```
+
+出現 `FAIL` 就會停止安裝。先解決該行指出的問題，再執行一次 `plan`。`warn` 不會阻止安裝，每一行都會列出解決問題的指令。
+</Step>
+<Step>
+### 安裝叢集
+
+```sh
+sudo zeatend apply
+```
+
+`apply` 會下載發行版，用 Zeatend 內建的雜湊摘要驗證每個檔案，寫入設定、啟動服務，再等節點進入 `Ready` 狀態，約需幾分鐘。
+
+安裝會在 systemd 單元 `zeatend-install-<id>.service` 中執行，即使 SSH 工作階段斷線也會繼續。再執行一次 `sudo zeatend apply` 就能接著看進度，完整輸出可用 `journalctl -u 'zeatend-install-*'` 檢視。
+
+結束時會印出版本、節點，以及接下來可執行的指令：
+
+```text
+==> Waiting for node vps-1 to be Ready
+K3s v1.37.2+k3s1 runs on vps-1.
+
+List the nodes on this server:
+  sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o wide
+
+Use the cluster from your own computer:
+  mkdir -p ~/.kube
+  (umask 077; ssh <you>@203.0.113.10 sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/vps-1.yaml)
+  sed -i.bak 's#https://127.0.0.1:6443#https://203.0.113.10:6443#' ~/.kube/vps-1.yaml
+  KUBECONFIG=~/.kube/vps-1.yaml kubectl get nodes
+
+Whoever has this file is cluster admin; keep it like an SSH key.
+==> Done
+```
+
+輸出列出的 kubeconfig 是叢集管理員的認證資訊，只能放在伺服器或你自己的電腦上。`apply` 可以安全地重複執行，會把伺服器調整成設定檔指定的狀態。
+</Step>
+<Step>
+### 檢查叢集並安裝 Zeabur 開源版
+
+接著照[檢查叢集](install.mdx#檢查叢集)和[安裝 Zeabur 開源版](install.mdx#安裝-zeabur-開源版)操作。
+</Step>
+</Steps>
+
+## 接下來
+
+- [新增節點](../operations/add-nodes.mdx)，讓服務在更多伺服器上執行。
+- [維護叢集](../operations/maintain.mdx)：升級、憑證與備份。
