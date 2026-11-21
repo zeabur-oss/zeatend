@@ -404,7 +404,15 @@ impl Settings<'_> {
                     lines.push(format!("server = {}", quoted(&server)));
                     self.host_settings(&mut lines, registry, "")?;
                 }
-                for endpoint in self.mirrors.get(registry).into_iter().flatten() {
+                // containerd reads `_default` only for a registry without a directory of its
+                // own, so a registry that has one for its settings lists the `*` mirrors itself,
+                // unless it is a mirror: its images do not come through another mirror.
+                let endpoints = self.mirrors.get(registry).or_else(|| {
+                    self.mirrors
+                        .get(ANY)
+                        .filter(|_| registry != ANY && !self.is_mirror(registry))
+                });
+                for endpoint in endpoints.into_iter().flatten() {
                     let url = Url::parse(endpoint).ok_or_else(|| {
                         PlanError::Config(format!("registryMirrors: `{endpoint}`"))
                     })?;
@@ -433,6 +441,15 @@ impl Settings<'_> {
                 })
             })
             .collect()
+    }
+
+    /// Whether `host` serves one of the mirrors.
+    fn is_mirror(&self, host: &str) -> bool {
+        self.mirrors
+            .values()
+            .flatten()
+            .filter_map(|endpoint| Url::parse(endpoint))
+            .any(|url| url.host == host)
     }
 
     /// The CA and the `Authorization` header of `host`, in the table `table` (`""`: the top
@@ -763,6 +780,53 @@ registryHosts:
         );
         assert!(files[2].content.contains("[header]\n  Authorization = "));
         assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn a_registry_with_settings_of_its_own_still_pulls_through_the_wildcard_mirror() {
+        let given = Given::parse(
+            "registryMirrors:
+  '*': [https://mirror.example.com]
+registryHosts:
+  ghcr.io: {caFile: /etc/zeatend/ghcr-ca.pem}
+  mirror.example.com: {caFile: /etc/zeatend/mirror-ca.pem}
+",
+        );
+        let files = given.files(Distribution::KubeSolo);
+        let file = |dir: &str| {
+            let path = format!("/var/lib/kubesolo/containerd/registry/{dir}/hosts.toml");
+            files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.content.as_str())
+        };
+        assert_eq!(
+            file("ghcr.io"),
+            Some(
+                format!(
+                    "{HEADER}server = \"https://ghcr.io\"
+ca = \"/etc/zeatend/ghcr-ca.pem\"
+
+[host.\"https://mirror.example.com\"]
+  capabilities = [\"pull\", \"resolve\"]
+  ca = \"/etc/zeatend/mirror-ca.pem\"
+"
+                )
+                .as_str()
+            )
+        );
+        // The mirror's own images come from the mirror itself.
+        assert_eq!(
+            file("mirror.example.com"),
+            Some(
+                format!(
+                    "{HEADER}server = \"https://mirror.example.com\"
+ca = \"/etc/zeatend/mirror-ca.pem\"
+"
+                )
+                .as_str()
+            )
+        );
     }
 
     #[test]
