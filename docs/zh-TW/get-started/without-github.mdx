@@ -11,11 +11,11 @@ description: 經由 HTTPS 代理伺服器安裝，從鏡像站下載映像檔，
 | --- | --- | --- |
 | Zeatend | GitHub Releases | 在另一台電腦下載，再複製到伺服器。 |
 | 發行版：執行檔、映像檔包，K3s 還有 `install.sh` | GitHub Releases 與 `raw.githubusercontent.com`；KubeSolo 還會從 `dl.k8s.io` 下載 `kubectl` | `proxy.https`，一台連得到這些主機的 HTTPS 代理伺服器。 |
-| Zeabur 與各項服務的映像檔 | 各自的映像檔倉庫，例如 Docker Hub 與 `ghcr.io` | `registryMirrors`，你網路裡的鏡像站。 |
+| Zeabur 開源版與各項服務的映像檔 | 各自的映像檔倉庫，例如 Docker Hub 與 `ghcr.io` | `registryMirrors`，你網路裡的鏡像站。 |
 
 每個發行版本都附有映像檔包：K3s 是 `k3s-airgap-images-<arch>.tar.zst`，RKE2 是 `rke2-images-core` 與 `rke2-images-canal`，KubeSolo 是離線壓縮檔。Zeatend 會跟著發行版本一起下載，用內建在 Zeatend 的摘要檢查，再放到發行版啟動時會載入的位置。因此 CoreDNS、網路外掛和發行版內附的其他元件，不需要映像檔倉庫就能啟動。
 
-映像檔包只有這些映像檔。Zeabur 和你的服務則從各自的映像檔倉庫下載映像檔，伺服器連不上這些倉庫時，就需要鏡像站。
+映像檔包只有這些映像檔。Zeabur 開源版和你的服務則從各自的映像檔倉庫下載映像檔，伺服器連不上這些倉庫時，就需要鏡像站。
 
 ## 開始之前
 
@@ -208,4 +208,4 @@ RKE2 與 KubeSolo 請改用 `apply` 輸出的 `kubectl` 與 kubeconfig。
 ## 接下來
 
 - [設定檔](../reference/configuration.mdx)列出所有設定。
-- [安裝 Zeabur](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/) 會經由同樣的鏡像站下載 Zeabur 的映像檔。
+- [安裝 Zeabur 開源版](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/) 會經由同樣的鏡像站下載 Zeabur 開源版的映像檔。

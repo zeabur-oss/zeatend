@@ -11,11 +11,11 @@ description: 通过 HTTPS 代理安装，从镜像源拉取镜像，每一步都
 | --- | --- | --- |
 | Zeatend | GitHub Releases | 在另一台电脑上下载，再复制到服务器。 |
 | 发行版：可执行文件、镜像包，K3s 还有 `install.sh` | GitHub Releases 和 `raw.githubusercontent.com`；KubeSolo 还会从 `dl.k8s.io` 下载 `kubectl` | `proxy.https`，一台能访问这些主机的 HTTPS 代理。 |
-| Zeabur 和各项服务的镜像 | 各自的镜像仓库，例如 Docker Hub 和 `ghcr.io` | `registryMirrors`，你网络里的镜像源。 |
+| Zeabur 开源版和各项服务的镜像 | 各自的镜像仓库，例如 Docker Hub 和 `ghcr.io` | `registryMirrors`，你网络里的镜像源。 |
 
 每个发行版本都附带镜像包：K3s 是 `k3s-airgap-images-<arch>.tar.zst`，RKE2 是 `rke2-images-core` 和 `rke2-images-canal`，KubeSolo 是离线压缩包。Zeatend 随发行版本一起下载镜像包，用内置在 Zeatend 里的摘要校验，再放到发行版启动时加载的位置。所以 CoreDNS、网络插件和发行版自带的其他组件，不需要镜像仓库也能启动。
 
-镜像包里只有这些镜像。Zeabur 和你的服务则从各自的镜像仓库拉取镜像，服务器访问不了这些仓库时，就需要镜像源。
+镜像包里只有这些镜像。Zeabur 开源版和你的服务则从各自的镜像仓库拉取镜像，服务器访问不了这些仓库时，就需要镜像源。
 
 ## 开始之前
 
@@ -208,4 +208,4 @@ RKE2 和 KubeSolo 请改用 `apply` 输出的 `kubectl` 和 kubeconfig。
 ## 接下来
 
 - [配置文件](../reference/configuration.mdx)列出所有设置。
-- [安装 Zeabur](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/) 会通过同样的镜像源拉取 Zeabur 的镜像。
+- [安装 Zeabur 开源版](https://oss.zeabur.com/zh-CN/docs/zeabur/install/existing-cluster/) 会通过同样的镜像源拉取 Zeabur 开源版的镜像。

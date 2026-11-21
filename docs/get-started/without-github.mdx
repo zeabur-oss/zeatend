@@ -11,11 +11,11 @@ This page installs a cluster with Zeatend on a server that can't reach GitHub or
 | --- | --- | --- |
 | Zeatend | GitHub Releases | Download it on another computer and copy it to the server. |
 | The distribution: binary, image bundle and, for K3s, `install.sh` | GitHub Releases and `raw.githubusercontent.com`; for KubeSolo also `kubectl` from `dl.k8s.io` | `proxy.https`, an HTTPS proxy that reaches these hosts. |
-| The images of Zeabur and your services | Their registries, such as Docker Hub and `ghcr.io` | `registryMirrors`, a mirror inside your network. |
+| The images of Zeabur OSS and your services | Their registries, such as Docker Hub and `ghcr.io` | `registryMirrors`, a mirror inside your network. |
 
 Each distribution release comes with an image bundle: `k3s-airgap-images-<arch>.tar.zst` for K3s, `rke2-images-core` and `rke2-images-canal` for RKE2, and the offline archive for KubeSolo. Zeatend downloads the bundle with the release, checks it against the digest built into Zeatend, and puts it where the distribution loads it at start. So CoreDNS, the network plugin and the other components the distribution packages start without a registry.
 
-The bundle holds only those images. Zeabur and your services pull their images from their registries, so a server that can't reach them needs a mirror.
+The bundle holds only those images. Zeabur OSS and your services pull their images from their registries, so a server that can't reach them needs a mirror.
 
 ## Before you begin
 
@@ -208,4 +208,4 @@ On RKE2 and KubeSolo, use the `kubectl` and kubeconfig that `apply` printed.
 ## Next
 
 - [Configuration file](../reference/configuration.mdx) lists every setting.
-- [Install Zeabur](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/) pulls Zeabur's images through the same mirrors.
+- [Install Zeabur OSS](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/) pulls Zeabur OSS's images through the same mirrors.
