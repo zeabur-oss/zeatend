@@ -18,7 +18,8 @@ use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::precondition::{Change, Preconditions, RecordState};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
-use zeatend_plan::telemetry::{Action, Command, Run, Step};
+use zeatend_plan::steps::Step;
+use zeatend_plan::telemetry::{Action, Command, Run};
 use zeatend_plan::upgrade::{Kubernetes, release_tag};
 use zeatend_plan::{k3s, ports};
 
@@ -45,6 +46,45 @@ pub(crate) fn restarted(state_dir: &str) -> Result<(), InstallError> {
     Ok(())
 }
 
+/// Announces the steps of an install in the order of their list, such as
+/// [`Step::install`], as `n/total` and the step.
+pub(crate) struct Steps {
+    list: Vec<Step>,
+    next: usize,
+}
+
+impl Steps {
+    pub(crate) const fn new(list: Vec<Step>) -> Self {
+        Self { list, next: 0 }
+    }
+
+    /// Announces `step`.
+    ///
+    /// # Errors
+    ///
+    /// When `step` is not the next step of the list.
+    pub(crate) fn start(&mut self, step: Step) -> Result<(), InstallError> {
+        let expected = self.list.get(self.next).copied();
+        if expected != Some(step) {
+            return Err(InstallError::StepOrder {
+                expected: expected.map_or("none", Step::name),
+                found: step.name(),
+            });
+        }
+        self.next += 1;
+        if let Some(phase) = step.telemetry() {
+            telemetry::reached(phase);
+        }
+        output::step(&format!(
+            "{}/{} {}",
+            self.next,
+            self.list.len(),
+            (i18n::messages().step)(step)
+        ));
+        Ok(())
+    }
+}
+
 /// The admin `kubectl` of a first server.
 pub(crate) fn admin_kubectl(distribution: Distribution) -> Kubectl {
     if distribution.rancher().is_some() {
@@ -63,6 +103,7 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
         return crate::print_json(&plan);
     }
     output::line(render::plan(&plan).trim_end());
+    output::step(i18n::messages().checking_host);
     let failed = show_checks(
         config.distribution,
         Role::Server,
@@ -86,6 +127,8 @@ pub(crate) async fn run(
     output::line(render::plan(&plan).trim_end());
     check_reviewed(reviewed, &plan.preconditions)?;
     let run = telemetry::run(config.distribution, Role::Server, Action::Install);
+    let mut steps = Steps::new(Step::install(config.distribution, plan.longhorn.is_some()));
+    steps.start(Step::CheckHost)?;
     check_host(
         config.distribution,
         Role::Server,
@@ -94,10 +137,10 @@ pub(crate) async fn run(
     )
     .await?;
     telemetry::started(run);
-    prepare_longhorn(plan.longhorn.as_ref()).await?;
+    prepare_longhorn(plan.longhorn.as_ref(), &mut steps).await?;
     match &plan.release {
-        Release::Cluster(cluster) => run_cluster(config, &plan, cluster).await,
-        Release::KubeSolo(solo) => crate::kubesolo::run(config, &plan, solo).await,
+        Release::Cluster(cluster) => run_cluster(config, &plan, cluster, &mut steps).await,
+        Release::KubeSolo(solo) => crate::kubesolo::run(config, &plan, solo, &mut steps).await,
     }
 }
 
@@ -106,6 +149,7 @@ async fn run_cluster(
     config: &Config,
     plan: &Plan,
     cluster: &ClusterPlan,
+    steps: &mut Steps,
 ) -> Result<(), InstallError> {
     let rancher = cluster.distribution;
     let layout = config.distribution.layout();
@@ -114,20 +158,22 @@ async fn run_cluster(
         cluster,
         files: &plan.host_files,
         server: true,
-        changed: false,
     };
-    let restarted = install_cluster(&install).await?;
+    let restarted = install_cluster(&install, steps).await?;
     let name = plan.node_name.clone();
     let messages = i18n::messages();
-    telemetry::reached(Step::Node);
-    output::step(&(messages.waiting_for_node)(&name));
+    steps.start(Step::WaitReady)?;
+    output::note(&(messages.waiting_for_node)(&name));
     kubectl.wait_ready(Duration::from_mins(10)).await?;
-    wait_removed(&kubectl, rancher, &config.disable).await?;
-    files::set_modes(Path::new(rancher.paths().tls_dir), ".crt", 0o600)?;
     if restarted {
         crate::join::wait_node_ready(&kubectl, &name, Some(install.unit())).await?;
     }
+    steps.start(Step::WaitRemoved)?;
+    wait_removed(&kubectl, rancher, &config.disable).await?;
+    steps.start(Step::ProtectCertificates)?;
+    files::set_modes(Path::new(rancher.paths().tls_dir), ".crt", 0o600)?;
 
+    steps.start(Step::WriteRecord)?;
     write_record(
         Path::new(layout.state_dir),
         &Record::new(plan.distribution, plan.release.version()),
@@ -225,7 +271,6 @@ pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> 
                     cluster,
                     files: &plan.host_files,
                     server: true,
-                    changed: false,
                 })
                 .await?;
                 // A new release is shown as such, not as its binary.
@@ -267,13 +312,16 @@ pub(crate) fn written_files(host_files: &[HostFile], longhorn: Option<&Prep>) ->
 }
 
 /// Makes the changes Longhorn needs on this node, before the distribution starts, so that
-/// Longhorn finds them on every node it schedules to.
-pub(crate) async fn prepare_longhorn(prep: Option<&Prep>) -> Result<(), InstallError> {
-    let Some(prep) = prep.filter(|prep| !prep.steps.is_empty()) else {
+/// Longhorn finds them on every node it schedules to. It is [`Step::PrepareLonghorn`], which
+/// `steps` has only when the plan has `prep`.
+pub(crate) async fn prepare_longhorn(
+    prep: Option<&Prep>,
+    steps: &mut Steps,
+) -> Result<(), InstallError> {
+    let Some(prep) = prep else {
         return Ok(());
     };
-    telemetry::reached(Step::Longhorn);
-    output::step(i18n::messages().preparing_longhorn);
+    steps.start(Step::PrepareLonghorn)?;
     longhorn::apply(prep, |step| output::note(&render::longhorn_step(step))).await?;
     Ok(())
 }
@@ -422,7 +470,6 @@ pub(crate) async fn show_checks(
     require_encrypted_disk: bool,
 ) -> Vec<Finding> {
     let messages = i18n::messages();
-    output::step(messages.checking_host);
     let unit = distribution.layout().unit(role);
     let checks = preflight::run(preflight::Options {
         cluster_running: systemd::is_active(unit).await,
@@ -467,15 +514,20 @@ async fn release_pending(cluster: &ClusterPlan, unit: &str) -> Option<String> {
     }
 }
 
-/// Installs the release: the binary and, for K3s, the unit `install.sh` writes.
+/// The directory that `fetch_release` downloads the release into.
+fn download_dir(cluster: &ClusterPlan) -> PathBuf {
+    PathBuf::from(cluster.distribution.distribution().layout().state_dir)
+        .join("downloads")
+        .join(&cluster.version)
+}
+
+/// Installs the release that `fetch_release` downloaded: the binary and, for K3s, the unit
+/// `install.sh` writes.
 async fn install_release(cluster: &ClusterPlan, server: bool) -> Result<(), InstallError> {
     let distribution = cluster.distribution;
     let layout = distribution.distribution().layout();
     let binary = Path::new(layout.binary);
-    let dir = PathBuf::from(layout.state_dir)
-        .join("downloads")
-        .join(&cluster.version);
-    fetch_release(cluster, &dir).await?;
+    let dir = download_dir(cluster);
     let release = dir.join(&cluster.release.file);
     match distribution {
         Rancher::K3s => {
@@ -513,8 +565,6 @@ pub(crate) struct ClusterInstall<'a> {
     pub(crate) files: &'a [HostFile],
     /// A server runs the control plane; an RKE2 server runs etcd as the `etcd` user.
     pub(crate) server: bool,
-    /// Something the caller wrote already needs a restart.
-    pub(crate) changed: bool,
 }
 
 impl ClusterInstall<'_> {
@@ -535,55 +585,69 @@ async fn pending(install: &ClusterInstall<'_>) -> Result<Vec<String>, InstallErr
     Ok(paths)
 }
 
-/// Installs K3s or RKE2 and starts it, or restarts it when `pending` finds a change. Returns
-/// whether it started or restarted the unit.
-pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool, InstallError> {
+/// Installs K3s or RKE2 and starts it, or restarts it when `pending` finds a change, in the
+/// steps from [`Step::Download`] to [`Step::StartService`]. Returns whether it started or
+/// restarted the unit.
+pub(crate) async fn install_cluster(
+    install: &ClusterInstall<'_>,
+    steps: &mut Steps,
+) -> Result<bool, InstallError> {
     let cluster = install.cluster;
     let distribution = cluster.distribution;
     let unit = install.unit();
-    telemetry::reached(Step::Install);
-    output::step(&format!(
+    let release = release_pending(cluster, unit).await.is_some();
+
+    steps.start(Step::Download)?;
+    output::note(&format!(
         "{} {} ({unit})",
         distribution.distribution().title(),
         cluster.version
     ));
-    let release = release_pending(cluster, unit).await.is_some();
+    if release {
+        fetch_release(cluster, &download_dir(cluster)).await?;
+    }
+
+    steps.start(Step::WriteFiles)?;
     let converge = Converge {
         unit,
         state_dir: distribution.distribution().layout().state_dir,
         files: install.files,
-        changed: install.changed || release,
+        changed: release,
     };
-    converge
-        .run(async || {
-            cmd::run(
-                "sysctl",
-                &[
-                    "--quiet",
-                    &format!("--load={}", distribution.paths().sysctl_file),
-                ],
-                None,
-            )
-            .await?;
-            match distribution {
-                Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
-                    let (program, args) = ETCD_USER;
-                    cmd::run(program, args, None).await?;
-                }
-                Rancher::K3s if install.server => {
-                    files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
-                }
-                Rancher::K3s | Rancher::Rke2 => {}
-            }
-            if release {
-                install_release(cluster, install.server).await?;
-            }
-            Ok(())
-        })
-        .await
+    let changed = converge.write_files().await?;
+
+    steps.start(Step::PrepareHost)?;
+    load_apparmor_profile(install.files.iter()).await?;
+    cmd::run(
+        "sysctl",
+        &[
+            "--quiet",
+            &format!("--load={}", distribution.paths().sysctl_file),
+        ],
+        None,
+    )
+    .await?;
+    match distribution {
+        Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
+            let (program, args) = ETCD_USER;
+            cmd::run(program, args, None).await?;
+        }
+        Rancher::K3s if install.server => {
+            files::make_dir(Path::new(k3s::AUDIT_LOG_DIR), 0o700)?;
+        }
+        Rancher::K3s | Rancher::Rke2 => {}
+    }
+
+    steps.start(Step::InstallRelease)?;
+    if release {
+        install_release(cluster, install.server).await?;
+    }
+
+    steps.start(Step::StartService)?;
+    converge.start(changed).await
 }
 
-/// What [`Converge::run`] writes and starts.
+/// What [`Converge`] writes and starts.
 pub(crate) struct Converge<'a> {
     pub(crate) unit: &'static str,
     /// Where it records that a restart is owed.
@@ -594,13 +658,9 @@ pub(crate) struct Converge<'a> {
 }
 
 impl Converge<'_> {
-    /// Writes the files, runs `install`, the distribution's own steps and its release, then starts
-    /// the unit, or restarts it when something changed. Returns whether it started or restarted
-    /// the unit.
-    pub(crate) async fn run(
-        &self,
-        install: impl AsyncFnOnce() -> Result<(), InstallError>,
-    ) -> Result<bool, InstallError> {
+    /// Writes the files, and reloads systemd when something changed. Returns whether something
+    /// changed; then it records that a restart is owed until [`Self::start`] restarts the unit.
+    pub(crate) async fn write_files(&self) -> Result<bool, InstallError> {
         let changed = self.changed
             || restart_owed(self.state_dir)
             || !changed_files(self.files.iter()).is_empty();
@@ -614,9 +674,12 @@ impl Converge<'_> {
             // A unit or a drop-in, such as the one with `GOMEMLIMIT`, takes effect after a reload.
             systemd::daemon_reload().await?;
         }
-        load_apparmor_profile(self.files.iter()).await?;
-        install().await?;
+        Ok(changed)
+    }
 
+    /// Starts the unit, or restarts it when `changed`. Returns whether it started or restarted
+    /// the unit.
+    pub(crate) async fn start(&self, changed: bool) -> Result<bool, InstallError> {
         let unit = self.unit;
         if !systemd::is_active(unit).await {
             output::note(&(i18n::messages().starting_unit)(unit));

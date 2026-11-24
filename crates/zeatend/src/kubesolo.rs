@@ -14,9 +14,9 @@ use zeatend_plan::kubesolo::{KUBECONFIG, Kubeconfig};
 use zeatend_plan::plan::{KubeSoloPlan, Plan};
 use zeatend_plan::precondition::Change;
 use zeatend_plan::record::Record;
-use zeatend_plan::telemetry::Step;
+use zeatend_plan::steps::Step;
 
-use crate::apply::{Converge, binary_outdated, file_sha256, write_record};
+use crate::apply::{Converge, Steps, binary_outdated, file_sha256, write_record};
 use crate::{InstallError, output};
 
 const LAYOUT: &Layout = Distribution::KubeSolo.layout();
@@ -55,15 +55,17 @@ pub(crate) async fn run(
     config: &Config,
     plan: &Plan,
     solo: &KubeSoloPlan,
+    steps: &mut Steps,
 ) -> Result<(), InstallError> {
-    let restarted = install(plan, solo).await?;
+    let restarted = install(plan, solo, steps).await?;
     let messages = crate::i18n::messages();
-    crate::telemetry::reached(Step::Node);
-    output::step(&(messages.waiting_for_node)(&plan.node_name));
+    steps.start(Step::WaitReady)?;
+    output::note(&(messages.waiting_for_node)(&plan.node_name));
     let kubectl = kubectl();
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     let name = plan.node_name.clone();
     crate::join::wait_node_ready(&kubectl, &name, restarted.then_some(UNIT)).await?;
+    steps.start(Step::WaitAddons)?;
     for (namespace, deployment) in [
         ("kube-system", "coredns"),
         ("local-path-storage", "local-path-provisioner"),
@@ -76,10 +78,12 @@ pub(crate) async fn run(
             )
             .await?;
     }
+    steps.start(Step::WriteRecord)?;
     write_record(
         Path::new(STATE_DIR),
         &Record::new(plan.distribution, plan.release.version()),
     )?;
+    steps.start(Step::WriteKubeconfig)?;
     let yaml = kubeconfig_yaml(&name)?.ok_or_else(|| {
         InstallError::io(Path::new(ADMIN_KUBECONFIG))(std::io::ErrorKind::NotFound.into())
     })?;
@@ -99,11 +103,16 @@ pub(crate) async fn run(
     Ok(())
 }
 
-/// Downloads `KubeSolo` and kubectl, writes the files and starts or restarts `KubeSolo`. Returns
-/// whether it started or restarted the unit.
-async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError> {
-    crate::telemetry::reached(Step::Install);
-    output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
+/// Downloads `KubeSolo` and kubectl, writes the files and starts or restarts `KubeSolo`, in the
+/// steps from [`Step::Download`] to [`Step::StartService`]. Returns whether it started or
+/// restarted the unit.
+async fn install(
+    plan: &Plan,
+    solo: &KubeSoloPlan,
+    steps: &mut Steps,
+) -> Result<bool, InstallError> {
+    steps.start(Step::Download)?;
+    output::note(&format!("KubeSolo {} ({UNIT})", solo.version));
     let agent = download::agent();
     let kubectl = Path::new(KUBECTL);
     output::note(&solo.kubectl.url);
@@ -117,39 +126,46 @@ async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError>
     .await?;
     fs::set_permissions(kubectl, Permissions::from_mode(0o755))
         .map_err(InstallError::io(kubectl))?;
-
     let outdated = binary_outdated(Path::new(BINARY), &solo.version).await;
+    let download = &solo.download;
+    let dir = PathBuf::from(STATE_DIR)
+        .join("downloads")
+        .join(&solo.version);
+    let archive = dir.join(&download.file);
+    if outdated {
+        output::note(&download.url);
+        download::fetch(
+            &agent,
+            &download.url,
+            &archive,
+            download.sha256.as_deref(),
+            &mut output::Meter,
+        )
+        .await?;
+    }
+
+    steps.start(Step::WriteFiles)?;
     let converge = Converge {
         unit: UNIT,
         state_dir: STATE_DIR,
         files: &plan.host_files,
         changed: outdated,
     };
-    converge
-        .run(async || {
-            if !outdated {
-                return Ok(());
-            }
-            let download = &solo.download;
-            let dir = PathBuf::from(STATE_DIR)
-                .join("downloads")
-                .join(&solo.version);
-            output::note(&download.url);
-            download::fetch(
-                &agent,
-                &download.url,
-                &dir.join(&download.file),
-                download.sha256.as_deref(),
-                &mut output::Meter,
-            )
-            .await?;
-            let unpacked = dir.join("unpacked");
-            archive::unpack_tar_gz(&dir.join(&download.file), &unpacked)?;
-            files::install(&unpacked.join("kubesolo"), Path::new(BINARY), 0o755)?;
-            fs::remove_dir_all(&unpacked).map_err(InstallError::io(&unpacked))?;
-            Ok(())
-        })
-        .await
+    let changed = converge.write_files().await?;
+
+    steps.start(Step::PrepareHost)?;
+    crate::apply::load_apparmor_profile(plan.host_files.iter()).await?;
+
+    steps.start(Step::InstallRelease)?;
+    if outdated {
+        let unpacked = dir.join("unpacked");
+        archive::unpack_tar_gz(&archive, &unpacked)?;
+        files::install(&unpacked.join("kubesolo"), Path::new(BINARY), 0o755)?;
+        fs::remove_dir_all(&unpacked).map_err(InstallError::io(&unpacked))?;
+    }
+
+    steps.start(Step::StartService)?;
+    converge.start(changed).await
 }
 
 /// The kubeconfig `apply` writes to [`KUBECONFIG`] from the admin kubeconfig; `None` before
