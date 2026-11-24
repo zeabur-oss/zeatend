@@ -21,6 +21,7 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use jiff::SignedDuration;
 use zeatend_host::HostError;
 use zeatend_host::progress::Event;
 use zeatend_plan::PlanError;
@@ -125,16 +126,14 @@ enum NodeRole {
     Server,
 }
 
-/// A lifetime such as `30m` or `2h`, from one minute to a day.
+/// A lifetime such as `30m` or `2h`, in jiff's friendly format, from one minute to a day.
 fn parse_ttl(text: &str) -> Result<Duration, String> {
     let bad = || format!("`{text}` is not a time from 1m to 24h, such as 30m or 2h");
-    let (number, unit) = text.split_at(text.len().checked_sub(1).ok_or_else(bad)?);
-    let n: u64 = number.parse().map_err(|_e| bad())?;
-    let ttl = match unit {
-        "m" => Duration::from_mins(n),
-        "h" => Duration::from_hours(n),
-        _ => return Err(bad()),
-    };
+    let ttl = text
+        .parse::<SignedDuration>()
+        .ok()
+        .and_then(|ttl| Duration::try_from(ttl).ok())
+        .ok_or_else(bad)?;
     (Duration::from_mins(1)..=Duration::from_hours(24))
         .contains(&ttl)
         .then_some(ttl)
@@ -564,9 +563,23 @@ mod tests {
 
     #[test]
     fn a_token_lives_from_a_minute_to_a_day() {
-        assert_eq!(parse_ttl("1m"), Ok(Duration::from_mins(1)));
-        assert_eq!(parse_ttl("24h"), Ok(Duration::from_hours(24)));
-        for bad in ["", "0m", "25h", "1d", "h", "-1h", "1.5h"] {
+        for (text, want) in [
+            ("1m", Duration::from_mins(1)),
+            ("30m", Duration::from_mins(30)),
+            ("2h", Duration::from_hours(2)),
+            ("24h", Duration::from_hours(24)),
+            ("90m", Duration::from_mins(90)),
+            ("01h", Duration::from_hours(1)),
+            ("90s", Duration::from_secs(90)),
+            ("1h30m", Duration::from_mins(90)),
+            ("1.5h", Duration::from_mins(90)),
+            ("2 hours", Duration::from_hours(2)),
+        ] {
+            assert_eq!(parse_ttl(text), Ok(want), "{text}");
+        }
+        for bad in [
+            "", "0m", "59s", "25h", "1441m", "1d", "h", "-1h", "10", "1x",
+        ] {
             assert!(parse_ttl(bad).is_err(), "{bad}");
         }
     }
