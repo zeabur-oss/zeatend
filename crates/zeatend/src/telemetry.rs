@@ -31,6 +31,8 @@ struct State {
     started: Option<(Run, Instant)>,
     /// The step `apply` is in.
     step: Option<Step>,
+    /// The installation ID, made at most once per process.
+    id: Option<InstallationId>,
     /// Requests that may still run.
     sending: Vec<JoinHandle<()>>,
 }
@@ -41,6 +43,7 @@ static STATE: Mutex<State> = Mutex::new(State {
     config: None,
     started: None,
     step: None,
+    id: None,
     sending: Vec::new(),
 });
 
@@ -99,12 +102,12 @@ pub(crate) fn planned<T, E>(run: Run, plan: &Result<T, E>) {
     } else {
         Outcome::Failed
     };
-    send(Event::Plan { run, result });
+    send(&Event::Plan { run, result });
 }
 
 /// The host checks of `command` failed with `failed`.
 pub(crate) fn checks_failed(run: Run, command: Command, failed: &[Finding]) {
-    send(Event::ChecksFailed {
+    send(&Event::ChecksFailed {
         run,
         command,
         checks: zeatend_plan::telemetry::codes(failed),
@@ -118,7 +121,7 @@ pub(crate) fn started(run: Run) {
         state.started = Some((run.clone(), Instant::now()));
         state.step = None;
     }
-    send(Event::ApplyStarted { run });
+    send(&Event::ApplyStarted { run });
 }
 
 /// `apply` reached `step`.
@@ -140,7 +143,7 @@ pub(crate) fn finished<T, E>(result: &Result<T, E>) {
     } else {
         (Outcome::Failed, step)
     };
-    send(Event::ApplyFinished {
+    send(&Event::ApplyFinished {
         run,
         result,
         step,
@@ -149,7 +152,7 @@ pub(crate) fn finished<T, E>(result: &Result<T, E>) {
 }
 
 /// Sends `event` in the background, or prints it in debug mode.
-fn send(event: Event) {
+fn send(event: &Event) {
     match switch() {
         Switch::Off => {}
         Switch::Debug => {
@@ -164,15 +167,25 @@ fn send(event: Event) {
         }
         Switch::On if PROJECT_KEY.is_empty() => {}
         Switch::On => {
-            let task = tokio::spawn(async move {
-                // The ID is made only when an event is about to be sent.
-                if let Ok(id) = host::id(Path::new(ID_FILE)) {
-                    drop(host::post(ENDPOINT, event.body(PROJECT_KEY, id.as_str())).await);
-                }
-            });
-            state().sending.push(task);
+            let mut state = state();
+            // Made here, under the lock, so the events of one process share one ID.
+            let Some(id) = once(&mut state.id, Path::new(ID_FILE)) else {
+                return;
+            };
+            let body = event.body(PROJECT_KEY, id.as_str());
+            state.sending.push(tokio::spawn(async move {
+                drop(host::post(ENDPOINT, body).await);
+            }));
         }
     }
+}
+
+/// The ID in `slot`, or the one in the file at `path`, made first when there is none.
+fn once(slot: &mut Option<InstallationId>, path: &Path) -> Option<InstallationId> {
+    if slot.is_none() {
+        *slot = host::id(path).ok();
+    }
+    slot.clone()
 }
 
 /// Waits for the requests that still run, for at most `limit`, so the process can end.
@@ -186,4 +199,19 @@ pub(crate) async fn flush(limit: Duration) {
         })
         .await,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_keeps_the_id_it_made() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("installation-id");
+        let mut slot = None;
+        let made = once(&mut slot, &path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(once(&mut slot, &path), Some(made));
+    }
 }

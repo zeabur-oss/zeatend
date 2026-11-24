@@ -1,7 +1,6 @@
 //! The installation ID of the experience program and the one request that sends an event.
 
 use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::time::Duration;
 
@@ -30,8 +29,7 @@ pub fn peek_id(path: &Path) -> Option<InstallationId> {
         .and_then(|text| InstallationId::parse(&text))
 }
 
-/// The ID in the file at `path`, made and kept first (mode 0600) when there is none. When several
-/// callers make one at once, the first to link its file wins and all of them return that ID.
+/// The ID in the file at `path`, made and kept first (mode 0600) when there is none.
 ///
 /// # Errors
 ///
@@ -42,25 +40,9 @@ pub fn id(path: &Path) -> Result<InstallationId, HostError> {
     }
     let mut bytes = [0_u8; 16];
     aws_lc_rs::rand::fill(&mut bytes).map_err(|_unspecified| HostError::Random)?;
-    let made = InstallationId::from_random(bytes);
-    let dir = path.parent().unwrap_or_else(|| Path::new("/"));
-    let temp = dir.join(format!(".installation-id.{}", made.as_str()));
-    files::write(&temp, 0o600, format!("{}\n", made.as_str()).as_bytes())?;
-    let linked = match fs::hard_link(&temp, path) {
-        Err(e) if e.kind() == ErrorKind::AlreadyExists && peek_id(path).is_none() => {
-            // A file that is not an ID is replaced.
-            fs::rename(&temp, path)
-        }
-        other => other,
-    };
-    drop(fs::remove_file(&temp));
-    match linked {
-        Ok(()) => Ok(made),
-        Err(e) if e.kind() == ErrorKind::AlreadyExists => {
-            peek_id(path).ok_or_else(|| HostError::io(path)(e))
-        }
-        Err(e) => Err(HostError::io(path)(e)),
-    }
+    let id = InstallationId::from_random(bytes);
+    files::write(path, 0o600, format!("{}\n", id.as_str()).as_bytes())?;
+    Ok(id)
 }
 
 /// Posts `body` to `endpoint` once, within five seconds. It goes through the proxy that
@@ -113,28 +95,6 @@ mod tests {
         assert_eq!(peek_id(&path), None);
         let made = id(&path).unwrap();
         assert_eq!(peek_id(&path), Some(made));
-    }
-
-    #[test]
-    fn callers_that_make_the_id_at_once_get_the_same_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("installation-id");
-        let barrier = std::sync::Barrier::new(8);
-        let ids: Vec<_> = std::thread::scope(|scope| {
-            let callers: Vec<_> = (0..8)
-                .map(|_| {
-                    scope.spawn(|| {
-                        barrier.wait();
-                        id(&path).unwrap()
-                    })
-                })
-                .collect();
-            callers.into_iter().map(|c| c.join().unwrap()).collect()
-        });
-        let kept = peek_id(&path).unwrap();
-        assert!(ids.iter().all(|id| *id == kept));
-        let left = fs::read_dir(dir.path()).unwrap().count();
-        assert_eq!(left, 1, "temporary files are removed");
     }
 
     #[tokio::test]
