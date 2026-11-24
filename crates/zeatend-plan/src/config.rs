@@ -39,6 +39,9 @@ pub struct Config {
     /// Host settings.
     #[serde(default)]
     pub host: Host,
+    /// `false` turns off the experience program (docs/reference/telemetry.mdx).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telemetry: Option<bool>,
 }
 
 /// A packaged component of K3s or RKE2 that the configuration can turn off.
@@ -116,6 +119,15 @@ pub enum Document {
 }
 
 impl Document {
+    /// The `telemetry` key: `Some(false)` turns off the experience program.
+    #[must_use]
+    pub const fn telemetry(&self) -> Option<bool> {
+        match self {
+            Self::Install(config) => config.telemetry,
+            Self::Join(config) => config.telemetry,
+        }
+    }
+
     /// Parses a configuration file of either kind: a top-level `join` key makes it a join.
     ///
     /// # Errors
@@ -162,6 +174,9 @@ pub struct JoinConfig {
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
+    /// `false` turns off the experience program (docs/reference/telemetry.mdx).
+    #[serde(default)]
+    pub telemetry: Option<bool>,
 }
 
 /// The `join` section. `Debug` leaves the token out.

@@ -14,6 +14,7 @@ use zeatend_plan::kubesolo::{KUBECONFIG, Kubeconfig};
 use zeatend_plan::plan::{KubeSoloPlan, Plan};
 use zeatend_plan::precondition::Change;
 use zeatend_plan::record::Record;
+use zeatend_plan::telemetry::Step;
 
 use crate::apply::{Converge, binary_outdated, file_sha256, write_record};
 use crate::{InstallError, output};
@@ -57,6 +58,7 @@ pub(crate) async fn run(
 ) -> Result<(), InstallError> {
     let restarted = install(plan, solo).await?;
     let messages = crate::i18n::messages();
+    crate::telemetry::reached(Step::Node);
     output::step(&(messages.waiting_for_node)(&plan.node_name));
     let kubectl = kubectl();
     kubectl.wait_ready(Duration::from_mins(10)).await?;
@@ -100,6 +102,7 @@ pub(crate) async fn run(
 /// Downloads `KubeSolo` and kubectl, writes the files and starts or restarts `KubeSolo`. Returns
 /// whether it started or restarted the unit.
 async fn install(plan: &Plan, solo: &KubeSoloPlan) -> Result<bool, InstallError> {
+    crate::telemetry::reached(Step::Install);
     output::step(&format!("KubeSolo {} ({UNIT})", solo.version));
     let agent = download::agent();
     let kubectl = Path::new(KUBECTL);

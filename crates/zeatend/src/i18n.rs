@@ -193,6 +193,8 @@ pub(crate) struct Messages {
     pub(crate) following_unit: fn(&str) -> String,
     /// `apply` started the install in the unit.
     pub(crate) started_unit: fn(&str) -> String,
+    /// `plan` and `apply` send events of the experience program: what, and how to turn it off.
+    pub(crate) telemetry_on: &'static str,
     /// The unit of the cluster starts for the first time.
     pub(crate) starting_unit: fn(&str) -> String,
     /// The unit of the cluster restarts for a new configuration.
@@ -332,6 +334,8 @@ pub(crate) struct Screens {
     pub(crate) next_unit: &'static str,
     /// How to follow the install again.
     pub(crate) next_follow: &'static str,
+    /// The install sends events of the experience program, and how to turn it off.
+    pub(crate) next_telemetry: &'static str,
 
     /// The title of the Install screen.
     pub(crate) install_title: &'static str,

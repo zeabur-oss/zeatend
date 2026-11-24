@@ -9,4 +9,4 @@
   pages: [add-nodes, maintain, uninstall]
 - group: reference
   label: Reference
-  pages: [commands, configuration, hosts]
+  pages: [commands, configuration, hosts, telemetry]

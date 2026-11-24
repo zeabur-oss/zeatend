@@ -26,6 +26,9 @@ pub(super) const MESSAGES: Messages = Messages {
     no_config_defaults,
     following_unit,
     started_unit,
+    telemetry_on: "zeatend sends its version, the distribution and whether the install worked, \
+                   to help improve Zeatend. --no-telemetry or DO_NOT_TRACK=1 turns it off. What is \
+                   sent: https://oss.zeabur.com/docs/zeatend/reference/telemetry/",
     starting_unit,
     restarting_unit,
     waiting_for_node,
@@ -118,6 +121,9 @@ const SCREENS: Screens = Screens {
     next_update: |path| format!("zeatend saves these choices in {path}. Its other settings stay."),
     next_unit: "The install runs in a systemd unit, and goes on if this SSH session ends.",
     next_follow: "Run sudo zeatend again to follow it.",
+    next_telemetry: "The install sends its version, the distribution and whether it worked, to \
+                     help improve Zeatend. To turn it off, quit and run sudo zeatend \
+                     --no-telemetry.",
 
     install_title: "Installing",
     install_unit: |unit| format!("Runs in {unit}"),

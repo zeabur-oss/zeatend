@@ -12,6 +12,7 @@ mod node;
 mod output;
 mod render;
 mod screens;
+mod telemetry;
 mod uninstall;
 mod unit;
 
@@ -26,6 +27,7 @@ use zeatend_plan::PlanError;
 use zeatend_plan::config::{Document, Role};
 use zeatend_plan::finding::Finding;
 use zeatend_plan::precondition::Stale;
+use zeatend_plan::telemetry::Via;
 
 /// Install K3s, RKE2 or `KubeSolo` on this Linux host, hardened to the CIS benchmark, from one
 /// configuration file. A file with a `join` section joins this host to an existing K3s or RKE2
@@ -36,6 +38,12 @@ struct Cli {
     /// The configuration file. When it does not exist, the defaults apply: K3s on this host.
     #[arg(long, short, global = true, default_value = load::DEFAULT_CONFIG)]
     config: PathBuf,
+    /// Send nothing to the experience program.
+    #[arg(long, global = true)]
+    no_telemetry: bool,
+    /// How the person started this run; the install screens start their unit with `tui`.
+    #[arg(long, global = true, hide = true, value_enum, default_value_t = ViaArg::Cli)]
+    via: ViaArg,
     /// The command to run; without one, the install screens open.
     #[command(subcommand)]
     command: Option<Command>,
@@ -103,6 +111,12 @@ enum NodeCommand {
         #[arg(long, default_value = "1h", value_parser = parse_ttl)]
         ttl: Duration,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum ViaArg {
+    Cli,
+    Tui,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -317,8 +331,15 @@ impl InstallError {
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    let via = match (&cli.command, cli.via) {
+        (None, _) | (_, ViaArg::Tui) => Via::Tui,
+        (Some(_), ViaArg::Cli) => Via::Cli,
+    };
+    telemetry::set_up(via, cli.no_telemetry);
     let Some(command) = &cli.command else {
-        return screens::run(&cli.config).await;
+        let code = screens::run(&cli.config).await;
+        telemetry::flush(FLUSH).await;
+        return code;
     };
     if matches!(command, Command::Doctor) {
         return doctor::run(&cli.config).await;
@@ -326,7 +347,12 @@ async fn main() -> ExitCode {
     if let Command::Apply { json: true, .. } = command {
         output::print_json_events();
     }
-    match run(&cli.config, command).await {
+    let result = run(&cli.config, command).await;
+    telemetry::finished(&result);
+    // Nobody waits for the install unit, so it waits for its events longer.
+    let json = matches!(command, Command::Apply { json: true, .. });
+    telemetry::flush(if json { FLUSH_UNIT } else { FLUSH }).await;
+    match result {
         Ok(()) => {
             output::emit(&Event::Done);
             ExitCode::SUCCESS
@@ -344,6 +370,11 @@ async fn main() -> ExitCode {
         }
     }
 }
+
+/// How long a command waits for its events when it ends.
+const FLUSH: Duration = Duration::from_secs(1);
+/// How long `apply --json`, which the install unit runs, waits for them.
+const FLUSH_UNIT: Duration = Duration::from_secs(6);
 
 async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     if let Command::Uninstall {
@@ -380,7 +411,11 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     } = command
         && zeatend_host::systemd::booted()
     {
-        return unit::apply(config, plan.as_deref()).await;
+        if let Ok((document, _)) = load::document_or_defaults(config) {
+            telemetry::use_config(document.telemetry());
+            telemetry::announce();
+        }
+        return unit::apply(config, plan.as_deref(), Via::Cli).await;
     }
     let reviewed = match command {
         Command::Apply {
@@ -394,6 +429,13 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
     };
     let reviewed = reviewed.as_ref();
     let (document, source) = load::document_or_defaults(config)?;
+    telemetry::use_config(document.telemetry());
+    if !matches!(
+        *command,
+        Command::Plan { json: true } | Command::Apply { json: true, .. }
+    ) {
+        telemetry::announce();
+    }
     if !matches!(*command, Command::Plan { json: true }) {
         match source {
             load::Source::File => {}
@@ -450,8 +492,12 @@ mod tests {
             "/usr/local/bin/zeatend",
             "/etc/z.yaml",
             Some("/run/zeatend/p.json"),
+            Via::Tui,
+            true,
         ))
         .unwrap();
+        assert_eq!(cli.via, ViaArg::Tui);
+        assert!(cli.no_telemetry);
         assert!(matches!(
             cli.command.unwrap(),
             Command::Apply {
@@ -461,8 +507,16 @@ mod tests {
             } if plan == Path::new("/run/zeatend/p.json")
         ));
         assert_eq!(cli.config, PathBuf::from("/etc/z.yaml"));
-        let cli = Cli::try_parse_from(unit::command("/usr/local/bin/zeatend", "/etc/z.yaml", None))
-            .unwrap();
+        let cli = Cli::try_parse_from(unit::command(
+            "/usr/local/bin/zeatend",
+            "/etc/z.yaml",
+            None,
+            Via::Cli,
+            false,
+        ))
+        .unwrap();
+        assert_eq!(cli.via, ViaArg::Cli);
+        assert!(!cli.no_telemetry);
         assert!(matches!(
             cli.command.unwrap(),
             Command::Apply { plan: None, .. }

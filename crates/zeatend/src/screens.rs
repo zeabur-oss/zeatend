@@ -26,7 +26,8 @@ use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind
 use tokio::sync::mpsc::{self, UnboundedSender};
 use zeatend_host::progress::Event;
 use zeatend_host::{files, journal, preflight, systemd};
-use zeatend_plan::config::{Config, Document};
+use zeatend_plan::config::{Config, Document, Role};
+use zeatend_plan::telemetry::{self as events, Via};
 
 use self::app::{Action, App, Choices, End, Review};
 use crate::i18n::{self, Lang, Screens};
@@ -75,6 +76,7 @@ async fn prepare(
         return Ok(App::follow(lang, no_cjk, unit));
     }
     let (document, source) = load::document_or_defaults(config)?;
+    crate::telemetry::use_config(document.telemetry());
     let Document::Install(install) = document else {
         let path = match source {
             load::Source::Installer => zeatend_plan::installer::CONFIG_FILE.to_owned(),
@@ -195,10 +197,12 @@ fn follow(unit: String, tx: UnboundedSender<Option<String>>) {
 /// The plan of `config` made from this host, for the Review screen.
 async fn review(config: &Config) -> Result<Review, String> {
     config.check().map_err(|e| e.to_string())?;
-    let plan = apply::install_plan(config)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(Review::new(config, plan))
+    let plan = apply::install_plan(config).await;
+    crate::telemetry::planned(
+        crate::telemetry::run(config.distribution, Role::Server, events::Action::Install),
+        &plan,
+    );
+    Ok(Review::new(config, plan.map_err(|e| e.to_string())?))
 }
 
 /// Writes the configuration to `path` and starts the install unit, which reports in `lang` and
@@ -218,7 +222,13 @@ async fn install(
         reason: e.to_string(),
     })?;
     files::write(path, 0o600, yaml.as_bytes())?;
-    unit::start(path, Some(json.as_bytes()), Some(lang.language_env())).await
+    unit::start(
+        path,
+        Some(json.as_bytes()),
+        Some(lang.language_env()),
+        Via::Tui,
+    )
+    .await
 }
 
 /// Seconds since the Unix epoch.

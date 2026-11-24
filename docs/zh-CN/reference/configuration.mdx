@@ -37,6 +37,7 @@ apiServer:
 | `host.nodeName` | 主机名 | 节点在 Kubernetes 中的名称。 |
 | `host.requireEncryptedDisk` | `false` | 集群数据不在加密磁盘上时，停止安装。 |
 | `storage.longhorn` | `false` | 为 Longhorn 准备节点，详见 [Longhorn](#longhorn)。仅限 K3s 和 RKE2。 |
+| `telemetry` | `true` | 设为 `false` 会关闭[体验计划](telemetry.mdx)。 |
 
 ### 节点名称
 
@@ -86,3 +87,4 @@ join:
 | `disable`、`apiServer` | 仅适用于 RKE2 服务器节点。每台服务器都会部署内置组件并运行 API 服务器，因此所有服务器必须使用相同的值。 |
 | `host` | 与第一台服务器相同。`tlsSan` 仅适用于服务器节点。 |
 | `storage` | 与第一台服务器相同。`zeatend node add` 会沿用服务器的设置。 |
+| `telemetry` | 与第一台服务器相同。 |

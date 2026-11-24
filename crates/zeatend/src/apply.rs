@@ -12,16 +12,17 @@ use zeatend_plan::cluster::{
     self, APPARMOR_PROFILE, Addon, Distribution, HelmChart, HostFile, ObjectList, Rancher,
 };
 use zeatend_plan::config::{Component, Config, Role};
-use zeatend_plan::finding::Status;
+use zeatend_plan::finding::{Finding, Status};
 use zeatend_plan::longhorn::Prep;
 use zeatend_plan::plan::{self, ClusterPlan, Plan, Release};
 use zeatend_plan::precondition::{Change, Preconditions, RecordState};
 use zeatend_plan::record::{RECORD_FILE, Record};
 use zeatend_plan::rke2::{ETCD_USER, PREFIX};
+use zeatend_plan::telemetry::{Action, Command, Run, Step};
 use zeatend_plan::upgrade::{Kubernetes, release_tag};
 use zeatend_plan::{k3s, ports};
 
-use crate::{InstallError, i18n, output, render};
+use crate::{InstallError, i18n, output, render, telemetry};
 
 /// The file in a state directory that says a restart is owed.
 const RESTART_OWED: &str = "restart-owed";
@@ -54,18 +55,22 @@ pub(crate) fn admin_kubectl(distribution: Distribution) -> Kubectl {
 }
 
 pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), InstallError> {
-    let plan = install_plan(config).await?;
+    let run = telemetry::run(config.distribution, Role::Server, Action::Install);
+    let plan = install_plan(config).await;
+    telemetry::planned(run.clone(), &plan);
+    let plan = plan?;
     if json {
         return crate::print_json(&plan);
     }
     output::line(render::plan(&plan).trim_end());
-    if show_checks(
+    let failed = show_checks(
         config.distribution,
         Role::Server,
         config.host.require_encrypted_disk,
     )
-    .await
-    {
+    .await;
+    if !failed.is_empty() {
+        telemetry::checks_failed(run, Command::Plan, &failed);
         output::line(i18n::messages().apply_stops);
     }
     Ok(())
@@ -80,12 +85,15 @@ pub(crate) async fn run(
     let plan = install_plan(config).await?;
     output::line(render::plan(&plan).trim_end());
     check_reviewed(reviewed, &plan.preconditions)?;
+    let run = telemetry::run(config.distribution, Role::Server, Action::Install);
     check_host(
         config.distribution,
         Role::Server,
         config.host.require_encrypted_disk,
+        &run,
     )
     .await?;
+    telemetry::started(run);
     prepare_longhorn(plan.longhorn.as_ref()).await?;
     match &plan.release {
         Release::Cluster(cluster) => run_cluster(config, &plan, cluster).await,
@@ -111,6 +119,7 @@ async fn run_cluster(
     let restarted = install_cluster(&install).await?;
     let name = plan.node_name.clone();
     let messages = i18n::messages();
+    telemetry::reached(Step::Node);
     output::step(&(messages.waiting_for_node)(&name));
     kubectl.wait_ready(Duration::from_mins(10)).await?;
     wait_removed(&kubectl, rancher, &config.disable).await?;
@@ -263,6 +272,7 @@ pub(crate) async fn prepare_longhorn(prep: Option<&Prep>) -> Result<(), InstallE
     let Some(prep) = prep.filter(|prep| !prep.steps.is_empty()) else {
         return Ok(());
     };
+    telemetry::reached(Step::Longhorn);
     output::step(i18n::messages().preparing_longhorn);
     longhorn::apply(prep, |step| output::note(&render::longhorn_step(step))).await?;
     Ok(())
@@ -392,24 +402,27 @@ pub(crate) fn changed_files<'a>(files: impl Iterator<Item = &'a HostFile>) -> Ve
         .collect()
 }
 
-/// The preflight checks; a failed one stops `apply`.
+/// The preflight checks; a failed one stops `apply` of `run`.
 pub(crate) async fn check_host(
     distribution: Distribution,
     role: Role,
     require_encrypted_disk: bool,
+    run: &Run,
 ) -> Result<(), InstallError> {
-    if show_checks(distribution, role, require_encrypted_disk).await {
+    let failed = show_checks(distribution, role, require_encrypted_disk).await;
+    if !failed.is_empty() {
+        telemetry::checks_failed(run.clone(), Command::Apply, &failed);
         return Err(InstallError::HostNotReady);
     }
     Ok(())
 }
 
-/// Runs and prints the preflight checks, which only read the host. Returns whether one failed.
+/// Runs and prints the preflight checks, which only read the host. Returns what failed.
 pub(crate) async fn show_checks(
     distribution: Distribution,
     role: Role,
     require_encrypted_disk: bool,
-) -> bool {
+) -> Vec<Finding> {
     let messages = i18n::messages();
     output::step(messages.checking_host);
     let unit = distribution.layout().unit(role);
@@ -423,7 +436,11 @@ pub(crate) async fn show_checks(
     for check in &checks {
         output::note(&messages.check_line(&check.finding));
     }
-    checks.iter().any(|c| c.status == Status::Fail)
+    checks
+        .into_iter()
+        .filter(|c| c.status == Status::Fail)
+        .map(|c| c.finding)
+        .collect()
 }
 
 /// Whether the binary at `path` is missing or reports another release than `version`.
@@ -526,6 +543,7 @@ pub(crate) async fn install_cluster(install: &ClusterInstall<'_>) -> Result<bool
     let cluster = install.cluster;
     let distribution = cluster.distribution;
     let unit = install.unit();
+    telemetry::reached(Step::Install);
     output::step(&format!(
         "{} {} ({unit})",
         distribution.distribution().title(),

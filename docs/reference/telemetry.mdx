@@ -1,0 +1,64 @@
+---
+title: Experience program
+description: What zeatend plan, zeatend apply and the install screens send, what they never send, and how to turn it off.
+---
+
+The experience program sends the version, the distribution, how you ran Zeatend and whether the install worked, so we know how many installs start and finish and which step to fix first. It's on by default. `zeatend plan`, `zeatend apply` and the install screens say so, and how to turn it off, each time they run.
+
+## What is sent
+
+Each event carries a random installation ID, the properties below and nothing else. The data is kept for 13 months.
+
+| Event | When |
+|---|---|
+| `zeatend_plan` | `zeatend plan` made a plan, or couldn't. The install screens send it each time they show the Review screen. |
+| `zeatend_checks_failed` | Host checks failed in `zeatend plan`, or stopped `zeatend apply`. |
+| `zeatend_apply_started` | `zeatend apply` passed the host checks and starts to change the server. |
+| `zeatend_apply_finished` | That install or join ended. |
+
+| Property | Events | Values |
+|---|---|---|
+| `zeatend_version` | all | Zeatend's version, such as `0.2.0` |
+| `distribution` | all | `k3s`, `rke2` or `kubesolo` |
+| `role` | all | `server` or `worker`. The first node is a `server`. |
+| `action` | all | `install` for the first node, `join` for a node that joins a cluster |
+| `via` | all | `cli` for `zeatend plan` and `zeatend apply`, `tui` for the install screens |
+| `arch` | all | `amd64` or `arm64` |
+| `result` | `zeatend_plan` | `ok`, or `failed` when no plan could be made |
+| `command` | `zeatend_checks_failed` | `plan` or `apply` |
+| `checks` | `zeatend_checks_failed` | The codes of the failed checks, such as `swap.on` or `disk.low`, without their values |
+| `result` | `zeatend_apply_finished` | `ok` or `failed` |
+| `step` | `zeatend_apply_finished` | The step that failed: `longhorn` (preparing the server for Longhorn), `install` (writing the files, downloading and installing the release, starting the service) or `node` (waiting until the node is ready). Empty when it worked. |
+| `seconds` | `zeatend_apply_finished` | Seconds since the install or join started |
+| `$process_person_profile` | all | Always `false`: no person profile is made |
+| `$geoip_disable` | all | Always `true`: no location is looked up |
+
+Zeatend makes the installation ID the first time it is about to send an event, never when the program is off. It's a random UUID in `/etc/zeatend/installation-id`, which only root can read, and nothing about the server goes into it. `zeatend uninstall` keeps it with your configuration file. Delete the file to get a new one. This ID isn't the one Zeabur OSS uses, so the two can't be linked.
+
+When you install with the install screens, or with `zeatend apply` on a server with systemd, the install unit sends the events, so they're sent even when your SSH session ends.
+
+Events go to PostHog through `oss-nori.zeabur.com` over HTTPS, through the proxy that `HTTPS_PROXY` names, one try with a short timeout. They're sent in the background: a failed request isn't retried, and it never delays or stops an install. PostHog doesn't keep IP addresses.
+
+## What is never sent
+
+Host names, IP addresses, the API server's address, node names, TLS SANs, DNS names, join tokens, file paths, the contents of the configuration file, and error messages.
+
+## Turn it off
+
+Any one of these is enough.
+
+- Run Zeatend with `--no-telemetry`, such as `sudo zeatend --no-telemetry` or `sudo zeatend apply --no-telemetry`.
+- Set `telemetry: false` in the configuration file.
+- Set `DO_NOT_TRACK=1` or `ZEATEND_TELEMETRY=off` in the environment. For `DO_NOT_TRACK`, any value but empty or `0` counts.
+
+An install unit started with the program off stays off: Zeatend passes these settings to it.
+
+## See what would be sent
+
+Set `ZEATEND_TELEMETRY=debug`, and Zeatend prints each request body to stderr instead of sending it:
+
+```sh
+sudo ZEATEND_TELEMETRY=debug zeatend plan
+```
+
+In debug mode Zeatend makes no installation ID. The body shows the one in `/etc/zeatend/installation-id`, or `installation-id` when there is none yet.

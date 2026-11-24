@@ -37,6 +37,7 @@ apiServer:
 | `host.nodeName` | The host name | The node's name in Kubernetes. |
 | `host.requireEncryptedDisk` | `false` | Stop the install when the cluster's data isn't on an encrypted disk. |
 | `storage.longhorn` | `false` | Prepare the node for Longhorn; see [Longhorn](#longhorn). K3s and RKE2 only. |
+| `telemetry` | `true` | `false` turns off the [experience program](telemetry.mdx). |
 
 ### The node name
 
@@ -85,3 +86,4 @@ join:
 | `disable`, `apiServer` | RKE2 servers only. Give every server the same values, because each one deploys the packaged components and runs an API server. |
 | `host` | As for the first server. `tlsSan` applies to servers only. |
 | `storage` | As for the first server. `zeatend node add` copies the server's `storage`. |
+| `telemetry` | As for the first server. |
