@@ -61,7 +61,7 @@ Zeabur Catalog 会在多节点集群上安装 Longhorn。Longhorn 通过 iSCSI �
 - 启用并启动 `iscsid`。
 - 如果 multipathd 正在运行，就写入 `/etc/multipath/conf.d/zeatend-longhorn.conf`，让 multipathd 避开 Longhorn 的磁盘；这个文件有变更时才重启 multipathd。
 
-`plan` 只列出节点缺少的项目，所以紧接着再运行一次 `apply` 不会有任何变更。`zeatend doctor` 会报告节点缺少什么。Zeatend 本身不安装 Longhorn。`uninstall` 会删除这两个文件，但保留软件包。
+`plan` 只列出节点缺少的项目，所以紧接着再运行一次 `apply` 不会有任何变更。`zeatend doctor` 会报告节点缺少什么。`zeatend node add` 会在每个新节点的配置中开启它，也会提醒你在运行它的服务器上开启。Zeatend 本身不安装 Longhorn。`uninstall` 会删除这两个文件，但保留软件包。
 
 ## 加入集群的节点
 
@@ -86,5 +86,5 @@ join:
 | `join.nodeNames` | 集群已有节点的名称，当前节点会避开这些名称。 |
 | `disable`、`apiServer` | 仅适用于 RKE2 服务器节点。每台服务器都会部署内置组件并运行 API 服务器，因此所有服务器必须使用相同的值。 |
 | `host` | 与第一台服务器相同。`tlsSan` 仅适用于服务器节点。 |
-| `storage` | 与第一台服务器相同。`zeatend node add` 会沿用服务器的设置。 |
+| `storage` | `zeatend node add` 会开启 `storage.longhorn`。 |
 | `telemetry` | 与第一台服务器相同。 |
