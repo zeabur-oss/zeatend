@@ -4,6 +4,8 @@
 //! and used as a test input. Secret values never appear here: a join token is in a file of mode
 //! 0600 that the configuration names, or in the configuration file, which must then be mode 0600.
 
+use std::collections::BTreeMap;
+
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +13,7 @@ use crate::PlanError;
 use crate::authentication::ApiServer;
 use crate::cluster::Distribution;
 use crate::longhorn::Storage;
+use crate::registry::{self, Proxy, RegistryHost};
 use crate::token::JoinToken;
 
 /// The configuration of the first node of a cluster.
@@ -36,6 +39,16 @@ pub struct Config {
     /// What the host prepares for storage that the Zeabur catalog installs.
     #[serde(default, skip_serializing_if = "Storage::is_empty")]
     pub storage: Storage,
+    /// For each registry, such as `docker.io`, or `*` for any registry without its own, the
+    /// mirrors to try in turn. The registry itself is always tried last.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub registry_mirrors: BTreeMap<String, Vec<String>>,
+    /// Credentials and CAs of registry and mirror hosts, by `<host>[:<port>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub registry_hosts: BTreeMap<String, RegistryHost>,
+    /// The proxy for zeatend's downloads and the node's service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<Proxy>,
     /// Host settings.
     #[serde(default)]
     pub host: Host,
@@ -172,6 +185,16 @@ pub struct JoinConfig {
     /// What the host prepares for storage. Give each node the same as the first one.
     #[serde(default, skip_serializing_if = "Storage::is_empty")]
     pub storage: Storage,
+    /// For each registry, such as `docker.io`, or `*` for any registry without its own, the
+    /// mirrors to try in turn. The registry itself is always tried last.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub registry_mirrors: BTreeMap<String, Vec<String>>,
+    /// Credentials and CAs of registry and mirror hosts, by `<host>[:<port>]`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub registry_hosts: BTreeMap<String, RegistryHost>,
+    /// The proxy for zeatend's downloads and the node's service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<Proxy>,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
@@ -237,6 +260,20 @@ impl Role {
 }
 
 impl JoinConfig {
+    /// Its registry and proxy settings, with the passwords read for them.
+    #[must_use]
+    pub const fn registry<'a>(
+        &'a self,
+        passwords: &'a BTreeMap<String, registry::Password>,
+    ) -> registry::Settings<'a> {
+        registry::Settings {
+            mirrors: &self.registry_mirrors,
+            hosts: &self.registry_hosts,
+            proxy: self.proxy.as_ref(),
+            passwords,
+        }
+    }
+
     /// Parses and checks a join configuration.
     ///
     /// # Errors
@@ -309,6 +346,11 @@ impl JoinConfig {
         }
         check_disable(self.distribution, &self.disable)?;
         self.api_server.check()?;
+        registry::check(
+            &self.registry_mirrors,
+            &self.registry_hosts,
+            self.proxy.as_ref(),
+        )?;
         self.host.check()
     }
 }
@@ -403,6 +445,20 @@ pub fn check_token(token: &str, role: Role) -> Result<(), PlanError> {
 }
 
 impl Config {
+    /// Its registry and proxy settings, with the passwords read for them.
+    #[must_use]
+    pub const fn registry<'a>(
+        &'a self,
+        passwords: &'a BTreeMap<String, registry::Password>,
+    ) -> registry::Settings<'a> {
+        registry::Settings {
+            mirrors: &self.registry_mirrors,
+            hosts: &self.registry_hosts,
+            proxy: self.proxy.as_ref(),
+            passwords,
+        }
+    }
+
     /// Parses and checks a configuration file.
     ///
     /// # Errors
@@ -431,6 +487,11 @@ impl Config {
             ));
         }
         self.api_server.check()?;
+        registry::check(
+            &self.registry_mirrors,
+            &self.registry_hosts,
+            self.proxy.as_ref(),
+        )?;
         self.host.check()
     }
 }

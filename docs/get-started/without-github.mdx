@@ -1,0 +1,211 @@
+---
+title: Install on a server without GitHub
+description: Install through an HTTPS proxy, pull images from registry mirrors, and check each step with zeatend doctor.
+---
+
+This page installs a cluster with Zeatend on a server that can't reach GitHub or Docker Hub directly. Zeatend downloads through your HTTPS proxy, the node pulls images from your registry mirrors, and `zeatend doctor` checks each step.
+
+## What the server downloads
+
+| What | From | Without direct access |
+| --- | --- | --- |
+| Zeatend | GitHub Releases | Download it on another computer and copy it to the server. |
+| The distribution: binary, image bundle and, for K3s, `install.sh` | GitHub Releases and `raw.githubusercontent.com`; for KubeSolo also `kubectl` from `dl.k8s.io` | `proxy.https`, an HTTPS proxy that reaches these hosts. |
+| The images of Zeabur OSS and your services | Their registries, such as Docker Hub and `ghcr.io` | `registryMirrors`, a mirror inside your network. |
+
+Each distribution release comes with an image bundle: `k3s-airgap-images-<arch>.tar.zst` for K3s, `rke2-images-core` and `rke2-images-canal` for RKE2, and the offline archive for KubeSolo. Zeatend downloads the bundle with the release, checks it against the digest built into Zeatend, and puts it where the distribution loads it at start. So CoreDNS, the network plugin and the other components the distribution packages start without a registry.
+
+The bundle holds only those images. Zeabur OSS and your services pull their images from their registries, so a server that can't reach them needs a mirror.
+
+## Before you begin
+
+- **A computer with access to GitHub**, with GitHub CLI `gh`, cosign 3 and `sha256sum`, and SSH access to the server.
+- **An HTTPS proxy** that the server reaches and that reaches `github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com` and `raw.githubusercontent.com`, and for KubeSolo `dl.k8s.io` and `cdn.dl.k8s.io`. The proxy must accept the server by its IP address, without a user name or password, because Zeatend doesn't take credentials in the proxy URL.
+- **A registry mirror**, such as a Harbor proxy cache or a registry that holds copies of the images you run.
+
+<Steps>
+<Step>
+
+### Download Zeatend and copy it to the server
+
+On the computer with access to GitHub, set `version` to the release you install and `arch` to `amd64` when the server's `uname -m` prints `x86_64`, or `arm64` when it prints `aarch64`:
+
+```sh
+version=v0.2.0
+arch=amd64
+gh release download "$version" --repo zeabur-oss/zeatend --dir "zeatend-$version" \
+  --pattern SHA256SUMS --pattern SHA256SUMS.sigstore.json \
+  --pattern "zeatend-$version-linux-$arch.tar.gz"
+cd "zeatend-$version"
+```
+
+Check that Zeatend's own release workflow signed the checksum list, that the archive matches it, and that the archive was built from the tag:
+
+```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/zeabur-oss/zeatend/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository zeabur-oss/zeatend \
+  --certificate-github-workflow-ref "refs/tags/$version" \
+  SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify "zeatend-$version-linux-$arch.tar.gz" --repo zeabur-oss/zeatend \
+  --signer-workflow zeabur-oss/zeatend/.github/workflows/release.yml \
+  --source-ref "refs/tags/$version"
+```
+
+`cosign` prints `Verified OK` and `sha256sum` prints `OK`. If any check fails, don't run the file. Then copy the archive to the server and install it there:
+
+```sh
+scp "zeatend-$version-linux-$arch.tar.gz" <you>@<server>:
+ssh <you>@<server> "tar -xzf zeatend-$version-linux-$arch.tar.gz zeatend && sudo install -m 0755 zeatend /usr/local/bin/zeatend && zeatend --version"
+```
+
+</Step>
+<Step>
+
+### Set the proxy
+
+On the server, create `/etc/zeatend` with `sudo install -d -m 0700 /etc/zeatend`, then write `/etc/zeatend/config.yaml` with the distribution and the proxy:
+
+```yaml
+distribution: k3s # k3s, rke2 or kubesolo
+proxy:
+  https: http://proxy.example.internal:3128
+  noProxy: [.example.internal]
+```
+
+`proxy.https` is the proxy's `http://<host>:<port>` or `https://<host>:<port>`. Zeatend's downloads go through it, and so do the node's HTTPS connections, such as image pulls. `noProxy` lists the hosts and networks that the node reaches directly. Zeatend adds the ones a cluster needs: `localhost`, the node's addresses, the pod and service networks, `.svc` and `.cluster.local`. Add your own domains and the address of an internal mirror.
+
+Check that the downloads go through:
+
+```sh
+sudo zeatend doctor
+```
+
+Before the install, `doctor` names each file `apply` downloads. Every one should answer:
+
+```text
+FAIL service            K3s, RKE2 and KubeSolo are not installed on this host; install with `sudo zeatend apply`
+ok   downloads          https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s-airgap-images-amd64.tar.zst answers
+```
+
+The `service` line stays `FAIL` until the install. A `FAIL downloads` line names what failed, such as the connection to the proxy or an HTTP status. Fix the proxy settings and run `doctor` again.
+
+</Step>
+<Step>
+
+### Add the registry mirrors
+
+Add the mirrors to the same file:
+
+```yaml
+registryMirrors:
+  docker.io:
+    - https://harbor.example.internal/v2/dockerhub
+  "*":
+    - https://registry.example.internal
+registryHosts:
+  harbor.example.internal:
+    caFile: /etc/zeatend/harbor-ca.pem
+    username: robot$pull
+    passwordFile: /etc/zeatend/harbor-password
+```
+
+- **`registryMirrors`** maps a registry, such as `docker.io` or `ghcr.io`, to the mirrors to try in turn. `"*"` covers every registry without its own entry. containerd tries the registry itself after the mirrors, so an image that no mirror has still pulls when the server can reach the registry.
+- **A mirror URL with a path**, such as Harbor's `/v2/<project>`, is the mirror's API path, and containerd sends requests there. Without a path, containerd adds `/v2`.
+- **`registryHosts`** gives a mirror or registry host a CA and credentials, by `<host>` or `<host>:<port>`. `caFile` is a PEM file. `passwordFile` holds the password, mode 0600. Zeatend reads it when `plan` and `apply` run, and never shows it in the plan. Credentials and CAs work only with `https://` mirrors.
+
+Copy the mirror's CA certificate to `/etc/zeatend/harbor-ca.pem`; leave out `caFile` when a public CA signed the mirror's certificate. Then write the password file:
+
+```sh
+printf '%s' '<password>' | sudo install -m 0600 /dev/stdin /etc/zeatend/harbor-password
+```
+
+Check that each mirror answers:
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   registry mirrors   the mirror https://harbor.example.internal/v2/dockerhub answers
+ok   registry mirrors   the mirror https://registry.example.internal answers
+```
+
+A mirror passes when it answers HTTP, including when it asks for credentials. A `warn registry mirrors` line names what failed, such as TLS or the connection. Images then come from the next mirror or the registry itself.
+
+</Step>
+<Step>
+
+### Install
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+`plan` lists the files Zeatend writes for these settings:
+
+| Distribution | Mirrors and credentials | Proxy |
+| --- | --- | --- |
+| K3s | `/etc/rancher/k3s/registries.yaml` | `/etc/rancher/k3s/zeatend-proxy.env`, read by a drop-in of `k3s.service` (`k3s-agent.service` on a worker) |
+| RKE2 | `/etc/rancher/rke2/registries.yaml` | `/etc/rancher/rke2/zeatend-proxy.env`, read by a drop-in of `rke2-server.service` or `rke2-agent.service` |
+| KubeSolo | `/var/lib/kubesolo/containerd/registry/<registry>/hosts.toml` | `/etc/kubesolo/zeatend-proxy.env`, read by a drop-in of `kubesolo.service` |
+
+The drop-in is `/etc/systemd/system/<unit>.service.d/zeatend-proxy.conf`. The files that hold credentials are mode 0600. When you change these settings, `apply` writes the files again and restarts the service. When you remove them, `apply` removes the files it wrote. A `registries.yaml` that you wrote yourself, without Zeatend's first line, stays as it is.
+
+</Step>
+<Step>
+
+### Check the cluster
+
+```sh
+sudo zeatend doctor
+```
+
+After the install, `doctor` checks the service, the nodes and the mirrors. To see an image come through a mirror, run a pod and look for the pull in the mirror's log. The cluster is hardened to the CIS benchmark, so the pod runs as a non-root user with no added rights:
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mirror-test
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: docker.io/library/busybox:1.37
+      command: ["true"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+EOF
+```
+
+When the pod has run, delete it:
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml delete pod mirror-test
+```
+
+On RKE2 and KubeSolo, use the `kubectl` and kubeconfig that `apply` printed.
+
+</Step>
+</Steps>
+
+## Add nodes
+
+`zeatend node add` prints a configuration without `proxy`, `registryMirrors` or `registryHosts`. Before you run `zeatend plan` on the new server, add the same three sections to its `/etc/zeatend/config.yaml`, and copy the CA and password files to the same paths. On the new server, `doctor` checks its downloads and mirrors the same way.
+
+## Next
+
+- [Configuration file](../reference/configuration.mdx) lists every setting.
+- [Install Zeabur OSS](https://oss.zeabur.com/docs/zeabur/install/existing-cluster/) pulls Zeabur OSS's images through the same mirrors.

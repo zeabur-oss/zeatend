@@ -2461,6 +2461,7 @@ dependencies = [
 name = "zeatend-plan"
 version = "0.1.1"
 dependencies = [
+ "base64 0.23.1",
  "k8s-openapi",
  "semver",
  "serde",

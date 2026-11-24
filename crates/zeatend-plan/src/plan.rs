@@ -3,6 +3,8 @@
 //! The same configuration and host facts give the same plan, byte for byte, so `plan` can be
 //! reviewed, diffed and tested.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::cluster::{self, Distribution, HostFile, Rancher};
@@ -12,6 +14,7 @@ use crate::longhorn::{self, Storage};
 use crate::pins::{self, K3S, K3s, KUBECTL, KUBESOLO, RKE2};
 use crate::precondition::Preconditions;
 use crate::record::{Changes, Record};
+use crate::registry::{self, Password, Proxy};
 use crate::tuning::{HostTuning, MemoryTier};
 use crate::upgrade::{self, Kubernetes};
 use crate::{PlanError, kubesolo, node_name};
@@ -57,6 +60,13 @@ pub struct Facts {
     /// What the host has of what Longhorn needs; read only when `storage.longhorn` asks for it.
     #[serde(skip)]
     pub longhorn: Option<longhorn::HostState>,
+    /// The files of registry and proxy settings that zeatend wrote on the host before, among
+    /// [`crate::registry::optional_files`] and the `hosts.toml` files of `KubeSolo`.
+    #[serde(default)]
+    pub registry_files: Vec<String>,
+    /// The password of each registry host with a `passwordFile`, read on the host.
+    #[serde(skip)]
+    pub registry_passwords: BTreeMap<String, Password>,
 }
 
 impl Facts {
@@ -115,6 +125,8 @@ pub struct Plan {
     pub host_file_paths: Vec<String>,
     /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
     pub longhorn: Option<longhorn::Prep>,
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub removed_files: Vec<String>,
     /// What `apply` changes against the install record; `None` on a first install.
     pub changes: Option<Changes>,
     /// What to read before applying.
@@ -172,6 +184,8 @@ pub struct ClusterPlan {
     /// K3s's `install.sh`, always the pinned one: it writes the systemd unit and the uninstall
     /// script for any release.
     pub install_script: Option<Download>,
+    /// The proxy the downloads go through; `None` leaves it to the environment.
+    pub proxy: Option<Proxy>,
 }
 
 impl ClusterPlan {
@@ -197,6 +211,8 @@ pub struct KubeSoloPlan {
     pub download: Download,
     /// The kubectl zeatend uses; `KubeSolo` ships none.
     pub kubectl: Download,
+    /// The proxy the downloads go through; `None` leaves it to the environment.
+    pub proxy: Option<Proxy>,
 }
 
 /// One download.
@@ -241,12 +257,13 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
         memory(rancher, facts, &mut findings)?;
-        let cluster = cluster_plan(
+        let mut cluster = cluster_plan(
             rancher,
             config.version.as_deref(),
             &facts.arch,
             &mut findings,
         )?;
+        cluster.proxy.clone_from(&config.proxy);
         let mut files = rancher.server_files(&cluster::Options {
             tls_san: config.host.tls_san.clone(),
             tuning,
@@ -272,6 +289,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             kubernetes: KUBESOLO.kubernetes.to_owned(),
             download: KUBESOLO.archive(arch).ok_or_else(no_release)?.into(),
             kubectl: KUBECTL.binary(arch).ok_or_else(no_release)?.into(),
+            proxy: config.proxy.clone(),
         };
         let files = kubesolo::host_files(&kubesolo::Options {
             node_name: node_name.clone(),
@@ -283,6 +301,11 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         })?;
         (Release::KubeSolo(solo), files)
     };
+    host_files.extend(config.registry(&facts.registry_passwords).files(
+        config.distribution,
+        Role::Server,
+        &facts.node_ips,
+    )?);
     host_files.extend(facts.apparmor_profile());
     upgrade::check_release(
         facts.record.as_ref(),
@@ -305,6 +328,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         memory_tier,
         tuning,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
+        removed_files: registry::removed(&facts.registry_files, &host_files),
         host_files,
         longhorn,
         changes,
@@ -333,6 +357,24 @@ fn memory(rancher: Rancher, facts: &Facts, findings: &mut Vec<Finding>) -> Resul
         distribution: rancher.into(),
     });
     Ok(())
+}
+
+/// The URLs of the release files `apply` downloads to install `distribution` on `arch`: the
+/// pinned release, or `version` with its checksum list. None for an architecture zeatend does
+/// not install.
+#[must_use]
+pub fn release_urls(distribution: Distribution, version: Option<&str>, arch: &str) -> Vec<String> {
+    let Some(rancher) = distribution.rancher() else {
+        return [KUBESOLO.archive(arch), KUBECTL.binary(arch)]
+            .into_iter()
+            .flatten()
+            .map(|asset| asset.url)
+            .collect();
+    };
+    cluster_plan(rancher, version, arch, &mut Vec::new()).map_or_else(
+        |_| Vec::new(),
+        |cluster| cluster.downloads().map(|d| d.url.clone()).collect(),
+    )
 }
 
 /// The release of `distribution` and its downloads: the pinned one, or `version` checked against
@@ -414,6 +456,7 @@ pub(crate) fn cluster_plan(
         release,
         images,
         install_script,
+        proxy: None,
     })
 }
 
@@ -422,6 +465,49 @@ mod tests {
     use super::*;
     use crate::finding::Topic;
     use crate::record::{self, Writer};
+
+    #[test]
+    fn the_release_urls_are_the_downloads_of_the_pinned_release() {
+        let k3s = release_urls(Distribution::K3s, None, "arm64");
+        assert!(k3s.iter().any(|url| url.ends_with("/k3s-arm64")), "{k3s:?}");
+        assert!(
+            k3s.iter().any(|url| url.ends_with("/install.sh")),
+            "{k3s:?}"
+        );
+        let rke2 = release_urls(Distribution::Rke2, None, "amd64");
+        assert!(
+            rke2.iter().any(|url| url.contains("rke2-images-core")),
+            "{rke2:?}"
+        );
+        let kubesolo = release_urls(Distribution::KubeSolo, None, "amd64");
+        assert!(
+            kubesolo
+                .iter()
+                .any(|url| url.starts_with("https://dl.k8s.io/")),
+            "{kubesolo:?}"
+        );
+        for distribution in [
+            Distribution::K3s,
+            Distribution::Rke2,
+            Distribution::KubeSolo,
+        ] {
+            assert!(
+                release_urls(distribution, None, "riscv64").is_empty(),
+                "{distribution:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_release_urls_follow_a_configured_version_and_its_checksum_list() {
+        let k3s = release_urls(Distribution::K3s, Some("v1.36.0+k3s1"), "arm64");
+        assert!(
+            k3s.iter()
+                .any(|url| url.contains("/v1.36.0%2Bk3s1/") && url.ends_with("/k3s-arm64")),
+            "{k3s:?}"
+        );
+        assert!(k3s.iter().any(|url| url.contains("sha256sum")), "{k3s:?}");
+    }
 
     fn config(yaml: &str) -> Config {
         Config::parse(yaml).unwrap()
@@ -441,6 +527,8 @@ mod tests {
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,
+            registry_files: Vec::new(),
+            registry_passwords: BTreeMap::new(),
         }
     }
 

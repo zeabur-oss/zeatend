@@ -33,6 +33,10 @@ apiServer:
 | `version` | Zeatend 固定的版本 | K3s 或 RKE2 的版本，例如 `v1.37.1+k3s1` 或 `v1.37.1+rke2r1`。Zeatend 只会用该版本自带的校验和列表检查下载内容，因此安装计划会标记该版本不受支持。KubeSolo 不接受此设置。 |
 | `disable` | 无 | 不让 K3s 或 RKE2 部署的内置组件：`traefik`、`metrics-server`，以及 K3s 的 `local-storage`，即 local-path 存储类。KubeSolo 不内置这些组件。 |
 | `apiServer.authenticationConfig` | 无 | API 服务器的[身份验证配置](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，按 Kubernetes 文档的格式填写。 |
+| `proxy.https` | 无 | HTTPS 代理 `http://<host>:<port>`，Zeatend 的下载和节点的 HTTPS 连接都走它。详见[在连不上 GitHub 的服务器上安装](../get-started/without-github.mdx)。 |
+| `proxy.noProxy` | 无 | 除了集群需要的主机和网段，节点还要直接连接的主机和网段。 |
+| `registryMirrors` | 无 | 为每个镜像仓库（例如 `docker.io`，或代表其他所有仓库的 `"*"`）列出镜像源。containerd 依次尝试，最后才试镜像仓库本身。 |
+| `registryHosts` | 无 | 按 `<host>` 或 `<host>:<port>` 设置镜像源或镜像仓库的 `caFile`、`username` 和 `passwordFile`。 |
 | `host.tlsSan` | 无 | 为 API 服务器证书添加的名称和地址，例如 DNS 名称。 |
 | `host.nodeName` | 主机名 | 节点在 Kubernetes 中的名称。 |
 | `host.requireEncryptedDisk` | `false` | 集群数据不在加密磁盘上时，停止安装。 |
@@ -88,3 +92,4 @@ join:
 | `host` | 与第一台服务器相同。`tlsSan` 仅适用于服务器节点。 |
 | `storage` | `zeatend node add` 会开启 `storage.longhorn`。 |
 | `telemetry` | 与第一台服务器相同。 |
+| `proxy`、`registryMirrors`、`registryHosts` | 与第一台服务器相同。`zeatend node add` 不会输出这些设置，请从第一台服务器的配置文件复制。 |

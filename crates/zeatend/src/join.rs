@@ -54,6 +54,12 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
     if config.storage.longhorn {
         facts.longhorn = Some(longhorn::read().await);
     }
+    crate::registry::read(
+        &mut facts,
+        distribution.into(),
+        config.join.role,
+        &config.registry_hosts,
+    )?;
     facts.record = crate::installer::read_record(distribution.into()).await?;
     if facts.record.is_some() {
         facts.kubernetes = apply::running_kubernetes(&own_kubectl(distribution)).await;
@@ -74,6 +80,7 @@ async fn make_plan(config: &JoinConfig) -> Result<(JoinPlan, String), InstallErr
     let distribution = plan.cluster.distribution;
     plan.preconditions = apply::preconditions(
         &apply::written_files(&plan.host_files, plan.longhorn.as_ref()),
+        &plan.removed_files,
         Path::new(distribution.distribution().layout().binary),
         plan.facts.record.as_ref(),
         &Record::new(distribution.into(), &plan.cluster.version),
@@ -149,6 +156,7 @@ pub(crate) async fn apply(
     let install = ClusterInstall {
         cluster: &plan.cluster,
         files: &host_files,
+        removed: &plan.removed_files,
         server: plan.role == Role::Server,
     };
     let restarted = apply::install_cluster(&install, &mut steps).await?;

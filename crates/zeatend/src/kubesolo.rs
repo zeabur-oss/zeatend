@@ -113,7 +113,7 @@ async fn install(
 ) -> Result<bool, InstallError> {
     steps.start(Step::Download)?;
     output::note(&format!("KubeSolo {} ({UNIT})", solo.version));
-    let agent = download::agent();
+    let agent = download::agent(solo.proxy.as_ref(), &[]);
     let kubectl = Path::new(KUBECTL);
     output::note(&solo.kubectl.url);
     download::fetch(
@@ -149,6 +149,7 @@ async fn install(
         unit: UNIT,
         state_dir: STATE_DIR,
         files: &plan.host_files,
+        removed: &plan.removed_files,
         changed: outdated,
     };
     let changed = converge.write_files().await?;

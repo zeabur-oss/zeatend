@@ -5,6 +5,8 @@
 //! configuration has the keys of zeatend's and more. zeatend reads the keys it knows, and leaves
 //! what the installer put on the cluster, such as Zeabur OSS and its catalog components, as it is.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::PlanError;
@@ -145,6 +147,9 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
         storage: Storage::default(),
         host,
         telemetry: installer.telemetry,
+        registry_mirrors: BTreeMap::new(),
+        registry_hosts: BTreeMap::new(),
+        proxy: None,
     };
     config.check()?;
     Ok(Document::Join(config))
