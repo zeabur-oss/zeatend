@@ -72,6 +72,7 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
             config.insert("version".to_owned(), version.clone());
         }
     }
+    keep(&mut config, &installer, &["telemetry"]);
     if let Some(host) = installer.get("host") {
         let mut kept = Map::new();
         keep(
@@ -191,6 +192,7 @@ mod tests {
             panic!("an install");
         };
         assert_eq!(personal.distribution, Distribution::KubeSolo);
+        assert_eq!(personal.telemetry, Some(false));
         let Document::Install(personal) =
             document("use: personal\ndistribution: rke2\njoin:\n  server: https://a:9345\n")
                 .unwrap()

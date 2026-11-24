@@ -12,10 +12,11 @@ use zeatend_plan::finding::Status;
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
 use zeatend_plan::precondition::Preconditions;
 use zeatend_plan::record::Record;
+use zeatend_plan::telemetry::{Action, Command, Step};
 use zeatend_plan::token::JoinToken;
 
 use crate::apply::{self, ClusterInstall};
-use crate::{InstallError, output, render};
+use crate::{InstallError, output, render, telemetry};
 
 /// The join token, from the configuration or its file, checked against the role.
 /// [`JoinConfig::check`] checked a token in the configuration already.
@@ -89,18 +90,22 @@ pub(crate) fn own_kubectl(distribution: Rancher) -> Kubectl {
 }
 
 pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), InstallError> {
-    let (plan, _) = make_plan(config).await?;
+    let run = telemetry::run(config.distribution, config.join.role, Action::Join);
+    let made = make_plan(config).await;
+    telemetry::planned(run.clone(), &made);
+    let (plan, _) = made?;
     if json {
         return crate::print_json(&plan);
     }
     output::line(render::join_plan(&plan).trim_end());
-    if apply::show_checks(
+    let failed = apply::show_checks(
         config.distribution,
         plan.role,
         config.host.require_encrypted_disk,
     )
-    .await
-    {
+    .await;
+    if !failed.is_empty() {
+        telemetry::checks_failed(run, Command::Plan, &failed);
         output::line(crate::i18n::messages().apply_stops);
     }
     Ok(())
@@ -118,13 +123,17 @@ pub(crate) async fn apply(
     if let Some(blocker) = plan.findings.iter().find(|c| c.status == Status::Fail) {
         return Err(InstallError::Blocked(blocker.finding.clone()));
     }
+    let run = telemetry::run(config.distribution, plan.role, Action::Join);
     apply::check_host(
         config.distribution,
         plan.role,
         config.host.require_encrypted_disk,
+        &run,
     )
     .await?;
+    telemetry::started(run);
     apply::prepare_longhorn(plan.longhorn.as_ref()).await?;
+    telemetry::reached(Step::Install);
 
     let distribution = plan.cluster.distribution;
     let layout = distribution.distribution().layout();
@@ -143,6 +152,7 @@ pub(crate) async fn apply(
 
     let name = plan.node_name.clone();
     let messages = crate::i18n::messages();
+    telemetry::reached(Step::Node);
     output::step(&(messages.waiting_for_node)(&name));
     wait_node_ready(
         &own_kubectl(distribution),

@@ -1,0 +1,64 @@
+---
+title: 体验计划
+description: zeatend plan、zeatend apply 和安装界面会发送什么、绝不发送什么，以及如何关闭。
+---
+
+体验计划会发送版本、发行版、你用什么方式运行 Zeatend，以及安装是否成功，让我们知道有多少次安装开始、多少次完成，以及该先改进哪个步骤。默认加入。`zeatend plan`、`zeatend apply` 和安装界面每次运行都会提示，并说明如何关闭。
+
+## 会发送什么
+
+每个事件只带一个随机的安装 ID 和下面的属性，没有别的。数据保留 13 个月。
+
+| 事件 | 时机 |
+|---|---|
+| `zeatend_plan` | `zeatend plan` 生成了计划，或生成失败。安装界面每次显示确认界面时也会发送。 |
+| `zeatend_checks_failed` | 主机检查在 `zeatend plan` 中失败，或让 `zeatend apply` 停止。 |
+| `zeatend_apply_started` | `zeatend apply` 通过主机检查，开始更改服务器。 |
+| `zeatend_apply_finished` | 这次安装或加入结束。 |
+
+| 属性 | 事件 | 值 |
+|---|---|---|
+| `zeatend_version` | 全部 | Zeatend 的版本，例如 `0.2.0` |
+| `distribution` | 全部 | `k3s`、`rke2` 或 `kubesolo` |
+| `role` | 全部 | `server` 或 `worker`。第一个节点是 `server`。 |
+| `action` | 全部 | 第一个节点是 `install`，加入集群的节点是 `join` |
+| `via` | 全部 | `zeatend plan` 和 `zeatend apply` 是 `cli`，安装界面是 `tui` |
+| `arch` | 全部 | `amd64` 或 `arm64` |
+| `result` | `zeatend_plan` | `ok`；无法生成计划时是 `failed` |
+| `command` | `zeatend_checks_failed` | `plan` 或 `apply` |
+| `checks` | `zeatend_checks_failed` | 未通过的检查项代码，例如 `swap.on` 或 `disk.low`，不带检查到的值 |
+| `result` | `zeatend_apply_finished` | `ok` 或 `failed` |
+| `step` | `zeatend_apply_finished` | 失败的步骤：`longhorn`（为 Longhorn 准备服务器）、`install`（写入文件、下载并安装发行版、启动服务）或 `node`（等待节点就绪）。成功时为空。 |
+| `seconds` | `zeatend_apply_finished` | 从安装或加入开始算起的秒数 |
+| `$process_person_profile` | 全部 | 始终为 `false`：不创建个人资料 |
+| `$geoip_disable` | 全部 | 始终为 `true`：不查询所在位置 |
+
+Zeatend 第一次要发送事件时才创建安装 ID，关闭体验计划时不会创建。它是一个随机 UUID，保存在只有 root 能读的 `/etc/zeatend/installation-id` 中，不含任何服务器的信息。`zeatend uninstall` 会和配置文件一起保留它；删除这个文件就会换一个新的。这个 ID 和 Zeabur 开源版用的不同，两者无法关联。
+
+用安装界面安装，或在有 systemd 的服务器上运行 `zeatend apply` 时，事件由安装用的 unit 发送，所以 SSH 连接断开后也会发出。
+
+事件通过 HTTPS 经 `oss-nori.zeabur.com` 发送到 PostHog，会走 `HTTPS_PROXY` 指定的代理服务器，只尝试一次，超时时间很短。事件在后台发送：失败不会重试，也不会拖慢或中断安装。PostHog 不保留 IP 地址。
+
+## 绝不发送
+
+主机名、IP 地址、API server 的地址、节点名称、TLS SAN、DNS 名称、加入用的 token、文件路径、配置文件内容，以及错误信息。
+
+## 关闭
+
+下面任意一种就够了。
+
+- 运行 Zeatend 时加上 `--no-telemetry`，例如 `sudo zeatend --no-telemetry` 或 `sudo zeatend apply --no-telemetry`。
+- 在配置文件里写 `telemetry: false`。
+- 在环境变量中设置 `DO_NOT_TRACK=1` 或 `ZEATEND_TELEMETRY=off`。`DO_NOT_TRACK` 只要不是空值或 `0` 都算。
+
+关闭体验计划后启动的安装 unit 也不会发送数据：Zeatend 会把这些设置传给它。
+
+## 查看会发送什么
+
+设置 `ZEATEND_TELEMETRY=debug`，Zeatend 会把每个请求的内容打印到 stderr，不会真正发送：
+
+```sh
+sudo ZEATEND_TELEMETRY=debug zeatend plan
+```
+
+debug 模式不会创建安装 ID。内容里显示的是 `/etc/zeatend/installation-id` 中的 ID；还没有的话，显示 `installation-id`。

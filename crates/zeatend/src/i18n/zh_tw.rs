@@ -22,6 +22,9 @@ pub(super) const MESSAGES: Messages = Messages {
     no_config_defaults,
     following_unit,
     started_unit,
+    telemetry_on: "zeatend 會傳送版本、發行版和安裝有沒有成功，幫助改善 Zeatend。加上 \
+                   --no-telemetry 或設定 DO_NOT_TRACK=1 就會關閉。會傳送什麼：\
+                   https://oss.zeabur.com/zh-TW/docs/zeatend/reference/telemetry/",
     starting_unit,
     restarting_unit,
     waiting_for_node,
@@ -102,6 +105,8 @@ const SCREENS: Screens = Screens {
     next_update: |path| format!("zeatend 把這些選擇存進 {path}，其他設定不變。"),
     next_unit: "安裝在 systemd 單元裡執行，SSH 連線中斷也會繼續。",
     next_follow: "再執行一次 sudo zeatend 就能繼續查看進度。",
+    next_telemetry: "安裝時會傳送版本、發行版和安裝有沒有成功，幫助改善 Zeatend。要關閉，\
+                     先離開，再執行 sudo zeatend --no-telemetry。",
 
     install_title: "正在安裝",
     install_unit: |unit| format!("在 {unit} 裡執行"),

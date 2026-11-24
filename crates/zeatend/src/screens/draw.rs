@@ -501,7 +501,11 @@ fn draw_review(frame: &mut Frame<'_>, pen: &Pen<'_>, choices: &Choices, area: Re
         } else {
             (w.next_write)(&choices.config_path)
         };
-        for item in [save.as_str(), w.next_unit, w.next_follow] {
+        let telemetry = crate::telemetry::is_on().then_some(w.next_telemetry);
+        for item in [save.as_str(), w.next_unit, w.next_follow]
+            .into_iter()
+            .chain(telemetry)
+        {
             lines.extend(hanging(Span::raw("- "), item, Style::new(), cells));
         }
     }

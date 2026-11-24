@@ -15,3 +15,4 @@
     commands: 命令
     configuration: 配置文件
     hosts: 支持的服务器与文件
+    telemetry: 体验计划

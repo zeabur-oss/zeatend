@@ -13,8 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use zeatend_host::journal::{self, Followed};
 use zeatend_host::progress::Event;
 use zeatend_host::{files, random, systemd};
+use zeatend_plan::telemetry::{Switch, Via};
 
-use crate::{InstallError, apply, output};
+use crate::{InstallError, apply, output, telemetry};
 
 /// The start of the name of an install unit; the rest is its id and `.service`.
 pub(crate) const PREFIX: &str = "zeatend-install-";
@@ -23,9 +24,11 @@ pub(crate) const PREFIX: &str = "zeatend-install-";
 const PLAN_DIR: &str = "/run/zeatend";
 
 /// The environment variables the unit gets from this process. A unit does not get the
-/// session's environment: downloads need the proxy, and the locale and `TERM` choose the language
-/// of the progress (see [`crate::i18n`]).
-const PASSED_ENV: [&str; 14] = [
+/// session's environment: downloads need the proxy, the locale and `TERM` choose the language
+/// of the progress (see [`crate::i18n`]), and the experience program has its switches.
+const PASSED_ENV: [&str; 16] = [
+    "DO_NOT_TRACK",
+    "ZEATEND_TELEMETRY",
     "LANG",
     "LANGUAGE",
     "LC_ALL",
@@ -44,7 +47,11 @@ const PASSED_ENV: [&str; 14] = [
 
 /// Follows the install unit that runs, or starts one and follows it. The unit applies the plan in
 /// the file `plan`, or without one the plan it makes.
-pub(crate) async fn apply(config: &Path, plan: Option<&Path>) -> Result<(), InstallError> {
+pub(crate) async fn apply(
+    config: &Path,
+    plan: Option<&Path>,
+    via: Via,
+) -> Result<(), InstallError> {
     let running = systemd::running_services(&format!("{PREFIX}*.service")).await?;
     let unit = if let Some(unit) = running.into_iter().next() {
         output::note(&(crate::i18n::messages().following_unit)(&unit));
@@ -58,38 +65,37 @@ pub(crate) async fn apply(config: &Path, plan: Option<&Path>) -> Result<(), Inst
             }
             None => None,
         };
-        let unit = start(config, plan.as_deref(), None).await?;
+        let unit = start(config, plan.as_deref(), None, via).await?;
         output::note(&(crate::i18n::messages().started_unit)(&unit));
         unit
     };
     follow(&unit).await
 }
 
-/// The command line the unit runs.
+/// The command line the unit runs. `no_telemetry` passes on that the experience program is off.
 pub(crate) fn command<'a>(
     zeatend: &'a str,
     config: &'a str,
     plan: Option<&'a str>,
+    via: Via,
+    no_telemetry: bool,
 ) -> Vec<&'a str> {
-    let mut command = vec![
-        zeatend,
-        "--config",
-        config,
-        "apply",
-        "--foreground",
-        "--json",
-    ];
+    let mut command = vec![zeatend, "--config", config, "--via", via.as_str()];
+    command.extend(no_telemetry.then_some("--no-telemetry"));
+    command.extend(["apply", "--foreground", "--json"]);
     command.extend(plan.into_iter().flat_map(|plan| ["--plan", plan]));
     command
 }
 
 /// Starts `zeatend apply` in a new unit and returns the unit's name. The unit applies `plan`, the
 /// JSON of a plan, or without one the plan it makes. `language`, a `LANGUAGE` value, replaces the
-/// session's, so the unit reports in the language the screens show.
+/// session's, so the unit reports in the language the screens show. `via` says how the person
+/// started it.
 pub(crate) async fn start(
     config: &Path,
     plan: Option<&[u8]>,
     language: Option<&str>,
+    via: Via,
 ) -> Result<String, InstallError> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -132,7 +138,13 @@ pub(crate) async fn start(
         description: "zeatend apply",
         dir: &dir,
         env: &env,
-        command: &command(&zeatend, &config, plan_file.as_deref()),
+        command: &command(
+            &zeatend,
+            &config,
+            plan_file.as_deref(),
+            via,
+            telemetry::switch() == Switch::Off,
+        ),
     })
     .await?;
     Ok(unit)

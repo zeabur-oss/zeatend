@@ -64,6 +64,9 @@ jobs:
       - uses: zeabur-oss/.github/actions/ci-setup@f3ae87d7ef3c37447432e398200d200b546dfa46 # main
       - name: Build
         run: scripts/release-build.sh "$VERSION" "${{ matrix.arch }}" dist
+        env:
+          # The experience program's PostHog key goes only into tagged releases.
+          ZEATEND_TELEMETRY_KEY: ${{ github.event_name == 'push' && vars.POSTHOG_KEY || '' }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: zeatend-${{ matrix.arch }}

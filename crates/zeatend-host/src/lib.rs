@@ -13,6 +13,7 @@ pub mod preflight;
 pub mod progress;
 pub mod random;
 pub mod systemd;
+pub mod telemetry;
 
 use std::path::PathBuf;
 
