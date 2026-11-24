@@ -14,10 +14,11 @@ use zeatend_host::kubectl::Kubectl;
 use zeatend_host::{cmd, facts, files};
 use zeatend_plan::authentication::{self, ApiServer};
 use zeatend_plan::cluster::{self, Rancher};
-use zeatend_plan::config::{Component, Role};
+use zeatend_plan::config::{Component, Document, Role};
 use zeatend_plan::token::JoinToken;
 use zeatend_plan::{PlanError, join, ports};
 
+use crate::load::{self, Source};
 use crate::{InstallError, output};
 
 /// What `node add` takes from the command line.
@@ -28,8 +29,53 @@ pub(crate) struct AddOptions {
     pub(crate) address: Option<String>,
     /// How long a worker's token can join nodes.
     pub(crate) ttl: Duration,
-    /// This server's configuration file, when it does not turn on `storage.longhorn`.
-    pub(crate) unprepared: Option<PathBuf>,
+    /// This server's configuration, when it does not turn on `storage.longhorn`.
+    pub(crate) unprepared: Option<Unprepared>,
+}
+
+/// The configuration this server needs for `storage.longhorn`.
+#[derive(Debug, Clone)]
+pub(crate) struct Unprepared {
+    /// The file `zeatend apply` reads.
+    path: PathBuf,
+    /// The whole file to write when there is none: the settings this server runs on, with
+    /// `storage.longhorn`. `None` when the file exists.
+    file: Option<String>,
+}
+
+/// What this server needs for `storage.longhorn`; `None` when its configuration turns it on.
+pub(crate) fn unprepared(
+    path: &Path,
+    mut document: Document,
+    source: Source,
+) -> Result<Option<Unprepared>, InstallError> {
+    let storage = match &mut document {
+        Document::Install(config) => &mut config.storage,
+        Document::Join(config) => &mut config.storage,
+    };
+    if storage.longhorn {
+        return Ok(None);
+    }
+    storage.longhorn = true;
+    let file = match source {
+        Source::File => None,
+        Source::Installer | Source::Defaults => Some(yaml(&document)?),
+    };
+    Ok(Some(Unprepared {
+        path: path.to_path_buf(),
+        file,
+    }))
+}
+
+fn yaml(document: &Document) -> Result<String, InstallError> {
+    match document {
+        Document::Install(config) => serde_saphyr::to_string(config),
+        Document::Join(config) => serde_saphyr::to_string(config),
+    }
+    .map_err(|e| InstallError::Serialize {
+        what: "configuration",
+        reason: e.to_string(),
+    })
 }
 
 /// The distribution of this server: the one whose admin kubeconfig is here.
@@ -126,7 +172,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
             .collect::<Vec<_>>(),
         disable: &disable,
         api_server: &api_server,
-        unprepared: options.unprepared.as_deref(),
+        unprepared: options.unprepared.as_ref(),
         ttl: options.ttl,
     })?;
     output::line(text.trim_end());
@@ -188,8 +234,8 @@ struct Instructions<'a> {
     disable: &'a [Component],
     /// The `apiServer` section of a new server, the same as this one's.
     api_server: &'a ApiServer,
-    /// This server's configuration file, when it does not turn on `storage.longhorn`.
-    unprepared: Option<&'a Path>,
+    /// This server's configuration, when it does not turn on `storage.longhorn`.
+    unprepared: Option<&'a Unprepared>,
     ttl: Duration,
 }
 
@@ -245,17 +291,40 @@ fn instructions(i: &Instructions<'_>) -> Result<String, PlanError> {
         ),
     }
     push(&mut text, "");
-    if let Some(path) = i.unprepared {
+    if let Some(unprepared) = i.unprepared {
+        let path = unprepared.path.display();
+        let apply = if unprepared.path == Path::new(load::DEFAULT_CONFIG) {
+            "zeatend apply".to_owned()
+        } else {
+            format!("zeatend apply --config {path}")
+        };
         push(
             &mut text,
-            &format!(
-                "With a second node, the Zeabur catalog recommends Longhorn, which needs every \
-                 node prepared. Here, add these lines to {} and run zeatend apply:",
-                path.display()
-            ),
+            "With a second node, the Zeabur catalog recommends Longhorn, which needs every node \
+             prepared.",
         );
-        push(&mut text, "  storage:");
-        push(&mut text, "    longhorn: true");
+        match &unprepared.file {
+            None => {
+                push(
+                    &mut text,
+                    &format!("Here, add these lines to {path} and run {apply}:"),
+                );
+                push(&mut text, "  storage:");
+                push(&mut text, "    longhorn: true");
+            }
+            Some(file) => {
+                push(
+                    &mut text,
+                    &format!(
+                        "Here, write this to {path} with mode 0600 and run {apply}. It keeps the \
+                         settings this server runs on and adds storage.longhorn:"
+                    ),
+                );
+                for line in file.lines() {
+                    push(&mut text, &format!("  {line}"));
+                }
+            }
+        }
         push(&mut text, "");
     }
     let layout = i.distribution.distribution().layout();
@@ -327,7 +396,7 @@ fn commands(i: &Instructions<'_>) -> Result<String, PlanError> {
 #[cfg(test)]
 mod tests {
     use zeatend_plan::cluster::Distribution;
-    use zeatend_plan::config::{Document, JoinConfig};
+    use zeatend_plan::config::JoinConfig;
 
     use super::*;
 
@@ -459,27 +528,78 @@ mod tests {
         assert_eq!(pasted(&text).version.as_deref(), None, "{text}");
     }
 
-    #[test]
-    fn every_new_node_is_prepared_for_longhorn_and_so_is_this_one() {
-        let text = instructions(&Instructions {
-            distribution: Rancher::K3s,
-            server: "https://10.0.1.10:6443",
+    fn longhorn_text(unprepared: &Unprepared) -> String {
+        instructions(&Instructions {
+            distribution: Rancher::Rke2,
+            server: "https://10.0.1.10:9345",
             role: Role::Worker,
             token: &worker_token(),
             version: None,
             node_names: &["vps-1"],
             disable: &[],
             api_server: &ApiServer::default(),
-            unprepared: Some(Path::new("/etc/zeatend/config.yaml")),
+            unprepared: Some(unprepared),
             ttl: Duration::from_hours(1),
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn every_new_node_is_prepared_for_longhorn_and_so_is_this_one() {
+        let document = Document::parse("distribution: rke2\n").unwrap();
+        let unprepared = unprepared(Path::new(load::DEFAULT_CONFIG), document, Source::File)
+            .unwrap()
+            .unwrap();
+        let text = longhorn_text(&unprepared);
         assert!(pasted(&text).storage.longhorn, "{text}");
         assert!(
             text.contains(
-                "Here, add these lines to /etc/zeatend/config.yaml and run zeatend apply"
+                "Here, add these lines to /etc/zeatend/config.yaml and run zeatend apply:"
             ),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn the_apply_command_names_a_config_file_other_than_the_default() {
+        let document = Document::parse("distribution: rke2\n").unwrap();
+        let unprepared = unprepared(Path::new("/root/zeatend.yaml"), document, Source::File)
+            .unwrap()
+            .unwrap();
+        let text = longhorn_text(&unprepared);
+        assert!(
+            text.contains("and run zeatend apply --config /root/zeatend.yaml:"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_adopted_server_writes_the_installer_settings_with_longhorn() {
+        let document = zeatend_plan::installer::document(
+            "distribution: rke2\nrke2Version: v1.37.1+rke2r1\nhost:\n  nodeName: vps-1\n",
+        )
+        .unwrap();
+        let unprepared = unprepared(Path::new(load::DEFAULT_CONFIG), document, Source::Installer)
+            .unwrap()
+            .unwrap();
+        let file = unprepared.file.as_deref().unwrap();
+        let Document::Install(config) = Document::parse(file).unwrap() else {
+            panic!("an install: {file}");
+        };
+        assert_eq!(config.distribution, Distribution::Rke2);
+        assert_eq!(config.version.as_deref(), Some("v1.37.1+rke2r1"));
+        assert_eq!(config.host.node_name.as_deref(), Some("vps-1"));
+        assert!(config.storage.longhorn);
+        assert!(longhorn_text(&unprepared).contains("write this to /etc/zeatend/config.yaml"),);
+    }
+
+    #[test]
+    fn a_server_with_longhorn_on_needs_nothing() {
+        let document = Document::parse("storage:\n  longhorn: true\n").unwrap();
+        assert!(
+            unprepared(Path::new(load::DEFAULT_CONFIG), document, Source::File)
+                .unwrap()
+                .is_none()
         );
     }
 

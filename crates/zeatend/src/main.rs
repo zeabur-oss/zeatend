@@ -392,11 +392,8 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
             NodeRole::Worker => Role::Worker,
             NodeRole::Server => Role::Server,
         };
-        let storage = match load::document_or_defaults(config)?.0 {
-            Document::Install(config) => config.storage,
-            Document::Join(config) => config.storage,
-        };
-        let unprepared = (!storage.longhorn).then(|| config.to_path_buf());
+        let (document, source) = load::document_or_defaults(config)?;
+        let unprepared = node::unprepared(config, document, source)?;
         return node::add(&node::AddOptions {
             role,
             address: address.clone(),

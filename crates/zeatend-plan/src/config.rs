@@ -150,7 +150,7 @@ impl Document {
 }
 
 /// A node joining an existing cluster.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JoinConfig {
     /// The cluster to join.
@@ -159,28 +159,29 @@ pub struct JoinConfig {
     #[serde(default)]
     pub distribution: Distribution,
     /// A K3s or RKE2 release other than the pinned one; it must match the cluster's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Servers only: the packaged components the cluster does not deploy. Give each server the
     /// same list, as each one deploys the packaged components.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disable: Vec<Component>,
     /// Servers only: the API server's settings. Give each server the same, as each one runs an
     /// API server.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ApiServer::is_empty")]
     pub api_server: ApiServer,
     /// What the host prepares for storage. Give each node the same as the first one.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Storage::is_empty")]
     pub storage: Storage,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
     /// `false` turns off the experience program (docs/reference/telemetry.mdx).
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<bool>,
 }
 
 /// The `join` section. `Debug` leaves the token out.
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Join {
     /// The server to join through: `https://<address>:6443` on K3s, `https://<address>:9345`
@@ -191,11 +192,13 @@ pub struct Join {
     pub role: Role,
     /// The join token, `K10<ca-hash>::<credentials>`. The configuration file must then be mode
     /// 0600.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
     /// A file (mode 0600) holding the join token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_file: Option<String>,
     /// The names of the cluster's nodes; this node takes another.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub node_names: Vec<String>,
 }
 
