@@ -10,8 +10,9 @@ use reqwest::header::{
     RANGE,
 };
 use reqwest::redirect::{self, Attempt};
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, NoProxy, StatusCode};
 use sha2::{Digest as _, Sha256};
+use zeatend_plan::registry::Proxy;
 
 use crate::HostError;
 
@@ -49,9 +50,10 @@ const REDIRECTS: usize = 10;
 
 const AGENT: &str = concat!("zeatend/", env!("CARGO_PKG_VERSION"));
 
-/// An HTTP and HTTPS client for zeatend's downloads. It trusts the platform's CA store, uses TLS
-/// from `aws-lc-rs`, and goes through the proxy that `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`
-/// name.
+/// An HTTP and HTTPS client for zeatend's downloads.
+///
+/// It trusts the platform's CA store, uses TLS from `aws-lc-rs`, and goes through the configured
+/// proxy or else the one that `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` name.
 pub struct Agent {
     client: Result<Client, String>,
 }
@@ -70,18 +72,75 @@ impl Agent {
             reason: reason.clone(),
         })
     }
+
+    /// The HTTP status of a `HEAD` request to `url`, redirects followed.
+    ///
+    /// # Errors
+    ///
+    /// When no answer comes: DNS, the connection, TLS or the proxy fails, or the time is up.
+    pub async fn status(&self, url: &str) -> Result<u16, HostError> {
+        let answer = self
+            .client(url)?
+            .head(url)
+            .timeout(HEAD_TIME)
+            .send()
+            .await
+            .map_err(|e| HostError::Download {
+                url: url.to_owned(),
+                reason: describe(&e),
+            })?;
+        Ok(answer.status().as_u16())
+    }
 }
 
 /// A client that trusts the platform's CA store.
 ///
-/// A TLS setup that fails is reported by the first download.
+/// With `proxy`, HTTPS requests go through it, except to the hosts of the node's `NO_PROXY`
+/// ([`Proxy::node_no_proxy`] of `direct`); without, through the proxy of the environment.
+///
+/// A TLS setup or proxy that fails is reported by the first download.
 #[must_use]
-pub fn agent() -> Agent {
+pub fn agent(proxy: Option<&Proxy>, direct: &[String]) -> Agent {
+    build(proxy, direct, None)
+}
+
+/// [`agent`] that also trusts the CA certificates of the PEM file `ca`, for a registry mirror
+/// with a private CA.
+#[must_use]
+pub fn agent_trusting(proxy: Option<&Proxy>, direct: &[String], ca: &[u8]) -> Agent {
+    build(proxy, direct, Some(ca))
+}
+
+fn build(proxy: Option<&Proxy>, direct: &[String], ca: Option<&[u8]>) -> Agent {
+    let mut builder = Client::builder()
+        .user_agent(AGENT)
+        .redirect(redirect::Policy::custom(follow));
+    if let Some(pem) = ca {
+        match reqwest::Certificate::from_pem_bundle(pem) {
+            Ok(certificates) if !certificates.is_empty() => {
+                builder = builder.tls_certs_merge(certificates);
+            }
+            Ok(_) => {
+                return Agent {
+                    client: Err("the CA file holds no PEM certificate".to_owned()),
+                };
+            }
+            Err(error) => {
+                return Agent {
+                    client: Err(describe(&error)),
+                };
+            }
+        }
+    }
+    let builder = match proxy {
+        None => Ok(builder),
+        Some(proxy) => reqwest::Proxy::https(&proxy.https)
+            .map(|p| p.no_proxy(NoProxy::from_string(&proxy.node_no_proxy(direct))))
+            .map(|p| builder.no_proxy().proxy(p)),
+    };
     Agent {
-        client: Client::builder()
-            .user_agent(AGENT)
-            .redirect(redirect::Policy::custom(follow))
-            .build()
+        client: builder
+            .and_then(reqwest::ClientBuilder::build)
             .map_err(|e| describe(&e)),
     }
 }
@@ -585,8 +644,73 @@ mod tests {
     async fn fetch_text(url: &str) -> Result<String, HostError> {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        fetch(&agent(), url, &dest, None, &mut ()).await?;
+        fetch(&agent(None, &[]), url, &dest, None, &mut ()).await?;
         Ok(fs::read_to_string(&dest).unwrap())
+    }
+
+    #[tokio::test]
+    async fn downloads_go_through_the_configured_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = Proxy {
+            https: format!("http://{}", listener.local_addr().unwrap()),
+            no_proxy: vec!["direct.invalid".to_owned()],
+        };
+        let seen = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let n = stream.read(&mut request).unwrap();
+            drop(stream.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n"));
+            String::from_utf8_lossy(&request[..n]).into_owned()
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let agent = agent(Some(&proxy), &[]);
+        let url = "https://releases.invalid/file";
+        let err = fetch(&agent, url, &dir.path().join("f"), None, &mut ())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, HostError::Download { .. }), "{err}");
+        let request = seen.join().unwrap();
+        assert!(
+            request.starts_with("CONNECT releases.invalid:443 "),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_node_and_its_networks_are_reached_without_the_proxy() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let proxy = Proxy {
+            https: format!("http://{}", listener.local_addr().unwrap()),
+            no_proxy: Vec::new(),
+        };
+        let agent = agent(Some(&proxy), &["node.invalid".to_owned()]);
+        for url in ["https://node.invalid/v2/", "https://registry.svc/v2/"] {
+            agent.status(url).await.unwrap_err();
+        }
+        let reached = listener.accept().map(|_| ());
+        assert!(
+            reached
+                .as_ref()
+                .is_err_and(|e| e.kind() == io::ErrorKind::WouldBlock),
+            "{reached:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_registry_that_asks_for_credentials_still_answers() {
+        let (url, _) = serve(&[401], "");
+        assert_eq!(agent(None, &[]).status(&url).await.unwrap(), 401);
+    }
+
+    #[tokio::test]
+    async fn a_ca_file_that_is_not_pem_fails_the_request() {
+        let (url, seen) = serve(&[200], ABC);
+        let err = agent_trusting(None, &[], b"not a certificate")
+            .status(&url)
+            .await;
+        assert!(matches!(err, Err(HostError::Download { .. })), "{err:?}");
+        assert_eq!(seen.load(Ordering::SeqCst), 0);
     }
 
     const ABC: &str = "abc";
@@ -597,7 +721,7 @@ mod tests {
         let (url, seen) = serve(&[503, 503, 200], ABC);
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(), &url, &dest, Some(ABC_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(ABC_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, ABC_SHA);
@@ -615,9 +739,15 @@ mod tests {
     async fn client_errors_fail_at_once() {
         let (url, seen) = serve(&[404], "");
         let dir = tempfile::tempdir().unwrap();
-        let err = fetch(&agent(), &url, &dir.path().join("f"), None, &mut ())
-            .await
-            .unwrap_err();
+        let err = fetch(
+            &agent(None, &[]),
+            &url,
+            &dir.path().join("f"),
+            None,
+            &mut (),
+        )
+        .await
+        .unwrap_err();
         assert!(err.to_string().contains("404"), "{err}");
         assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
@@ -670,9 +800,15 @@ mod tests {
         let (url, seen) = serve(&[200], ABC);
         let dir = tempfile::tempdir().unwrap();
         let wrong = "0".repeat(64);
-        let err = fetch(&agent(), &url, &dir.path().join("f"), Some(&wrong), &mut ())
-            .await
-            .unwrap_err();
+        let err = fetch(
+            &agent(None, &[]),
+            &url,
+            &dir.path().join("f"),
+            Some(&wrong),
+            &mut (),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, HostError::Digest { .. }), "{err}");
         assert_eq!(seen.load(Ordering::SeqCst), 1);
     }
@@ -822,9 +958,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
         let mut recorder = Recorder::default();
-        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut recorder)
-            .await
-            .unwrap();
+        let digest = fetch(
+            &agent(None, &[]),
+            &url,
+            &dest,
+            Some(HELLO_SHA),
+            &mut recorder,
+        )
+        .await
+        .unwrap();
         assert_eq!(digest, HELLO_SHA);
         assert_eq!(fs::read_to_string(&dest).unwrap(), HELLO);
         let heads = seen.lock().unwrap().clone();
@@ -851,7 +993,9 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(), &url, &dest, None, &mut ()).await.unwrap();
+        let digest = fetch(&agent(None, &[]), &url, &dest, None, &mut ())
+            .await
+            .unwrap();
         assert_eq!(digest, HELLO_SHA);
         assert_eq!(fs::read_to_string(&dest).unwrap(), HELLO);
         let heads = seen.lock().unwrap().clone();
@@ -873,7 +1017,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -902,7 +1046,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -925,7 +1069,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let digest = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+        let digest = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap();
         assert_eq!(digest, HELLO_SHA);
@@ -939,7 +1083,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
         let mut recorder = Recorder::default();
-        let err = fetch(&agent(), &url, &dest, None, &mut recorder)
+        let err = fetch(&agent(None, &[]), &url, &dest, None, &mut recorder)
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no data for"), "{err}");
@@ -965,7 +1109,7 @@ mod tests {
         });
         let dir = tempfile::tempdir().unwrap();
         let dest = dir.path().join("f");
-        let err = fetch(&agent(), &url, &dest, Some(HELLO_SHA), &mut ())
+        let err = fetch(&agent(None, &[]), &url, &dest, Some(HELLO_SHA), &mut ())
             .await
             .unwrap_err();
         assert!(matches!(err, HostError::Digest { .. }), "{err}");

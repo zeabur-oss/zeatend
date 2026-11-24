@@ -158,6 +158,8 @@ pub struct JoinPlan {
     pub host_file_paths: Vec<String>,
     /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
     pub longhorn: Option<crate::longhorn::Prep>,
+    /// Files of registry and proxy settings that zeatend wrote before and removes now.
+    pub removed_files: Vec<String>,
     /// Round trips to the server.
     pub rtt: Option<Rtt>,
     /// Ports on the server, and UDP ports that cannot be checked.
@@ -188,6 +190,20 @@ const fn rtt_finding(rtt: Rtt, port: u16) -> Option<Finding> {
             port,
         }),
     }
+}
+
+/// The ports this node listens on, without a probe.
+fn local_ports(distribution: Rancher, role: Role) -> Vec<Port> {
+    distribution
+        .node_ports(role == Role::Server)
+        .into_iter()
+        .map(|(number, purpose)| Port {
+            number,
+            protocol: "tcp",
+            purpose,
+            open: None,
+        })
+        .collect()
 }
 
 /// The server's ports with what was found, a finding for closed ones besides the join port (a
@@ -284,12 +300,13 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     )?;
     let distribution = config.rancher()?;
     let mut findings = Vec::new();
-    let cluster = cluster_plan(
+    let mut cluster = cluster_plan(
         distribution,
         config.version.as_deref(),
         &facts.facts.arch,
         &mut findings,
     )?;
+    cluster.proxy.clone_from(&config.proxy);
 
     upgrade::check_release(
         facts.facts.record.as_ref(),
@@ -327,11 +344,18 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     host_files.push(distribution.join_file(&join.server)?);
     host_files.push(distribution.node_name_file(&node_name)?);
     host_files.extend(distribution.node_ip_file(&facts.facts.node_ips)?);
+    let (host, port) = crate::config::server_address(&join.server, distribution.join_port())?;
+    let mut direct = facts.facts.node_ips.clone();
+    direct.push(host.clone());
+    host_files.extend(config.registry(&facts.facts.registry_passwords).files(
+        distribution.into(),
+        join.role,
+        &direct,
+    )?);
     host_files.extend(facts.facts.apparmor_profile());
 
     findings.push(Finding::SameRegion);
 
-    let (host, port) = crate::config::server_address(&join.server, distribution.join_port())?;
     let rtt = rtt(&facts.rtt_us);
     match rtt {
         None => findings.push(Finding::ServerUnreachable {
@@ -356,20 +380,12 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         unit,
         cluster,
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
+        removed_files: crate::registry::removed(&facts.facts.registry_files, &host_files),
         host_files,
         longhorn: facts.facts.longhorn(config.storage)?,
         rtt,
         ports,
-        local_ports: distribution
-            .node_ports(join.role == Role::Server)
-            .into_iter()
-            .map(|(number, purpose)| Port {
-                number,
-                protocol: "tcp",
-                purpose,
-                open: None,
-            })
-            .collect(),
+        local_ports: local_ports(distribution, join.role),
         unit_running: facts.unit_running,
         findings: findings.into_iter().map(Check::from).collect(),
         preconditions: Preconditions::default(),
@@ -407,6 +423,8 @@ mod tests {
                 k3s_own_network: false,
                 installer_webhook: false,
                 longhorn: None,
+                registry_files: Vec::new(),
+                registry_passwords: std::collections::BTreeMap::new(),
             },
             rtt_us: rtt_us.to_vec(),
             ports: vec![(9345, true), (6443, true), (10250, false)],

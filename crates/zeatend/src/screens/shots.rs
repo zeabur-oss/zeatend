@@ -35,6 +35,8 @@ fn facts() -> Facts {
         k3s_own_network: false,
         installer_webhook: false,
         longhorn: None,
+        registry_files: Vec::new(),
+        registry_passwords: std::collections::BTreeMap::new(),
     }
 }
 

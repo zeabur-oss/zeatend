@@ -3,6 +3,7 @@
   pages:
     install: 安裝叢集與 Zeabur 開源版
     install-with-commands: 用指令安裝
+    without-github: 在連不上 GitHub 的伺服器安裝
 - group: operations
   label: 維運
   pages:

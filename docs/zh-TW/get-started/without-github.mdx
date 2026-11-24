@@ -1,0 +1,211 @@
+---
+title: 在連不上 GitHub 的伺服器安裝
+description: 經由 HTTPS 代理伺服器安裝，從鏡像站下載映像檔，每一步都用 zeatend doctor 確認。
+---
+
+照這一頁操作，就能在無法直接連上 GitHub 或 Docker Hub 的伺服器上，用 Zeatend 安裝叢集。Zeatend 透過你的 HTTPS 代理伺服器下載檔案，映像檔從你的鏡像站下載，每一步都可以用 `zeatend doctor` 確認。
+
+## 伺服器要下載什麼
+
+| 內容 | 來源 | 無法直接連線時 |
+| --- | --- | --- |
+| Zeatend | GitHub Releases | 在另一台電腦下載，再複製到伺服器。 |
+| 發行版：執行檔、映像檔包，K3s 還有 `install.sh` | GitHub Releases 與 `raw.githubusercontent.com`；KubeSolo 還會從 `dl.k8s.io` 下載 `kubectl` | `proxy.https`，一台連得到這些主機的 HTTPS 代理伺服器。 |
+| Zeabur 開源版與各項服務的映像檔 | 各自的映像檔倉庫，例如 Docker Hub 與 `ghcr.io` | `registryMirrors`，你網路裡的鏡像站。 |
+
+每個發行版本都附有映像檔包：K3s 是 `k3s-airgap-images-<arch>.tar.zst`，RKE2 是 `rke2-images-core` 與 `rke2-images-canal`，KubeSolo 是離線壓縮檔。Zeatend 會跟著發行版本一起下載，用內建在 Zeatend 的摘要檢查，再放到發行版啟動時會載入的位置。因此 CoreDNS、網路外掛和發行版內附的其他元件，不需要映像檔倉庫就能啟動。
+
+映像檔包只有這些映像檔。Zeabur 開源版和你的服務則從各自的映像檔倉庫下載映像檔，伺服器連不上這些倉庫時，就需要鏡像站。
+
+## 開始之前
+
+- **一台連得上 GitHub 的電腦**，裝好 GitHub CLI `gh`、cosign 3 與 `sha256sum`，而且可以用 SSH 連到伺服器。
+- **一台 HTTPS 代理伺服器**：伺服器連得到它，它連得到 `github.com`、`release-assets.githubusercontent.com`、`objects.githubusercontent.com`、`raw.githubusercontent.com`，KubeSolo 還需要 `dl.k8s.io` 和 `cdn.dl.k8s.io`。Zeatend 不接受代理位址裡的帳號密碼，所以代理伺服器要依這台伺服器的 IP 位址放行。
+- **一個鏡像站**，例如 Harbor 的 Proxy Cache，或一個存有映像檔副本的映像檔倉庫。
+
+<Steps>
+<Step>
+
+### 下載 Zeatend 並複製到伺服器
+
+在連得上 GitHub 的電腦上，把 `version` 設成要安裝的版本，伺服器的 `uname -m` 顯示 `x86_64` 時把 `arch` 設成 `amd64`，顯示 `aarch64` 時設成 `arm64`：
+
+```sh
+version=v0.2.0
+arch=amd64
+gh release download "$version" --repo zeabur-oss/zeatend --dir "zeatend-$version" \
+  --pattern SHA256SUMS --pattern SHA256SUMS.sigstore.json \
+  --pattern "zeatend-$version-linux-$arch.tar.gz"
+cd "zeatend-$version"
+```
+
+依序確認三件事：校驗碼清單由 Zeatend 自己的發行流程簽署、壓縮檔與清單相符、壓縮檔是從該版本的標籤建置：
+
+```sh
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity-regexp '^https://github\.com/zeabur-oss/zeatend/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-github-workflow-repository zeabur-oss/zeatend \
+  --certificate-github-workflow-ref "refs/tags/$version" \
+  SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+gh attestation verify "zeatend-$version-linux-$arch.tar.gz" --repo zeabur-oss/zeatend \
+  --signer-workflow zeabur-oss/zeatend/.github/workflows/release.yml \
+  --source-ref "refs/tags/$version"
+```
+
+`cosign` 會顯示 `Verified OK`，`sha256sum` 會顯示 `OK`。任何一項沒通過，就不要執行這個檔案。全部通過後，把壓縮檔複製到伺服器並安裝：
+
+```sh
+scp "zeatend-$version-linux-$arch.tar.gz" <you>@<server>:
+ssh <you>@<server> "tar -xzf zeatend-$version-linux-$arch.tar.gz zeatend && sudo install -m 0755 zeatend /usr/local/bin/zeatend && zeatend --version"
+```
+
+</Step>
+<Step>
+
+### 設定代理伺服器
+
+在伺服器上先用 `sudo install -d -m 0700 /etc/zeatend` 建立目錄，再寫入 `/etc/zeatend/config.yaml`，填入發行版與代理伺服器：
+
+```yaml
+distribution: k3s # k3s、rke2 或 kubesolo
+proxy:
+  https: http://proxy.example.internal:3128
+  noProxy: [.example.internal]
+```
+
+`proxy.https` 是代理伺服器的 `http://<host>:<port>` 或 `https://<host>:<port>`。Zeatend 的下載會經過它，節點的 HTTPS 連線（例如下載映像檔）也會經過它。`noProxy` 列出節點直接連線的主機與網段。叢集需要的部分由 Zeatend 自動加入：`localhost`、節點的位址、Pod 與 Service 網段、`.svc` 和 `.cluster.local`。你只要再加上自己的網域，以及內部鏡像站的位址。
+
+確認下載能經過代理伺服器：
+
+```sh
+sudo zeatend doctor
+```
+
+安裝前，`doctor` 會逐一列出 `apply` 要下載的檔案，每一個都應該連得上：
+
+```text
+FAIL 服務              這台主機沒有安裝 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安裝
+ok   下載              https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s-airgap-images-amd64.tar.zst 可以連線
+```
+
+安裝前，「服務」那一行一定是 `FAIL`。「下載」那一行是 `FAIL` 時，會寫出失敗的原因，例如連不上代理伺服器或某個 HTTP 狀態碼。修正代理設定後，再執行一次 `doctor`。
+
+</Step>
+<Step>
+
+### 加入鏡像站
+
+在同一個檔案加入鏡像站：
+
+```yaml
+registryMirrors:
+  docker.io:
+    - https://harbor.example.internal/v2/dockerhub
+  "*":
+    - https://registry.example.internal
+registryHosts:
+  harbor.example.internal:
+    caFile: /etc/zeatend/harbor-ca.pem
+    username: robot$pull
+    passwordFile: /etc/zeatend/harbor-password
+```
+
+- **`registryMirrors`** 為每個映像檔倉庫（例如 `docker.io` 或 `ghcr.io`）列出要依序嘗試的鏡像站。`"*"` 涵蓋所有沒有自己項目的映像檔倉庫。containerd 試完鏡像站後，會再試映像檔倉庫本身，所以伺服器連得到倉庫時，鏡像站沒有的映像檔一樣下載得到。
+- **鏡像站位址帶有路徑**時（例如 Harbor 的 `/v2/<project>`），這個路徑就是鏡像站的 API 路徑，containerd 會把請求送到那裡。沒有路徑時，containerd 會自己加上 `/v2`。
+- **`registryHosts`** 依 `<host>` 或 `<host>:<port>` 為鏡像站或映像檔倉庫設定 CA 與帳號密碼。`caFile` 是 PEM 檔案。`passwordFile` 存放密碼，權限為 0600。Zeatend 在執行 `plan` 和 `apply` 時讀取密碼，安裝計畫裡不會顯示。CA 與帳號密碼只能用在 `https://` 鏡像站。
+
+把鏡像站的 CA 憑證複製到 `/etc/zeatend/harbor-ca.pem`；鏡像站的憑證由公開 CA 簽發時，不用設定 `caFile`。接著寫入密碼檔：
+
+```sh
+printf '%s' '<password>' | sudo install -m 0600 /dev/stdin /etc/zeatend/harbor-password
+```
+
+確認每個鏡像站都連得上：
+
+```sh
+sudo zeatend doctor
+```
+
+```text
+ok   鏡像站            鏡像站 https://harbor.example.internal/v2/dockerhub 可以連線
+ok   鏡像站            鏡像站 https://registry.example.internal 可以連線
+```
+
+只要鏡像站有 HTTP 回應就算通過，要求帳號密碼也一樣。「鏡像站」那一行是 `warn` 時，會寫出失敗的原因，例如 TLS 或連線失敗；這時映像檔會改從下一個鏡像站或映像檔倉庫本身下載。
+
+</Step>
+<Step>
+
+### 安裝
+
+```sh
+sudo zeatend plan
+sudo zeatend apply
+```
+
+`plan` 會列出 Zeatend 為這些設定寫入的檔案：
+
+| 發行版 | 鏡像站與帳號密碼 | 代理伺服器 |
+| --- | --- | --- |
+| K3s | `/etc/rancher/k3s/registries.yaml` | `/etc/rancher/k3s/zeatend-proxy.env`，由 `k3s.service`（工作節點是 `k3s-agent.service`）的 drop-in 讀取 |
+| RKE2 | `/etc/rancher/rke2/registries.yaml` | `/etc/rancher/rke2/zeatend-proxy.env`，由 `rke2-server.service` 或 `rke2-agent.service` 的 drop-in 讀取 |
+| KubeSolo | `/var/lib/kubesolo/containerd/registry/<registry>/hosts.toml` | `/etc/kubesolo/zeatend-proxy.env`，由 `kubesolo.service` 的 drop-in 讀取 |
+
+drop-in 檔案是 `/etc/systemd/system/<unit>.service.d/zeatend-proxy.conf`。存有帳號密碼的檔案權限為 0600。修改這些設定後，`apply` 會重新寫入檔案並重新啟動服務。刪除這些設定後，`apply` 會刪除它寫入的檔案。你自己寫的 `registries.yaml` 第一行不是 Zeatend 的標記，會原樣保留。
+
+</Step>
+<Step>
+
+### 檢查叢集
+
+```sh
+sudo zeatend doctor
+```
+
+安裝後，`doctor` 會檢查服務、節點與鏡像站。要確認映像檔真的經過鏡像站，可以啟動一個 Pod，再到鏡像站的日誌裡找這次下載。叢集依照 CIS 基準強化安全性，所以這個 Pod 以非 root 使用者執行，也不取得額外權限：
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml apply -f - <<'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mirror-test
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: test
+      image: docker.io/library/busybox:1.37
+      command: ["true"]
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+EOF
+```
+
+Pod 執行完後，把它刪除：
+
+```sh
+sudo /var/lib/rancher/k3s/data/current/bin/kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml delete pod mirror-test
+```
+
+RKE2 與 KubeSolo 請改用 `apply` 輸出的 `kubectl` 與 kubeconfig。
+
+</Step>
+</Steps>
+
+## 新增節點
+
+`zeatend node add` 輸出的設定不含 `proxy`、`registryMirrors` 和 `registryHosts`。在新伺服器執行 `zeatend plan` 之前，把這三個區段加進它的 `/etc/zeatend/config.yaml`，再把 CA 與密碼檔複製到相同路徑。新伺服器上的 `doctor` 會用同樣的方式檢查下載與鏡像站。
+
+## 接下來
+
+- [設定檔](../reference/configuration.mdx)列出所有設定。
+- [安裝 Zeabur 開源版](https://oss.zeabur.com/zh-TW/docs/zeabur/install/existing-cluster/) 會經由同樣的鏡像站下載 Zeabur 開源版的映像檔。

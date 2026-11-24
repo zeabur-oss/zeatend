@@ -461,6 +461,8 @@ mod tests {
                 multipathd_running: variant,
                 ..crate::longhorn::HostState::default()
             }),
+            registry_files: Vec::new(),
+            registry_passwords: std::collections::BTreeMap::new(),
         }
     }
 

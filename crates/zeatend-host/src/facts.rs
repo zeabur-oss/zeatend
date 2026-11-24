@@ -41,6 +41,8 @@ pub async fn read() -> Result<Facts, HostError> {
             .is_ok_and(|config| k3s::runs_own_network(&config)),
         installer_webhook: Path::new(installer::KUBESOLO_WEBHOOK_SCRIPT).exists(),
         longhorn: None,
+        registry_files: Vec::new(),
+        registry_passwords: std::collections::BTreeMap::new(),
     })
 }
 
