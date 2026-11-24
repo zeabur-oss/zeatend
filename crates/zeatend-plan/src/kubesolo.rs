@@ -361,7 +361,7 @@ pub fn kubeconfig(admin: &Kubeconfig, name: &str) -> Result<Kubeconfig, PlanErro
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
+    use serde_json::{Map, Value, json};
 
     use super::*;
     use crate::tuning::MemoryTier;
@@ -400,8 +400,8 @@ mod tests {
             installer_webhook: false,
         })
         .unwrap();
-        let value: Value = serde_saphyr::from_str(&bare[0].content).unwrap();
-        assert!(value.get("network").is_none());
+        let value: Map<String, Value> = serde_saphyr::from_str(&bare[0].content).unwrap();
+        assert!(!value.contains_key("network"));
         assert_eq!(value["kubernetes"], json!({"nodeName": "solo"}));
         let unit = files.iter().find(|f| f.path == UNIT_FILE).unwrap();
         assert!(unit.content.contains(&format!(
@@ -427,9 +427,9 @@ mod tests {
         .unwrap();
         let authentication = format!("{AUTHENTICATION_DIR}/config.yaml");
         assert_eq!(files[0].path, authentication);
-        let file: Value = serde_saphyr::from_str(&files[0].content).unwrap();
+        let file: Map<String, Value> = serde_saphyr::from_str(&files[0].content).unwrap();
         assert!(
-            file.get("anonymous").is_none(),
+            !file.contains_key("anonymous"),
             "KubeSolo keeps its default"
         );
         let config = files.iter().find(|f| f.path == CONFIG_FILE).unwrap();

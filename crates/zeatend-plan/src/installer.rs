@@ -5,11 +5,13 @@
 //! configuration has the keys of zeatend's and more. zeatend reads the keys it knows, and leaves
 //! what the installer put on the cluster, such as Zeabur OSS and its catalog components, as it is.
 
-use serde_json::{Map, Value};
+use serde::Deserialize;
 
 use crate::PlanError;
+use crate::authentication::ApiServer;
 use crate::cluster::{Distribution, Rancher, disabled_components};
-use crate::config::{Config, Document, JoinConfig, Role};
+use crate::config::{Config, Document, Host, Join, JoinConfig, Role};
+use crate::longhorn::Storage;
 
 /// The installer's configuration file.
 pub const CONFIG_FILE: &str = "/etc/zeabur-installer/config.yaml";
@@ -44,71 +46,106 @@ pub const fn state_dir(distribution: Distribution) -> &'static str {
     }
 }
 
+/// The keys of the installer's configuration file that zeatend reads. Its other keys are about
+/// what runs on the cluster, which zeatend leaves alone.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallerConfig {
+    #[serde(rename = "use")]
+    usage: Option<String>,
+    distribution: Option<Distribution>,
+    k3s_version: Option<String>,
+    rke2_version: Option<String>,
+    kubesolo_version: Option<String>,
+    host: Option<InstallerHost>,
+    join: Option<InstallerJoin>,
+    telemetry: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallerHost {
+    #[serde(default)]
+    tls_san: Vec<String>,
+    #[serde(default)]
+    require_encrypted_disk: bool,
+    node_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallerJoin {
+    server: String,
+    #[serde(default)]
+    role: Role,
+    token: Option<String>,
+    token_file: Option<String>,
+    #[serde(default)]
+    node_names: Vec<String>,
+}
+
 /// zeatend's configuration from the installer's configuration file `yaml`.
 ///
 /// It keeps the distribution (`use: personal` is `KubeSolo`), the release settings, the host
-/// settings and the join section. The installer's other keys are about what runs on the cluster,
-/// which zeatend leaves alone.
+/// settings and the join section.
 ///
 /// # Errors
 ///
 /// When the YAML does not parse or a value zeatend reads is invalid.
 pub fn document(yaml: &str) -> Result<Document, PlanError> {
-    let installer: Value = serde_saphyr::from_str(yaml)
-        .map_err(|e| PlanError::Config(format!("{CONFIG_FILE}: {e}")))?;
-    let personal = installer.get("use").and_then(Value::as_str) == Some("personal");
-    let mut config = Map::new();
-    if personal {
-        // A personal configuration has no distribution, release or join keys.
-        config.insert("distribution".to_owned(), Value::from("kubesolo"));
+    let error = |e: &dyn std::fmt::Display| PlanError::Config(format!("{CONFIG_FILE}: {e}"));
+    let installer: InstallerConfig = serde_saphyr::from_str(yaml).map_err(|e| error(&e))?;
+    let personal = installer.usage.as_deref() == Some("personal");
+    // A personal configuration has no distribution, release or join keys. Otherwise the installer
+    // names the release of each distribution in a key of its own.
+    let (distribution, version) = if personal {
+        (Distribution::KubeSolo, None)
     } else {
-        keep(&mut config, &installer, &["distribution"]);
-        // The installer names the release of each distribution in a key of its own.
-        let distribution = config
-            .get("distribution")
-            .and_then(Value::as_str)
-            .unwrap_or("k3s");
-        if let Some(version) = installer.get(format!("{distribution}Version")) {
-            config.insert("version".to_owned(), version.clone());
-        }
-    }
-    keep(&mut config, &installer, &["telemetry"]);
-    if let Some(host) = installer.get("host") {
-        let mut kept = Map::new();
-        keep(
-            &mut kept,
+        let distribution = installer.distribution.unwrap_or_default();
+        let version = match distribution {
+            Distribution::K3s => installer.k3s_version,
+            Distribution::Rke2 => installer.rke2_version,
+            Distribution::KubeSolo => installer.kubesolo_version,
+        };
+        (distribution, version)
+    };
+    let host = installer.host.map_or_else(Host::default, |host| Host {
+        tls_san: host.tls_san,
+        require_encrypted_disk: host.require_encrypted_disk,
+        node_name: host.node_name,
+    });
+    let Some(installer_join) = installer.join.filter(|_| !personal) else {
+        let config = Config {
+            distribution,
+            version,
             host,
-            &["tlsSan", "requireEncryptedDisk", "nodeName"],
-        );
-        config.insert("host".to_owned(), Value::Object(kept));
-    }
-    let error = |e: serde_json::Error| PlanError::Config(format!("{CONFIG_FILE}: {e}"));
-    let Some(installer_join) = installer.get("join").filter(|_| !personal) else {
-        let config: Config = serde_json::from_value(Value::Object(config)).map_err(error)?;
+            telemetry: installer.telemetry,
+            ..Config::default()
+        };
         config.check()?;
         return Ok(Document::Install(config));
     };
-    let mut join = Map::new();
-    keep(
-        &mut join,
-        installer_join,
-        &["server", "role", "token", "tokenFile", "nodeNames"],
-    );
-    if !join.contains_key("token") && !join.contains_key("tokenFile") {
+    let mut join = Join {
+        server: installer_join.server,
+        role: installer_join.role,
+        token: installer_join.token,
+        token_file: installer_join.token_file,
+        node_names: installer_join.node_names,
+    };
+    if join.token.is_none() && join.token_file.is_none() {
         // The installer keeps the token of a node it joined in a file of its own.
-        let distribution: Distribution = serde_json::from_value(
-            config
-                .get("distribution")
-                .cloned()
-                .unwrap_or_else(|| Value::from("k3s")),
-        )
-        .map_err(error)?;
-        if let Some(rancher) = distribution.rancher() {
-            join.insert("tokenFile".to_owned(), join_token_file(rancher).into());
-        }
+        join.token_file = distribution.rancher().map(join_token_file);
     }
-    config.insert("join".to_owned(), Value::Object(join));
-    let config: JoinConfig = serde_json::from_value(Value::Object(config)).map_err(error)?;
+    let config = JoinConfig {
+        join,
+        distribution,
+        version,
+        disable: Vec::new(),
+        api_server: ApiServer::default(),
+        storage: Storage::default(),
+        host,
+        telemetry: installer.telemetry,
+    };
     config.check()?;
     Ok(Document::Join(config))
 }
@@ -135,14 +172,6 @@ pub fn keep_disabled(mut document: Document, rancher_config: &str) -> Result<Doc
         Document::Join(_) => {}
     }
     Ok(document)
-}
-
-/// Copies the values of `keys` that `from` has into `to`.
-fn keep(to: &mut Map<String, Value>, from: &Value, keys: &[&str]) {
-    to.extend(
-        keys.iter()
-            .filter_map(|key| Some(((*key).to_owned(), from.get(key)?.clone()))),
-    );
 }
 
 #[cfg(test)]

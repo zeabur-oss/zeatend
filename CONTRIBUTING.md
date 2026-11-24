@@ -43,6 +43,14 @@ pictures that changed onto it. Look at them in the release pull request's diff.
 A pull request titled `feat`, `fix` or `perf`, or marked breaking with `!`, adds a change file in
 `.changeset/` (`knope document-change`) or carries the label `changelog: none`.
 
+## Typed JSON
+
+A known shape, such as a Kubernetes object, the installer's configuration or a journal entry, is a typed
+struct (`k8s_openapi` or `#[derive(Deserialize)]`), not a `serde_json::Value`. `clippy.toml` refuses
+the `Value` accessors `get`, `get_mut`, `pointer`, `pointer_mut`, `as_object_mut` and
+`as_array_mut`. Code that must hold data of any shape puts
+`#[expect(clippy::disallowed_methods, reason = "…")]` on the smallest item.
+
 ## JSON in tests
 
 - **`json!`, not raw strings.** Tests build JSON with `serde_json::json!`. They compare whole
