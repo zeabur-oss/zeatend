@@ -12,6 +12,7 @@ use zeatend_plan::cluster::Distribution;
 use zeatend_plan::config::{Component, Config};
 use zeatend_plan::finding::{Check, Finding};
 use zeatend_plan::plan::{self, Facts};
+use zeatend_plan::steps::Step;
 
 use super::app::{Action, App, Choices, Review};
 use super::host::Host;
@@ -90,9 +91,10 @@ fn install_lines(lang: Lang, done: bool) -> Vec<Event> {
         text: text.to_owned(),
     };
     let mut events = vec![
-        step(lang.messages().checking_host),
+        step(&format!("1/10 {}", (lang.messages().step)(Step::CheckHost))),
         note(&lang.messages().check_line(&Finding::SwapOff)),
-        step("K3s v1.37.2+k3s1 (k3s)"),
+        step(&format!("2/10 {}", (lang.messages().step)(Step::Download))),
+        note("K3s v1.37.2+k3s1 (k3s)"),
         note("https://github.com/k3s-io/k3s/releases/download/v1.37.2%2Bk3s1/k3s"),
         Event::Download {
             done: 40 * 1024 * 1024,
@@ -103,7 +105,8 @@ fn install_lines(lang: Lang, done: bool) -> Vec<Event> {
     if done {
         events.extend([
             Event::DownloadEnd,
-            step(&(lang.messages().waiting_for_node)("edge-1")),
+            step(&format!("7/10 {}", (lang.messages().step)(Step::WaitReady))),
+            note(&(lang.messages().waiting_for_node)("edge-1")),
             step(lang.messages().done),
             Event::Line {
                 text: (lang.messages().ready)(&crate::i18n::Ready {

@@ -6,13 +6,14 @@ use std::time::Duration;
 use k8s_openapi::api::core::v1::Node;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::{facts, files, longhorn, network, systemd};
-use zeatend_plan::cluster::Rancher;
+use zeatend_plan::cluster::{HostFile, Rancher};
 use zeatend_plan::config::{self, JoinConfig, Role};
 use zeatend_plan::finding::Status;
 use zeatend_plan::join::{self, JoinFacts, JoinPlan, RTT_SAMPLES};
 use zeatend_plan::precondition::Preconditions;
 use zeatend_plan::record::Record;
-use zeatend_plan::telemetry::{Action, Command, Step};
+use zeatend_plan::steps::Step;
+use zeatend_plan::telemetry::{Action, Command};
 use zeatend_plan::token::JoinToken;
 
 use crate::apply::{self, ClusterInstall};
@@ -98,6 +99,7 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
         return crate::print_json(&plan);
     }
     output::line(render::join_plan(&plan).trim_end());
+    output::step(crate::i18n::messages().checking_host);
     let failed = apply::show_checks(
         config.distribution,
         plan.role,
@@ -124,6 +126,8 @@ pub(crate) async fn apply(
         return Err(InstallError::Blocked(blocker.finding.clone()));
     }
     let run = telemetry::run(config.distribution, plan.role, Action::Join);
+    let mut steps = apply::Steps::new(Step::join(plan.longhorn.is_some()));
+    steps.start(Step::CheckHost)?;
     apply::check_host(
         config.distribution,
         plan.role,
@@ -132,34 +136,34 @@ pub(crate) async fn apply(
     )
     .await?;
     telemetry::started(run);
-    apply::prepare_longhorn(plan.longhorn.as_ref()).await?;
-    telemetry::reached(Step::Install);
+    apply::prepare_longhorn(plan.longhorn.as_ref(), &mut steps).await?;
 
     let distribution = plan.cluster.distribution;
     let layout = distribution.distribution().layout();
-    let changed = files::write(
-        Path::new(distribution.paths().join_token_file),
-        0o600,
-        format!("{token}\n").as_bytes(),
-    )?;
+    let mut host_files = plan.host_files.clone();
+    host_files.push(HostFile {
+        path: distribution.paths().join_token_file.to_owned(),
+        mode: 0o600,
+        content: format!("{token}\n"),
+    });
     let install = ClusterInstall {
         cluster: &plan.cluster,
-        files: &plan.host_files,
+        files: &host_files,
         server: plan.role == Role::Server,
-        changed,
     };
-    let restarted = apply::install_cluster(&install).await?;
+    let restarted = apply::install_cluster(&install, &mut steps).await?;
 
     let name = plan.node_name.clone();
     let messages = crate::i18n::messages();
-    telemetry::reached(Step::Node);
-    output::step(&(messages.waiting_for_node)(&name));
+    steps.start(Step::WaitReady)?;
+    output::note(&(messages.waiting_for_node)(&name));
     wait_node_ready(
         &own_kubectl(distribution),
         &name,
         restarted.then(|| install.unit()),
     )
     .await?;
+    steps.start(Step::WriteRecord)?;
     apply::write_record(
         Path::new(layout.state_dir),
         &Record::new(distribution.into(), &plan.cluster.version),

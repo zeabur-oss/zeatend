@@ -5,12 +5,12 @@ use zeatend_plan::finding::{Finding, Status, Topic};
 use zeatend_plan::longhorn::{MODULES_FILE, MULTIPATH_FILE, Need};
 use zeatend_plan::precondition::Stale;
 use zeatend_plan::record::ZEATEND_VERSION;
+use zeatend_plan::steps::Step;
 
 use super::{Joined, Key, Messages, Ready, Screen, Screens, gib, zh_list};
 
 pub(super) const MESSAGES: Messages = Messages {
     checking_host: "正在檢查主機",
-    preparing_longhorn: "正在為 Longhorn 準備這個節點",
     apply_stops: "修好失敗的項目之前，apply 不會繼續執行。",
     host_not_ready: "主機還沒準備好，修好失敗的項目後再執行一次 apply",
     not_plan: |path, reason| {
@@ -28,6 +28,7 @@ pub(super) const MESSAGES: Messages = Messages {
     starting_unit,
     restarting_unit,
     waiting_for_node,
+    step,
     done: DONE,
     ready,
     joined,
@@ -166,7 +167,25 @@ fn restarting_unit(unit: &str) -> String {
 }
 
 fn waiting_for_node(node: &str) -> String {
-    format!("等待節點 {node} 就緒")
+    format!("節點 {node}")
+}
+
+const fn step(step: Step) -> &'static str {
+    match step {
+        Step::CheckHost => "正在檢查主機",
+        Step::PrepareLonghorn => "正在為 Longhorn 準備這個節點",
+        Step::Download => "正在下載發行版",
+        Step::WriteFiles => "正在寫入設定檔",
+        Step::PrepareHost => "正在準備主機",
+        Step::InstallRelease => "正在安裝發行版",
+        Step::StartService => "正在啟動服務",
+        Step::WaitReady => "正在等待節點就緒",
+        Step::WaitRemoved => "正在等待關閉的元件移除完畢",
+        Step::ProtectCertificates => "正在把憑證改成只有 root 能讀取",
+        Step::WaitAddons => "正在等待 CoreDNS 和 local-path 儲存空間啟動",
+        Step::WriteRecord => "正在寫入安裝紀錄",
+        Step::WriteKubeconfig => "正在寫入 kubeconfig",
+    }
 }
 
 fn ready(r: &Ready<'_>) -> String {
