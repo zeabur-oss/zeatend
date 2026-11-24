@@ -121,6 +121,10 @@ K3s and RKE2 deploy their packaged components as upstream ships them, Traefik am
 your own instead, turn them off with `disable`, such as `disable: [traefik, metrics-server]`.
 `local-storage` turns off K3s's local-path storage class. KubeSolo packages none of these.
 
+KubeSolo's built-in bridge network enforces no network policies ([KubeSolo's CNI guide](https://github.com/portainer/kubesolo/blob/v1.3.0/docs/configuration/cni.md)),
+so Zeabur OSS can't isolate its projects from each other on KubeSolo: a service in one project can
+reach the services of every other project. Install K3s or RKE2 when projects must stay apart.
+
 `storage: {longhorn: true}` prepares the host for Longhorn, which the Zeabur catalog installs on
 clusters of more than one node: `apply` installs the iSCSI initiator and the NFS client with apt
 or dnf, loads `iscsi_tcp` and `dm_crypt` at boot, starts `iscsid` and keeps multipathd off
