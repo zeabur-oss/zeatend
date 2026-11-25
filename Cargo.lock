@@ -2415,7 +2415,7 @@ dependencies = [
 
 [[package]]
 name = "zeatend"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2438,7 +2438,7 @@ dependencies = [
 
 [[package]]
 name = "zeatend-host"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "aws-lc-rs",
  "base64 0.23.1",
@@ -2459,7 +2459,7 @@ dependencies = [
 
 [[package]]
 name = "zeatend-plan"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.23.1",
  "k8s-openapi",
