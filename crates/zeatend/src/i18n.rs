@@ -472,7 +472,7 @@ fn zh_list(items: &[String], and: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use zeatend_plan::cluster::PortUse;
+    use zeatend_plan::cluster::{Distribution, PortUse};
     use zeatend_plan::finding::BusyPort;
 
     use super::*;
@@ -628,6 +628,20 @@ mod tests {
         let cn = Lang::ZhCn.messages().finding;
         assert_eq!(cn(&free), "80、443 和 10250 都没有程序占用");
         assert_eq!(cn(&crypt), "/ 和 /var/lib/rancher 都在 dm-crypt 设备上");
+    }
+
+    #[test]
+    fn the_localhost_note_in_chinese_says_how_each_distribution_takes_another_name() {
+        let note = |distribution| Finding::NodeNameLocalhost { distribution };
+        for lang in [Lang::ZhTw, Lang::ZhCn] {
+            let text = lang.messages().finding;
+            for rancher in [Distribution::K3s, Distribution::Rke2] {
+                assert!(text(&note(rancher)).contains("host.nodeName"), "{lang:?}");
+            }
+            let solo = text(&note(Distribution::KubeSolo));
+            assert!(solo.contains("hostnamectl set-hostname"), "{lang:?}");
+            assert!(!solo.contains("host.nodeName"), "{lang:?}");
+        }
     }
 
     #[test]

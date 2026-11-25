@@ -7,6 +7,8 @@
 //! keeps the host name; see [`kubesolo`].
 
 use crate::PlanError;
+use crate::cluster::Distribution;
+use crate::finding::Finding;
 use crate::plan::Facts;
 
 /// A Kubernetes node name: a lowercase DNS-1123 subdomain.
@@ -150,6 +152,14 @@ pub fn kubesolo(configured: Option<&str>, facts: &Facts) -> Result<String, PlanE
         )));
     }
     Ok(name)
+}
+
+/// A note when a new node would be named `localhost`. A node that has the name already keeps
+/// it, so it gets no note.
+#[must_use]
+pub fn localhost_note(name: &str, facts: &Facts, distribution: Distribution) -> Option<Finding> {
+    (name == "localhost" && facts.node_name.is_none())
+        .then_some(Finding::NodeNameLocalhost { distribution })
 }
 
 #[cfg(test)]

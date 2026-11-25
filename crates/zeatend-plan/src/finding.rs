@@ -73,6 +73,8 @@ pub enum Topic {
     Downloads,
     /// The registry mirrors answer.
     Mirrors,
+    /// The node's name in Kubernetes.
+    NodeName,
 }
 
 /// Files of another Kubernetes distribution.
@@ -462,6 +464,12 @@ pub enum Finding {
         /// What it lacks.
         needs: Vec<Need>,
     },
+    /// The node name is `localhost`, which does not tell which machine a finding is about.
+    #[serde(rename = "nodeName.localhost")]
+    NodeNameLocalhost {
+        /// The distribution, which says how to give another name.
+        distribution: Distribution,
+    },
 }
 
 impl Finding {
@@ -517,6 +525,7 @@ impl Finding {
             Self::TokenUnpinned => Topic::JoinToken,
             Self::DownloadsOk { .. } | Self::DownloadsNo { .. } => Topic::Downloads,
             Self::MirrorOk { .. } | Self::MirrorNo { .. } => Topic::Mirrors,
+            Self::NodeNameLocalhost { .. } => Topic::NodeName,
         }
     }
 
@@ -568,7 +577,8 @@ impl Finding {
             | Self::ServersHa
             | Self::LocalStorage
             | Self::TokenUnpinned
-            | Self::MirrorNo { .. } => Status::Warn,
+            | Self::MirrorNo { .. }
+            | Self::NodeNameLocalhost { .. } => Status::Warn,
             Self::RootNo
             | Self::SystemdNo
             | Self::PortsBusy { .. }

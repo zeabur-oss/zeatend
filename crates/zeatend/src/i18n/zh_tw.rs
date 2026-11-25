@@ -273,6 +273,7 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Storage => "儲存",
         Topic::Downloads => "下載",
         Topic::Mirrors => "鏡像站",
+        Topic::NodeName => "節點名稱",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
@@ -470,6 +471,10 @@ fn finding(finding: &Finding) -> String {
             "這個節點缺少{}，Longhorn 無法在這裡連接磁碟區。請執行 `sudo zeatend apply`",
             and_list(&needs.iter().map(need).collect::<Vec<_>>())
         ),
+        Finding::NodeNameLocalhost {
+            distribution: Distribution::KubeSolo,
+        } => "節點會命名為 localhost，從這個名稱看不出警告說的是哪台機器。KubeSolo 用主機名稱當節點名稱，請在安裝前修改主機名稱：`sudo hostnamectl set-hostname <名稱>`。".to_owned(),
+        Finding::NodeNameLocalhost { .. } => "節點會命名為 localhost，從這個名稱看不出警告說的是哪台機器。用 host.nodeName 或「連線方式」畫面的「節點名稱」欄位另取名稱。".to_owned(),
         // Plan findings stay in English until zeatend#32 words them.
         Finding::MemoryLow { .. }
         | Finding::ReleaseUnpinned { .. }

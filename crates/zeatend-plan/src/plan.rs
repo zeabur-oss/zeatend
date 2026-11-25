@@ -252,7 +252,10 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     } else {
         node_name::choose(configured, facts, &[])?
     };
-    let mut findings = Vec::new();
+    let mut findings: Vec<Finding> =
+        node_name::localhost_note(&node_name, facts, config.distribution)
+            .into_iter()
+            .collect();
     let memory_tier = MemoryTier::of(facts.memory_mib);
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
@@ -555,6 +558,70 @@ mod tests {
             ..facts()
         };
         plan(&config("{}"), &own).unwrap();
+    }
+
+    fn localhost_note(yaml: &str, facts: &Facts) -> Option<Finding> {
+        plan(&config(yaml), facts)
+            .unwrap()
+            .findings
+            .into_iter()
+            .map(|c| c.finding)
+            .find(|f| matches!(f, Finding::NodeNameLocalhost { .. }))
+    }
+
+    fn localhost() -> Facts {
+        Facts {
+            hostname: "localhost".to_owned(),
+            ..facts()
+        }
+    }
+
+    #[test]
+    fn a_k3s_node_named_localhost_gets_a_note() {
+        assert_eq!(
+            localhost_note("{}", &localhost()),
+            Some(Finding::NodeNameLocalhost {
+                distribution: Distribution::K3s
+            })
+        );
+        assert_eq!(
+            localhost_note("host:\n  nodeName: vps-1\n", &localhost()),
+            None
+        );
+        assert_eq!(localhost_note("{}", &facts()), None);
+    }
+
+    #[test]
+    fn an_rke2_node_named_localhost_gets_a_note() {
+        assert_eq!(
+            localhost_note("distribution: rke2\n", &localhost()),
+            Some(Finding::NodeNameLocalhost {
+                distribution: Distribution::Rke2
+            })
+        );
+    }
+
+    #[test]
+    fn a_kubesolo_node_named_localhost_gets_a_note() {
+        assert_eq!(
+            localhost_note("distribution: kubesolo\n", &localhost()),
+            Some(Finding::NodeNameLocalhost {
+                distribution: Distribution::KubeSolo
+            })
+        );
+    }
+
+    #[test]
+    fn a_node_registered_as_localhost_gets_no_note() {
+        let registered = Facts {
+            node_name: Some("localhost".to_owned()),
+            ..localhost()
+        };
+        assert_eq!(localhost_note("{}", &registered), None);
+        assert_eq!(
+            localhost_note("distribution: kubesolo\n", &registered),
+            None
+        );
     }
 
     #[test]
