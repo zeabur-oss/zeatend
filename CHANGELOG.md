@@ -2,6 +2,40 @@
 
 All notable changes to Zeabur Zeatend. Versions follow [Semantic Versioning](https://semver.org/); each section comes from the change files in `.changeset/` (CONTRIBUTING.md, "Releases").
 
+## 0.1.2 (2026-11-25)
+
+### Features
+
+#### `zeatend plan`, `zeatend apply` and the install screens join the experience program
+
+They send the version, the distribution, the role, whether the run came from a command or the install screens, which host checks failed, and whether an install or join worked and at which step it stopped, with a random installation ID in `/etc/zeatend/installation-id`. They never send names, addresses, tokens, paths or error messages. `--no-telemetry`, `telemetry: false` in the configuration file, `DO_NOT_TRACK=1` or `ZEATEND_TELEMETRY=off` turns it off; `ZEATEND_TELEMETRY=debug` prints what would be sent. See the [experience program](https://oss.zeabur.com/docs/zeatend/reference/telemetry/) reference.
+
+#### `zeatend node add` prepares the cluster for Longhorn
+
+`zeatend node add` turns on `storage.longhorn` for each new node and, when this server does not have it, tells you to turn it on here too. With a second node, the Zeabur catalog recommends Longhorn, which needs every node prepared.
+
+#### `apply` and `join` number their steps
+
+`apply` and `join` print each step with its number, such as `==> 3/10 Writing the configuration files`. K3s and RKE2 installs download the release before they write any file.
+
+#### Registry mirrors and an HTTPS proxy for servers that cannot reach GitHub
+
+`registryMirrors` names the mirrors containerd pulls each registry's images from, `registryHosts` gives a mirror or registry a CA and credentials, and `proxy` sends zeatend's downloads and the node's pulls through an HTTPS proxy. `apply` writes them as `registries.yaml` on K3s and RKE2 and as containerd `hosts.toml` files on KubeSolo, and removes them again when they leave the configuration. containerd tries the registry itself after the mirrors. `zeatend doctor` checks that each mirror answers and, before an install, that the release downloads answer.
+
+### Fixes
+
+#### `--ttl` reads jiff's friendly format
+
+`zeatend node add --ttl` still takes `30m` and `2h`, from `1m` to `24h`. It also takes `90s`, `1h30m`, `1.5h` and `2 hours`.
+
+#### The plan warns when the node would be named `localhost`
+
+`localhost` does not say which machine a warning is about. On K3s and RKE2 the note points to `host.nodeName` and the Node name field on the Access screen. On KubeSolo, which names the node after the host name, it says to change the host name before the install.
+
+#### url 2.5.9 for RUSTSEC-2026-0592
+
+The `url` crate is now 2.5.9, which fixes [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592.html).
+
 ## 0.1.1 (2026-11-21)
 
 ### Features
