@@ -33,6 +33,8 @@ Agent 无法操作安装界面，会按[用命令安装](install-with-commands.m
   | RKE2 | 三台或更多服务器，一台停机后集群仍能运行 | 比 K3s 更多；内存不足时，`zeatend plan` 会警告 |
   | KubeSolo | 一台小型服务器，不会添加其他节点 | 至少 1400 MiB |
 
+  KubeSolo 不执行网络策略（见 [KubeSolo 的 CNI 说明](https://github.com/portainer/kubesolo/blob/v1.3.0/docs/configuration/cni.md)），所以 Zeabur 开源版在 KubeSolo 上无法隔离项目。项目之间需要隔离时，请选择 K3s 或 RKE2。
+
 <Steps>
 <Step>
 ### 下载 Zeatend

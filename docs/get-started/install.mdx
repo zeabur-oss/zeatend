@@ -33,6 +33,8 @@ The agent can't use the install screens, so it follows [Install with commands](i
   | RKE2 | Three or more servers, so the cluster keeps running when one goes down | More than K3s; `zeatend plan` warns when it is too low |
   | KubeSolo | One small server that never takes another node | 1400 MiB or more |
 
+  KubeSolo enforces no network policies ([KubeSolo's CNI guide](https://github.com/portainer/kubesolo/blob/v1.3.0/docs/configuration/cni.md)), so Zeabur OSS can't isolate projects from each other on it. Choose K3s or RKE2 when projects must stay apart.
+
 <Steps>
 <Step>
 ### Download Zeatend

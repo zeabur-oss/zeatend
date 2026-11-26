@@ -97,6 +97,8 @@ K3s（`v1.37.2+k3s1`）和 RKE2（`v1.37.2+rke2r1`）安裝 Kubernetes 1.37。Ku
 
 K3s 和 RKE2 照上游的預設，部署自帶的元件，例如 Traefik。要改用自己安裝的版本，就用 `disable` 關掉，例如 `disable: [traefik, metrics-server]`。`local-storage` 會關掉 K3s 的 local-path 儲存類別。KubeSolo 沒有這些元件。
 
+KubeSolo 內建的 bridge 網路不執行網路政策（見 [KubeSolo 的 CNI 說明](https://github.com/portainer/kubesolo/blob/v1.3.0/docs/configuration/cni.md)），所以 Zeabur 開源版在 KubeSolo 上無法隔離專案：每個專案的服務都連得到其他專案。專案之間需要隔離時，請安裝 K3s 或 RKE2。
+
 `storage: {longhorn: true}` 會替主機準備好 Longhorn 需要的環境，Zeabur Catalog 會在多節點叢集上安裝 Longhorn：`apply` 用 apt 或 dnf 安裝 iSCSI initiator 和 NFS 用戶端，設定開機時載入 `iscsi_tcp` 和 `dm_crypt`，啟動 `iscsid`，並讓 multipathd 避開 Longhorn 的磁碟。節點缺少其中任何一項時，`zeatend doctor` 會回報；`zeatend node add` 會讓新節點沿用同樣的設定。
 
 `apiServer.authenticationConfig` 是 API 伺服器的[驗證設定](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#using-authentication-configuration)，照 Kubernetes 文件的格式寫，例如讓 API 伺服器接受某個 OpenID Connect 簽發者的權杖：
