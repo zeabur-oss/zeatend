@@ -350,11 +350,15 @@ pub fn apparmor_profile() -> HostFile {
 /// The inotify limits of every node, for every distribution.
 pub const INOTIFY_SYSCTL_FILE: &str = "/etc/sysctl.d/60-zeatend-inotify.conf";
 
+/// The inotify instances of root.
+///
 /// The containers of a node run as root on the host, so they share the one limit of root. The
 /// kernel sets 128 (`inotify_user_setup` in `fs/notify/inotify/inotify_user.c`), and after a reboot
 /// the pods that start last get none.
 pub const INOTIFY_MAX_USER_INSTANCES: u64 = 1024;
 
+/// The least `fs.inotify.max_user_watches` a node gets.
+///
 /// The value kind gives for clusters of many nodes on one host
 /// (<https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files>).
 /// The kernel's default is 1% of memory divided by the cost of a watch, from 8192 to 1048576, so a
@@ -362,9 +366,10 @@ pub const INOTIFY_MAX_USER_INSTANCES: u64 = 1024;
 /// watches that are made.
 pub const INOTIFY_MIN_USER_WATCHES: u64 = 524_288;
 
-/// The inotify limits, given the host's `fs.inotify.max_user_watches`. A host with more watches
-/// keeps its value. A host with exactly the minimum keeps the line too: that is what the next plan
-/// reads after this file is loaded.
+/// The inotify limits, given the host's `fs.inotify.max_user_watches`.
+///
+/// A host with more watches keeps its value. A host with exactly the minimum keeps the line too:
+/// that is what the next plan reads after this file is loaded.
 #[must_use]
 pub fn inotify_sysctl(host_watches: u64) -> HostFile {
     let watches = if host_watches <= INOTIFY_MIN_USER_WATCHES {

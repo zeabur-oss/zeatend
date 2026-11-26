@@ -9,6 +9,7 @@ Files
   /etc/rancher/k3s/config.yaml.d/10-join.yaml
   /etc/rancher/k3s/config.yaml.d/15-node-name.yaml
   /etc/rancher/k3s/config.yaml.d/20-node-ip.yaml
+  /etc/sysctl.d/60-zeatend-inotify.conf
   /etc/rancher/k3s/zeatend-join-token (the token, mode 0600)
 
 Distance         0.7 ms to the server (median of 5 TCP connects; 0.6 to 0.9)
