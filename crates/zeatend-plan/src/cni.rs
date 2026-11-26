@@ -313,7 +313,10 @@ mod tests {
             "",
         );
         assert_eq!(
-            network().result_attachment(&older).and_then(|a| a.netns).as_deref(),
+            network()
+                .result_attachment(&older)
+                .and_then(|a| a.netns)
+                .as_deref(),
             Some("cni-5a0c3e1d-7b4f-2c8e-9d6a-1f3b5c7e9a2d")
         );
     }
