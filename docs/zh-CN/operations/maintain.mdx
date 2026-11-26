@@ -119,4 +119,6 @@ Zeatend 不执行备份。需要备份两部分：集群的数据存储，以及
 kubectl cordon <node>
 ```
 
+在 K3s 和 RKE2 上，重启或关机时，系统最多等待 30 秒，让 kubelet 像删除副本一样停止节点上的副本，会先执行 `preStop` hook。
+
 重启后，运行 `kubectl uncordon <node>` 和 `sudo zeatend doctor`。服务会随 systemd 启动。

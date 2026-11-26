@@ -119,4 +119,6 @@ On a node with workloads, stop new pods from starting there first:
 kubectl cordon <node>
 ```
 
+On K3s and RKE2, a reboot or shutdown waits up to 30 seconds while the kubelet stops the node's pods, as a deletion stops them: `preStop` hooks run first.
+
 After the reboot, run `kubectl uncordon <node>` and `sudo zeatend doctor`. The services start with systemd.

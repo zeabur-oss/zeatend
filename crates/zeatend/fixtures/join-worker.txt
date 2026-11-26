@@ -6,6 +6,7 @@ Node addresses   10.0.0.6, fd00::6 (temporary IPv6 addresses left out)
 Files
   /etc/sysctl.d/60-k3s-cis.conf
   /etc/rancher/k3s/config.yaml
+  /var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-zeatend.conf
   /etc/rancher/k3s/config.yaml.d/10-join.yaml
   /etc/rancher/k3s/config.yaml.d/15-node-name.yaml
   /etc/rancher/k3s/config.yaml.d/20-node-ip.yaml
