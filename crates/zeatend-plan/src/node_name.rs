@@ -177,6 +177,7 @@ mod tests {
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,
+            inotify_max_user_watches: 0,
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,

@@ -274,6 +274,7 @@ mod tests {
         touch(root, &format!("{RANCHER_STATE_DIR}/{RECORD_FILE}"));
         touch(root, &format!("{RANCHER_STATE_DIR}/downloads/v1/k3s"));
         touch(root, "/etc/sysctl.d/60-k3s-cis.conf");
+        touch(root, "/etc/sysctl.d/60-zeatend-inotify.conf");
         touch(root, k3s::MEMORY_DROP_IN);
         touch(root, "/var/lib/rancher/k3s/server/db/state.db");
         touch(root, load::DEFAULT_CONFIG);
@@ -286,6 +287,7 @@ mod tests {
         for gone in [
             RANCHER_STATE_DIR,
             "/etc/sysctl.d/60-k3s-cis.conf",
+            "/etc/sysctl.d/60-zeatend-inotify.conf",
             "/etc/systemd/system/k3s.service.d",
             "/var/lib/rancher/k3s/server",
             "/var/lib/rancher/.zeatend-kept-k3s-storage",

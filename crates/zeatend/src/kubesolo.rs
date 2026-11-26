@@ -156,6 +156,7 @@ async fn install(
 
     steps.start(Step::PrepareHost)?;
     crate::apply::load_apparmor_profile(plan.host_files.iter()).await?;
+    crate::apply::load_sysctl(plan.host_files.iter()).await?;
 
     steps.start(Step::InstallRelease)?;
     if outdated {
