@@ -112,8 +112,11 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         volumes::stash(root, &plan.volumes)?;
     }
     uninstall_nodes(root, &plan.nodes).await?;
-    if let network::PodState::Remove(removal) = &network {
-        network::remove(root, removal).await?;
+    // Read again now that the pods stopped: one may have started while the prompt waited.
+    if matches!(network, network::PodState::Remove(_))
+        && let network::PodState::Remove(removal) = network::PodState::read(root, &plan.nodes)
+    {
+        network::remove(root, &removal).await?;
     }
     output::step("Removing zeatend's files");
     remove_trees(root, &plan.remove)?;

@@ -1,11 +1,11 @@
 //! `KubeSolo`'s pod network: the namespaces, bridge and CNI state its plugins leave.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use zeatend_host::cmd;
 use zeatend_plan::cluster::Distribution;
-use zeatend_plan::cni::{KUBELET_DIR, PodNetwork, RESULTS_DIR, Removal};
+use zeatend_plan::cni::{Attachment, KUBELET_DIR, PodNetwork, RESULTS_DIR, Removal};
 use zeatend_plan::kubesolo;
 use zeatend_plan::uninstall::Node;
 
@@ -39,9 +39,8 @@ impl PodState {
             };
         };
         let attachments = results(root, &network)
-            .iter()
-            .filter_map(|file| fs::read_to_string(file).ok())
-            .filter_map(|text| network.result_attachment(&text))
+            .into_iter()
+            .map(|(_, attachment)| attachment)
             .collect();
         let alone = nodes
             .iter()
@@ -59,8 +58,9 @@ impl PodState {
     }
 }
 
-/// The result files of `network` under `root`.
-fn results(root: &Path, network: &PodNetwork) -> Vec<std::path::PathBuf> {
+/// The result files of `network` under `root`, with the attachment each records. A file whose
+/// name matches but whose content names another network is not one.
+fn results(root: &Path, network: &PodNetwork) -> Vec<(PathBuf, Attachment)> {
     fs::read_dir(at(root, RESULTS_DIR))
         .into_iter()
         .flatten()
@@ -70,7 +70,10 @@ fn results(root: &Path, network: &PodNetwork) -> Vec<std::path::PathBuf> {
                 .to_str()
                 .is_some_and(|n| network.owns_result(n))
         })
-        .map(|e| e.path())
+        .filter_map(|e| {
+            let text = fs::read_to_string(e.path()).ok()?;
+            Some((e.path(), network.result_attachment(&text)?))
+        })
         .collect()
 }
 
@@ -91,7 +94,7 @@ pub(super) async fn remove(root: &Path, removal: &Removal) -> Result<(), Install
     {
         cmd::run("ip", &["link", "delete", bridge], None).await?;
     }
-    for file in results(root, &removal.network) {
+    for (file, _) in results(root, &removal.network) {
         remove_tree(&file)?;
     }
     for file in removal.loopback_results() {
@@ -143,8 +146,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn the_namespaces_come_from_the_networks_own_results() {
+    #[tokio::test]
+    async fn the_namespaces_and_files_come_from_the_networks_own_results() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         conflist(root);
@@ -168,6 +171,11 @@ mod tests {
             &format!("{RESULTS_DIR}/cbr0-c-eth0"),
             &result("cni-c", "cbr0"),
         );
+        write(
+            root,
+            &format!("{RESULTS_DIR}/kubesolo-net-secondary-d-eth0"),
+            &result("cni-d", "kubesolo-net-secondary"),
+        );
         let PodState::Remove(removal) = PodState::read(root, &[KUBESOLO]) else {
             panic!("no removal");
         };
@@ -181,6 +189,32 @@ mod tests {
         };
         assert_eq!(shared.bridge, None);
         assert!(!shared.kubelet);
+
+        write(
+            root,
+            &format!("{RESULTS_DIR}/cni-loopback-cni-a-id-lo"),
+            "{}",
+        );
+        write(
+            root,
+            &format!("{RESULTS_DIR}/cni-loopback-cni-c-id-lo"),
+            "{}",
+        );
+        remove(root, &shared).await.unwrap();
+        let left: Vec<String> = fs::read_dir(at(root, RESULTS_DIR))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(
+            left,
+            [
+                "cbr0-c-eth0",
+                "cni-loopback-cni-c-id-lo",
+                "kubesolo-net-secondary-d-eth0"
+            ]
+        );
     }
 
     #[test]
