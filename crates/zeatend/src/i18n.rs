@@ -631,16 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn the_localhost_note_in_chinese_says_how_each_distribution_takes_another_name() {
-        let note = |distribution| Finding::NodeNameLocalhost { distribution };
+    fn the_localhost_note_in_chinese_says_how_to_take_another_name() {
         for lang in [Lang::ZhTw, Lang::ZhCn] {
-            let text = lang.messages().finding;
-            for rancher in [Distribution::K3s, Distribution::Rke2] {
-                assert!(text(&note(rancher)).contains("host.nodeName"), "{lang:?}");
-            }
-            let solo = text(&note(Distribution::KubeSolo));
-            assert!(solo.contains("hostnamectl set-hostname"), "{lang:?}");
-            assert!(!solo.contains("host.nodeName"), "{lang:?}");
+            let text = (lang.messages().finding)(&Finding::NodeNameLocalhost);
+            assert!(text.contains("host.nodeName"), "{lang:?}");
         }
     }
 

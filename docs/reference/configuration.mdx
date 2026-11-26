@@ -45,9 +45,7 @@ apiServer:
 
 ### The node name
 
-Without `host.nodeName`, the node takes the host name in lower case. On K3s and RKE2, a host name made from the server's address, such as `ip-10-0-1-5`, becomes `node-` and six hex digits instead. Once installed, a node keeps its name.
-
-KubeSolo always takes the host name, so `host.nodeName` can only repeat it. To name a KubeSolo node, set the host name before you install.
+Without `host.nodeName`, the node takes the host name in lower case. A host name made from the server's address, such as `ip-10-0-1-5`, becomes `node-` and six hex digits instead. Once installed, a node keeps its name.
 
 ### The authentication configuration
 

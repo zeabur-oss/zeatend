@@ -563,10 +563,7 @@ pub(crate) fn finding(finding: &Finding) -> String {
                                    whichever server answers at that address. Use the token with \
                                    its CA hash, as the server's token file holds it."
             .to_owned(),
-        Finding::NodeNameLocalhost {
-            distribution: Distribution::KubeSolo,
-        } => "The node will be named localhost, which does not say which machine a warning is about. KubeSolo names the node after the host name, so change the host name before the install: `sudo hostnamectl set-hostname <name>`.".to_owned(),
-        Finding::NodeNameLocalhost { .. } => "The node will be named localhost, which does not say which machine a warning is about. Give it another name with host.nodeName or the Node name field on the Access screen.".to_owned(),
+        Finding::NodeNameLocalhost => "The node will be named localhost, which does not say which machine a warning is about. Give it another name with host.nodeName or the Node name field on the Access screen.".to_owned(),
         Finding::LonghornReady => {
             "this node has the iSCSI initiator, the NFS client, the modules and iscsid that \
              Longhorn needs"
@@ -756,18 +753,9 @@ mod tests {
 
     #[test]
     fn the_localhost_note_in_english() {
-        let rancher = "The node will be named localhost, which does not say which machine a warning is about. Give it another name with host.nodeName or the Node name field on the Access screen.";
-        for distribution in [Distribution::K3s, Distribution::Rke2] {
-            assert_eq!(
-                finding(&Finding::NodeNameLocalhost { distribution }),
-                rancher
-            );
-        }
         assert_eq!(
-            finding(&Finding::NodeNameLocalhost {
-                distribution: Distribution::KubeSolo
-            }),
-            "The node will be named localhost, which does not say which machine a warning is about. KubeSolo names the node after the host name, so change the host name before the install: `sudo hostnamectl set-hostname <name>`."
+            finding(&Finding::NodeNameLocalhost),
+            "The node will be named localhost, which does not say which machine a warning is about. Give it another name with host.nodeName or the Node name field on the Access screen."
         );
     }
 

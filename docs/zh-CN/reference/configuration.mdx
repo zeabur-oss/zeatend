@@ -45,16 +45,13 @@ apiServer:
 
 ### 节点名称
 
-没有设置 `host.nodeName` 时，节点会使用小写的主机名。在 K3s 和 RKE2 上，如果主机名由服务器地址生成，例如 `ip-10-0-1-5`，则改用 `node-` 加六位十六进制数字。安装后，节点名称不再改变。
-
-KubeSolo 始终使用主机名，因此 `host.nodeName` 只能填写相同的名称。要指定 KubeSolo 节点的名称，请在安装前设置主机名。
+没有设置 `host.nodeName` 时，节点会使用小写的主机名。如果主机名由服务器地址生成，例如 `ip-10-0-1-5`，则改用 `node-` 加六位十六进制数字。安装后，节点名称不再改变。
 
 ### 身份验证配置
 
 Zeatend 只检查 `apiVersion` 和 `kind`，其余内容原样写入文件，再将文件交给 API 服务器。API 服务器启动时，Kubernetes 会检查其他字段。在 K3s 和 RKE2 上，如果配置中没有 `anonymous` 部分，Zeatend 会添加 `anonymous: {enabled: false}`，保持匿名请求关闭。修改会在下次运行 `apply` 时生效。
 
 Zeabur 开源版的[使用 Zeatend 安装](https://oss.zeabur.com/zh-CN/docs/zeabur/install/one-command/)会用 `zeabur-identityctl kube-config` 写入这一部分，让 API 服务器接受 Zeabur Identity 的登录。
-
 
 ### Longhorn
 

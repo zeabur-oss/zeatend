@@ -299,10 +299,9 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &join.node_names,
     )?;
     let distribution = config.rancher()?;
-    let mut findings: Vec<Finding> =
-        node_name::localhost_note(&node_name, &facts.facts, distribution.into())
-            .into_iter()
-            .collect();
+    let mut findings: Vec<Finding> = node_name::localhost_note(&node_name, &facts.facts)
+        .into_iter()
+        .collect();
     let mut cluster = cluster_plan(
         distribution,
         config.version.as_deref(),
@@ -546,9 +545,7 @@ mod tests {
         let mut f = facts(&[]);
         f.facts.hostname = "localhost".to_owned();
         let p = plan(&config(""), &f).unwrap();
-        assert!(findings(&p).contains(&&Finding::NodeNameLocalhost {
-            distribution: cluster::Distribution::Rke2
-        }));
+        assert!(findings(&p).contains(&&Finding::NodeNameLocalhost));
     }
 
     #[test]
