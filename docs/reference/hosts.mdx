@@ -52,6 +52,7 @@ On K3s and RKE2, ServiceLB holds ports 80 and 443 on every node for a LoadBalanc
 | Zeatend's configuration | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` |
 | The distribution's configuration | `/etc/rancher/k3s/config.yaml` and `config.yaml.d/` | `/etc/rancher/rke2/config.yaml` and `config.yaml.d/` | `/etc/kubesolo/config.yaml` |
 | Kernel parameters for the CIS benchmark | `/etc/sysctl.d/60-k3s-cis.conf` | `/etc/sysctl.d/60-rke2-cis.conf` | None |
+| inotify limits | `/etc/sysctl.d/60-zeatend-inotify.conf` | `/etc/sysctl.d/60-zeatend-inotify.conf` | `/etc/sysctl.d/60-zeatend-inotify.conf` |
 | Audit policy (servers) | `/etc/rancher/k3s/audit-policy.yaml` | `/etc/rancher/rke2/audit-policy.yaml` | None |
 | Authentication configuration, with `apiServer.authenticationConfig` | `/etc/rancher/k3s/authentication/` | `/etc/rancher/rke2/authentication/` | `/etc/kubesolo/authentication/` |
 | Join token (joined nodes, mode 0600) | `/etc/rancher/k3s/zeatend-join-token` | `/etc/rancher/rke2/zeatend-join-token` | None |
