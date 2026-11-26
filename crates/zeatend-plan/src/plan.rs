@@ -584,6 +584,18 @@ mod tests {
     }
 
     #[test]
+    fn a_kubesolo_node_is_named_like_a_k3s_node() {
+        let solo = config("distribution: kubesolo\n");
+        let address = Facts {
+            hostname: "ip-10-211-55-77".to_owned(),
+            ..facts()
+        };
+        assert_eq!(plan(&solo, &address).unwrap().node_name, "node-a1b2c3");
+        let named = config("distribution: kubesolo\nhost:\n  nodeName: db-1\n");
+        assert_eq!(plan(&named, &facts()).unwrap().node_name, "db-1");
+    }
+
+    #[test]
     fn a_node_named_localhost_gets_a_note() {
         for distribution in ["k3s", "rke2", "kubesolo"] {
             let yaml = format!("distribution: {distribution}\n");
