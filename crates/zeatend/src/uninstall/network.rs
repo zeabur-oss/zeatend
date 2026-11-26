@@ -77,9 +77,16 @@ fn results(root: &Path, network: &PodNetwork) -> Vec<(PathBuf, Attachment)> {
         .collect()
 }
 
-/// Removes the pod network after `KubeSolo` stopped. A namespace or bridge that is already gone
-/// is no error.
-pub(super) async fn remove(root: &Path, removal: &Removal) -> Result<(), InstallError> {
+/// Removes the pod network after `KubeSolo` stopped. It reads the network again, since a pod may
+/// have started while the prompt waited. A namespace or bridge that is already gone is no error.
+pub(super) async fn remove(root: &Path, nodes: &[Node]) -> Result<(), InstallError> {
+    let PodState::Remove(removal) = PodState::read(root, nodes) else {
+        return Ok(());
+    };
+    remove_attachments(root, &removal).await
+}
+
+async fn remove_attachments(root: &Path, removal: &Removal) -> Result<(), InstallError> {
     output::step(&format!(
         "Removing KubeSolo's pod network {}",
         removal.network.name
@@ -200,7 +207,7 @@ mod tests {
             &format!("{RESULTS_DIR}/cni-loopback-cni-c-id-lo"),
             "{}",
         );
-        remove(root, &shared).await.unwrap();
+        remove(root, &[KUBESOLO, K3S]).await.unwrap();
         let left: Vec<String> = fs::read_dir(at(root, RESULTS_DIR))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
