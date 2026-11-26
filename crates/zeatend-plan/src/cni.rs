@@ -16,6 +16,9 @@ use crate::kubesolo;
 pub const NETWORKS_DIR: &str = "/var/lib/cni/networks";
 /// Where libcni keeps the result of each attachment, as `<network>-<container>-<interface>`.
 pub const RESULTS_DIR: &str = "/var/lib/cni/results";
+/// The network of containerd's loopback attachment, which libcni keeps as
+/// `cni-loopback-<container>-lo` beside the pod network's own result.
+pub const LOOPBACK_NETWORK: &str = "cni-loopback";
 /// The kubelet's directory, which K3s and RKE2 use too.
 pub const KUBELET_DIR: &str = "/var/lib/kubelet";
 /// The bridge plugin's bridge when its configuration names none.
@@ -47,9 +50,11 @@ struct Plugin {
     bridge: Option<String>,
 }
 
-/// The parts of a libcni cached result that name the pod's network namespace.
+/// The parts of a libcni cached result that name the pod's sandbox and network namespace.
 #[derive(Deserialize)]
 struct CachedResult {
+    #[serde(rename = "containerId", default)]
+    container_id: String,
     #[serde(rename = "networkName", default)]
     network_name: String,
     #[serde(default)]
@@ -101,15 +106,16 @@ impl PodNetwork {
             .is_some_and(|rest| rest.starts_with('-'))
     }
 
-    /// The name, under `/run/netns`, of the network namespace that a cached result of this
-    /// network records. `None` for another network, or a namespace that `ip netns` does not name.
+    /// The pod sandbox that a cached result of this network records, and the name, under
+    /// `/run/netns`, of its network namespace. `None` for another network or a sandbox that is not
+    /// a plain name; no namespace when `ip netns` does not name it.
     #[must_use]
-    pub fn result_netns(&self, result: &str) -> Option<String> {
+    pub fn result_attachment(&self, result: &str) -> Option<Attachment> {
         let cached: CachedResult = serde_json::from_str(result).ok()?;
-        if cached.network_name != self.name {
+        if cached.network_name != self.name || !plain_name(&cached.container_id) {
             return None;
         }
-        cached
+        let netns = cached
             .netns
             .into_iter()
             .chain(
@@ -119,8 +125,21 @@ impl PodNetwork {
                     .flat_map(|r| r.interfaces)
                     .filter_map(|i| i.sandbox),
             )
-            .find_map(|path| netns_name(&path))
+            .find_map(|path| netns_name(&path));
+        Some(Attachment {
+            container: cached.container_id,
+            netns,
+        })
     }
+}
+
+/// A pod sandbox's attachment to the pod network, from libcni's cached result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    /// The sandbox's container ID.
+    pub container: String,
+    /// The name of its network namespace under `/run/netns`.
+    pub netns: Option<String>,
 }
 
 /// The name of a namespace that `ip netns` keeps at `path`.
@@ -147,6 +166,8 @@ pub struct Removal {
     pub network: PodNetwork,
     /// The network namespaces its results record; their `veth` links go with them.
     pub namespaces: Vec<String>,
+    /// The sandboxes its results record, whose loopback results go too.
+    pub containers: Vec<String>,
     /// The bridge is removed only when no other distribution is on the host.
     pub bridge: Option<String>,
     /// [`KUBELET_DIR`] is removed only when no other distribution is on the host.
@@ -154,18 +175,33 @@ pub struct Removal {
 }
 
 impl Removal {
-    /// What to remove of `network`, with the namespaces its results record. `alone` is true when
-    /// no other distribution is on the host.
+    /// What to remove of `network`, with the attachments its results record. `alone` is true
+    /// when no other distribution is on the host.
     #[must_use]
-    pub fn new(network: PodNetwork, mut namespaces: Vec<String>, alone: bool) -> Self {
+    pub fn new(network: PodNetwork, attachments: Vec<Attachment>, alone: bool) -> Self {
+        let mut namespaces: Vec<String> =
+            attachments.iter().filter_map(|a| a.netns.clone()).collect();
         namespaces.sort();
         namespaces.dedup();
+        let mut containers: Vec<String> = attachments.into_iter().map(|a| a.container).collect();
+        containers.sort();
+        containers.dedup();
         Self {
             bridge: network.bridge.clone().filter(|_| alone),
             network,
             namespaces,
+            containers,
             kubelet: alone,
         }
+    }
+
+    /// The loopback results of the network's sandboxes, under [`RESULTS_DIR`].
+    #[must_use]
+    pub fn loopback_results(&self) -> Vec<String> {
+        self.containers
+            .iter()
+            .map(|id| format!("{RESULTS_DIR}/{LOOPBACK_NETWORK}-{id}-lo"))
+            .collect()
     }
 
     /// What `uninstall` shows before it asks.
@@ -186,6 +222,11 @@ impl Removal {
             "{} and {RESULTS_DIR}/{name}-*",
             self.network.addresses_dir()
         ));
+        if !self.containers.is_empty() {
+            parts.push(format!(
+                "the loopback results of its pods ({RESULTS_DIR}/{LOOPBACK_NETWORK}-*)"
+            ));
+        }
         if self.kubelet {
             parts.push(KUBELET_DIR.to_owned());
         }
@@ -257,8 +298,11 @@ mod tests {
         assert!(!network.owns_result("kubesolo-network-0f1e2d-eth0"));
         assert!(!network.owns_result("cbr0-0f1e2d-eth0"));
         assert_eq!(
-            network.result_netns(RESULT).as_deref(),
-            Some("cni-5a0c3e1d-7b4f-2c8e-9d6a-1f3b5c7e9a2d")
+            network.result_attachment(RESULT),
+            Some(Attachment {
+                container: "0f1e2d".to_owned(),
+                netns: Some("cni-5a0c3e1d-7b4f-2c8e-9d6a-1f3b5c7e9a2d".to_owned()),
+            })
         );
     }
 
@@ -269,7 +313,7 @@ mod tests {
             "",
         );
         assert_eq!(
-            network().result_netns(&older).as_deref(),
+            network().result_attachment(&older).and_then(|a| a.netns).as_deref(),
             Some("cni-5a0c3e1d-7b4f-2c8e-9d6a-1f3b5c7e9a2d")
         );
     }
@@ -278,17 +322,36 @@ mod tests {
     fn a_result_of_another_network_or_namespace_is_left() {
         let network = network();
         let other = RESULT.replace(r#""networkName":"kubesolo-net""#, r#""networkName":"cbr0""#);
-        assert_eq!(network.result_netns(&other), None);
+        assert_eq!(network.result_attachment(&other), None);
+        let unsafe_id = RESULT.replace(r#""containerId":"0f1e2d""#, r#""containerId":"../x""#);
+        assert_eq!(network.result_attachment(&unsafe_id), None);
         let proc = RESULT.replace("/var/run/netns/", "/proc/4242/ns/");
-        assert_eq!(network.result_netns(&proc), None);
-        assert_eq!(network.result_netns("not json"), None);
+        assert_eq!(network.result_attachment(&proc).unwrap().netns, None);
+        assert_eq!(network.result_attachment("not json"), None);
     }
 
     #[test]
     fn the_bridge_and_the_kubelet_directory_stay_when_another_distribution_is_on_the_host() {
-        let ns = || vec!["cni-b".to_owned(), "cni-a".to_owned(), "cni-b".to_owned()];
-        let alone = Removal::new(network(), ns(), true);
+        let attachment = |id: &str, ns: &str| Attachment {
+            container: id.to_owned(),
+            netns: Some(ns.to_owned()),
+        };
+        let attachments = || {
+            vec![
+                attachment("b1", "cni-b"),
+                attachment("a1", "cni-a"),
+                attachment("b1", "cni-b"),
+            ]
+        };
+        let alone = Removal::new(network(), attachments(), true);
         assert_eq!(alone.namespaces, ["cni-a", "cni-b"]);
+        assert_eq!(
+            alone.loopback_results(),
+            [
+                "/var/lib/cni/results/cni-loopback-a1-lo",
+                "/var/lib/cni/results/cni-loopback-b1-lo"
+            ]
+        );
         assert_eq!(alone.bridge.as_deref(), Some("cni0"));
         assert!(alone.kubelet);
         assert_eq!(
@@ -296,8 +359,8 @@ mod tests {
             "zeatend removes KubeSolo's pod network kubesolo-net, as \
              /etc/cni/net.d/10-bridge.conflist names it: the bridge cni0 and its route; the \
              network namespaces of its pods (cni-a, cni-b) and their veth links; \
-             /var/lib/cni/networks/kubesolo-net and /var/lib/cni/results/kubesolo-net-*; \
-             /var/lib/kubelet."
+             /var/lib/cni/networks/kubesolo-net and /var/lib/cni/results/kubesolo-net-*; the \
+             loopback results of its pods (/var/lib/cni/results/cni-loopback-*); /var/lib/kubelet."
         );
         let shared = Removal::new(network(), Vec::new(), false);
         assert_eq!(shared.bridge, None);

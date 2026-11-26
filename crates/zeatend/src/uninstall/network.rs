@@ -38,15 +38,15 @@ impl PodState {
                 Self::None
             };
         };
-        let namespaces = results(root, &network)
+        let attachments = results(root, &network)
             .iter()
             .filter_map(|file| fs::read_to_string(file).ok())
-            .filter_map(|text| network.result_netns(&text))
+            .filter_map(|text| network.result_attachment(&text))
             .collect();
         let alone = nodes
             .iter()
             .all(|n| n.distribution == Distribution::KubeSolo);
-        Self::Remove(Removal::new(network, namespaces, alone))
+        Self::Remove(Removal::new(network, attachments, alone))
     }
 
     /// The text `uninstall` shows before it asks.
@@ -93,6 +93,9 @@ pub(super) async fn remove(root: &Path, removal: &Removal) -> Result<(), Install
     }
     for file in results(root, &removal.network) {
         remove_tree(&file)?;
+    }
+    for file in removal.loopback_results() {
+        remove_tree(&at(root, &file))?;
     }
     remove_tree(&at(root, &removal.network.addresses_dir()))?;
     for dir in [RESULTS_DIR, zeatend_plan::cni::NETWORKS_DIR, "/var/lib/cni"] {
@@ -146,7 +149,9 @@ mod tests {
         let root = dir.path();
         conflist(root);
         let result = |ns: &str, net: &str| {
-            format!(r#"{{"networkName":"{net}","netns":"/var/run/netns/{ns}"}}"#)
+            format!(
+                r#"{{"containerId":"{ns}-id","networkName":"{net}","netns":"/var/run/netns/{ns}"}}"#
+            )
         };
         write(
             root,
@@ -167,6 +172,7 @@ mod tests {
             panic!("no removal");
         };
         assert_eq!(removal.namespaces, ["cni-a", "cni-b"]);
+        assert_eq!(removal.containers, ["cni-a-id", "cni-b-id"]);
         assert_eq!(removal.bridge.as_deref(), Some("cni0"));
         assert!(removal.kubelet);
 
