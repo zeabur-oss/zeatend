@@ -658,6 +658,7 @@ mod tests {
                 "/var/lib/rancher/k3s/server/manifests/zeabur-cis.yaml",
                 "/etc/systemd/system/k3s.service.d/zeatend-memory.conf",
                 "/var/lib/rancher/k3s/server/manifests/zeatend-servicelb-policy.yaml",
+                "/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-zeatend.conf",
                 "/etc/rancher/k3s/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/k3s/config.yaml.d/20-node-ip.yaml",
                 "/etc/sysctl.d/60-zeatend-inotify.conf",

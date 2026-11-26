@@ -467,6 +467,7 @@ mod tests {
             [
                 "/etc/sysctl.d/60-rke2-cis.conf",
                 "/etc/rancher/rke2/config.yaml",
+                "/var/lib/rancher/rke2/agent/etc/kubelet.conf.d/50-zeatend.conf",
                 "/etc/rancher/rke2/config.yaml.d/10-join.yaml",
                 "/etc/rancher/rke2/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml",

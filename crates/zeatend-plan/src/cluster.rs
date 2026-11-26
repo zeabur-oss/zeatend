@@ -308,6 +308,8 @@ pub struct RancherPaths {
     pub tls_dir: &'static str,
     /// The kernel parameters `protect-kernel-defaults` requires.
     pub sysctl_file: &'static str,
+    /// zeatend's drop-in among the kubelet's configuration files.
+    pub kubelet_drop_in: &'static str,
 }
 
 const K3S_PATHS: RancherPaths = RancherPaths {
@@ -317,6 +319,7 @@ const K3S_PATHS: RancherPaths = RancherPaths {
     kubelet_kubeconfig: "/var/lib/rancher/k3s/agent/kubelet.kubeconfig",
     tls_dir: "/var/lib/rancher/k3s/server/tls",
     sysctl_file: "/etc/sysctl.d/60-k3s-cis.conf",
+    kubelet_drop_in: "/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/50-zeatend.conf",
 };
 
 const RKE2_PATHS: RancherPaths = RancherPaths {
@@ -326,6 +329,7 @@ const RKE2_PATHS: RancherPaths = RancherPaths {
     kubelet_kubeconfig: "/var/lib/rancher/rke2/agent/kubelet.kubeconfig",
     tls_dir: "/var/lib/rancher/rke2/server/tls",
     sysctl_file: "/etc/sysctl.d/60-rke2-cis.conf",
+    kubelet_drop_in: "/var/lib/rancher/rke2/agent/etc/kubelet.conf.d/50-zeatend.conf",
 };
 
 /// containerd's `AppArmor` profile for containers, under the name containerd gives it.
@@ -562,7 +566,19 @@ impl Rancher {
             Self::Rke2 => crate::rke2::host_files(options)?,
         };
         files.push(self.servicelb_policy()?);
+        files.push(self.kubelet_drop_in()?);
         Ok(files)
+    }
+
+    /// The kubelet settings that have no command-line flag, as a drop-in in the directory the
+    /// distribution passes to `--config-dir`
+    /// (<https://docs.k3s.io/installation/configuration#kubelet-configuration-files>).
+    fn kubelet_drop_in(self) -> Result<HostFile, PlanError> {
+        HostFile::yaml(
+            self.paths().kubelet_drop_in.to_owned(),
+            "# Written by zeatend; `zeatend apply` writes it again.\n",
+            &KubeletDropIn::default(),
+        )
     }
 
     /// The `NetworkPolicy` that lets outside traffic into the `ServiceLB` pods, as a manifest the
@@ -607,10 +623,12 @@ impl Rancher {
     ///
     /// When a file cannot be serialised.
     pub fn agent_files(self, tuning: &HostTuning) -> Result<Vec<HostFile>, PlanError> {
-        match self {
-            Self::K3s => crate::k3s::agent_files(tuning),
-            Self::Rke2 => crate::rke2::agent_files(tuning),
-        }
+        let mut files = match self {
+            Self::K3s => crate::k3s::agent_files(tuning)?,
+            Self::Rke2 => crate::rke2::agent_files(tuning)?,
+        };
+        files.push(self.kubelet_drop_in()?);
+        Ok(files)
     }
 
     /// The kernel parameters `protect-kernel-defaults` makes the kubelet check; it refuses to
@@ -713,6 +731,8 @@ impl Rancher {
             format!("{}/config.yaml", layout.config_dir),
             self.node_name_path(),
             self.node_ip_path(),
+            self.paths().kubelet_drop_in.to_owned(),
+            KUBELET_LOGIND_CONF.to_owned(),
             APPARMOR_PROFILE.to_owned(),
             crate::longhorn::MODULES_FILE.to_owned(),
             crate::longhorn::MULTIPATH_FILE.to_owned(),
@@ -1161,6 +1181,41 @@ const KUBELET_ARGS: [&str; 3] = [
      TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305",
 ];
 
+/// The fields zeatend sets of a `KubeletConfiguration`
+/// (<https://kubernetes.io/docs/reference/config-api/kubelet-config.v1beta1/>).
+///
+/// A shutdown of the host stops the pods as a deletion does. The periods are the example of
+/// <https://kubernetes.io/docs/concepts/cluster-administration/node-shutdown/#graceful-node-shutdown>:
+/// 20 seconds for regular pods, then 10 for critical pods. With more than 30 seconds the kubelet
+/// cannot take the logind lock on Ubuntu with the default `unattended-upgrades`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KubeletDropIn {
+    /// `kubelet.config.k8s.io/v1beta1`.
+    pub api_version: String,
+    /// `KubeletConfiguration`.
+    pub kind: String,
+    /// How long a shutdown of the host waits for the pods.
+    pub shutdown_grace_period: String,
+    /// The part of [`Self::shutdown_grace_period`] kept for critical pods.
+    pub shutdown_grace_period_critical_pods: String,
+}
+
+impl Default for KubeletDropIn {
+    fn default() -> Self {
+        Self {
+            api_version: "kubelet.config.k8s.io/v1beta1".to_owned(),
+            kind: "KubeletConfiguration".to_owned(),
+            shutdown_grace_period: "30s".to_owned(),
+            shutdown_grace_period_critical_pods: "10s".to_owned(),
+        }
+    }
+}
+
+/// What the kubelet writes when logind's `InhibitDelayMaxSec` is less than its shutdown period
+/// (`OverrideInhibitDelay` in `pkg/kubelet/nodeshutdown/systemd/inhibit_linux.go`).
+pub const KUBELET_LOGIND_CONF: &str = "/etc/systemd/logind.conf.d/99-kubelet.conf";
+
 /// The disk thresholds K3s sets for the kubelet; the flag replaces the whole map, so they are kept.
 const DISK_EVICTION_HARD: &str = "nodefs.available<5%,imagefs.available<5%";
 
@@ -1189,6 +1244,37 @@ mod tests {
                 "{host}"
             );
             assert_eq!(file.content.contains(line), raised, "{host}");
+        }
+    }
+
+    #[test]
+    fn servers_and_workers_stop_their_pods_when_the_host_shuts_down() {
+        for rancher in Rancher::ALL {
+            let tuning = HostTuning::new(rancher.into(), MemoryTier::Standard);
+            let options = Options {
+                tls_san: Vec::new(),
+                tuning,
+                own_network: false,
+                disable: Vec::new(),
+                api_server: ApiServer::default(),
+            };
+            for files in [
+                rancher.server_files(&options).unwrap(),
+                rancher.agent_files(&tuning).unwrap(),
+            ] {
+                let file = files
+                    .iter()
+                    .find(|f| f.path == rancher.paths().kubelet_drop_in)
+                    .unwrap();
+                assert_eq!(
+                    std::path::Path::new(&file.path).extension(),
+                    Some("conf".as_ref())
+                );
+                let config: Value = serde_saphyr::from_str(&file.content).unwrap();
+                assert_eq!(config["kind"], "KubeletConfiguration");
+                assert_eq!(config["shutdownGracePeriod"], "30s");
+                assert_eq!(config["shutdownGracePeriodCriticalPods"], "10s");
+            }
         }
     }
 
