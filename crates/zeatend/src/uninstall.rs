@@ -19,9 +19,10 @@ use std::path::{Path, PathBuf};
 
 use zeatend_host::{HostError, cmd, facts, files, systemd};
 use zeatend_plan::installer;
+use zeatend_plan::telemetry::{Action, Run};
 use zeatend_plan::uninstall::{self, Node, POD_CIDR, Remove};
 
-use crate::{InstallError, load, output};
+use crate::{InstallError, load, output, telemetry};
 
 /// Whether there is something to remove under `root`.
 fn pending(root: &Path, remove: &Remove) -> bool {
@@ -41,7 +42,11 @@ pub(crate) fn exists(root: &Path, path: &str) -> bool {
     at(root, path).symlink_metadata().is_ok()
 }
 
-pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallError> {
+pub(crate) async fn run(
+    config: &Path,
+    yes: bool,
+    delete_volumes: bool,
+) -> Result<(), InstallError> {
     if systemd::booted() {
         let installs =
             systemd::running_services(&format!("{}*.service", crate::unit::PREFIX)).await?;
@@ -94,8 +99,13 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
     output::line(
         uninstall::describe(&plan, &remove, &volumes, delete_volumes, &kept_configs).trim_end(),
     );
+    let run = plan_event(config, &plan.nodes);
     if !yes {
         confirm()?;
+    }
+    if let Some(run) = run {
+        // Sent before the files are removed, so the installation ID is still there to read.
+        telemetry::started(run);
     }
 
     let name = facts::installed_node_name(root);
@@ -134,6 +144,27 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         output::line(&uninstall::leave_text(name.as_deref()));
     }
     Ok(())
+}
+
+/// Takes the configuration's telemetry key and sends `zeatend_plan`. A configuration that cannot
+/// be read may hold `telemetry: false`, so nothing is sent then.
+fn plan_event(config: &Path, nodes: &[Node]) -> Option<Run> {
+    let (document, _) = load::document_or_defaults(config).ok()?;
+    telemetry::use_config(document.telemetry());
+    telemetry::announce();
+    let run = telemetry_run(nodes)?;
+    telemetry::planned::<(), ()>(run.clone(), &Ok(()));
+    Some(run)
+}
+
+/// The telemetry run of an uninstall of `nodes`: the first node names the distribution and role.
+fn telemetry_run(nodes: &[Node]) -> Option<Run> {
+    let node = nodes.first()?;
+    Some(telemetry::run(
+        node.distribution,
+        node.role,
+        Action::Uninstall,
+    ))
 }
 
 /// Runs each node's own uninstall, then deletes the routes into the pod network that K3s's or
@@ -262,6 +293,16 @@ mod tests {
             volumes::restore(root, &plan.volumes).unwrap();
         }
         remove_empty_dirs(root, &plan.remove).unwrap();
+    }
+
+    #[test]
+    fn an_uninstall_reports_its_node_with_the_uninstall_action() {
+        let run = telemetry_run(&[K3S_SERVER]).unwrap();
+        assert_eq!(run.action, Action::Uninstall);
+        assert_eq!(run.distribution, Distribution::K3s);
+        assert_eq!(run.role, Role::Server);
+        // A host with only zeatend's files has no distribution to report.
+        assert_eq!(telemetry_run(&[]), None);
     }
 
     #[test]

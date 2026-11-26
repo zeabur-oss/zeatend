@@ -118,6 +118,8 @@ pub enum Action {
     Install,
     /// A node that joins a cluster.
     Join,
+    /// A node that leaves: `zeatend uninstall`.
+    Uninstall,
 }
 
 /// The step of `apply` that failed.
@@ -161,7 +163,7 @@ pub struct Run {
     pub distribution: Distribution,
     /// `server` or `worker`; the first node is a server.
     pub role: Role,
-    /// Whether the host installs a cluster or joins one.
+    /// Whether the host installs a cluster, joins one or is uninstalled.
     pub action: Action,
     /// How the person runs zeatend.
     pub via: Via,
@@ -405,6 +407,24 @@ mod tests {
         assert_eq!(properties["command"], "apply");
         assert_eq!(properties["checks"], json!(["disk.low", "swap.on"]));
         assert!(!event.body("key", "id").contains("secret-name"));
+    }
+
+    #[test]
+    fn a_finished_uninstall_sends_the_same_event_with_its_action() {
+        let event = Event::ApplyFinished {
+            run: Run {
+                action: Action::Uninstall,
+                ..run()
+            },
+            result: Outcome::Ok,
+            step: None,
+            seconds: 4,
+        };
+        assert_eq!(event.name(), "zeatend_apply_finished");
+        let properties = properties(&event);
+        assert_eq!(properties["action"], "uninstall");
+        assert_eq!(properties["result"], "ok");
+        assert_eq!(properties["distribution"], "rke2");
     }
 
     #[test]
