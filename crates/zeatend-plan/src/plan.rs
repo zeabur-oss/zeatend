@@ -573,7 +573,7 @@ mod tests {
             .findings
             .into_iter()
             .map(|c| c.finding)
-            .find(|f| matches!(f, Finding::NodeNameLocalhost { .. }))
+            .find(|f| matches!(f, Finding::NodeNameLocalhost))
     }
 
     fn localhost() -> Facts {
