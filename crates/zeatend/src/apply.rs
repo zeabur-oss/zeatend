@@ -642,15 +642,7 @@ pub(crate) async fn install_cluster(
 
     steps.start(Step::PrepareHost)?;
     load_apparmor_profile(install.files.iter()).await?;
-    cmd::run(
-        "sysctl",
-        &[
-            "--quiet",
-            &format!("--load={}", distribution.paths().sysctl_file),
-        ],
-        None,
-    )
-    .await?;
+    load_sysctl(install.files.iter()).await?;
     match distribution {
         Rancher::Rke2 if install.server && !cmd::succeeds("id", &["etcd"]).await => {
             let (program, args) = ETCD_USER;
@@ -729,6 +721,21 @@ pub(crate) async fn load_apparmor_profile<'a>(
 ) -> Result<(), InstallError> {
     if files.any(|f| f.path == APPARMOR_PROFILE) {
         cmd::run("apparmor_parser", &["--replace", APPARMOR_PROFILE], None).await?;
+    }
+    Ok(())
+}
+
+/// Loads the kernel parameters among `files` now; `systemd-sysctl` loads them at boot.
+pub(crate) async fn load_sysctl<'a>(
+    files: impl Iterator<Item = &'a HostFile>,
+) -> Result<(), InstallError> {
+    for file in files.filter(|f| f.path.starts_with("/etc/sysctl.d/")) {
+        cmd::run(
+            "sysctl",
+            &["--quiet", &format!("--load={}", file.path)],
+            None,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -823,6 +830,7 @@ mod tests {
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,
+            inotify_max_user_watches: 0,
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,

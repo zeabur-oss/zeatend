@@ -11,6 +11,7 @@ use zeatend_plan::{installer, k3s, kubesolo};
 
 use crate::HostError;
 
+const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 const RESTRICT_UNCONFINED: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined";
 
 /// Reads the architecture, host name and memory.
@@ -37,6 +38,10 @@ pub async fn read() -> Result<Facts, HostError> {
         kubernetes: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
             .is_ok_and(|v| v.trim() == "1"),
+        inotify_max_user_watches: fs::read_to_string(MAX_USER_WATCHES)
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0),
         k3s_own_network: fs::read_to_string(k3s::CONFIG_FILE)
             .is_ok_and(|config| k3s::runs_own_network(&config)),
         installer_webhook: Path::new(installer::KUBESOLO_WEBHOOK_SCRIPT).exists(),

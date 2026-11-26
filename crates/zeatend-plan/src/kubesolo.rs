@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::cluster::{APPARMOR_PROFILE, Distribution, HostFile, PortUse};
+use crate::cluster::{APPARMOR_PROFILE, Distribution, HostFile, INOTIFY_SYSCTL_FILE, PortUse};
 use crate::config::Role;
 use crate::installer::{self, KUBESOLO_WEBHOOK_SCRIPT};
 use crate::tuning::HostTuning;
@@ -135,6 +135,7 @@ pub fn footprint() -> Vec<Remove> {
         layout.state_dir,
         KUBECONFIG,
         APPARMOR_PROFILE,
+        INOTIFY_SYSCTL_FILE,
         installer::KUBESOLO_STATE_DIR,
         installer::KUBESOLO_KUBECONFIG,
         KUBESOLO_WEBHOOK_SCRIPT,

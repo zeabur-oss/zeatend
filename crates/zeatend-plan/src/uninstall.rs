@@ -454,6 +454,7 @@ mod tests {
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: variant,
+            inotify_max_user_watches: 0,
             k3s_own_network: variant,
             installer_webhook: variant,
             longhorn: Some(crate::longhorn::HostState {

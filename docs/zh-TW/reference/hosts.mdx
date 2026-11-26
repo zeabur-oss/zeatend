@@ -52,6 +52,7 @@ Zeatend 安裝的各個發行版都會依 CIS 基準強化安全性。
 | Zeatend 的設定 | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` | `/etc/zeatend/config.yaml` |
 | 發行版的設定 | `/etc/rancher/k3s/config.yaml` 與 `config.yaml.d/` | `/etc/rancher/rke2/config.yaml` 與 `config.yaml.d/` | `/etc/kubesolo/config.yaml` |
 | CIS 基準的核心參數 | `/etc/sysctl.d/60-k3s-cis.conf` | `/etc/sysctl.d/60-rke2-cis.conf` | 無 |
+| inotify 的使用上限 | `/etc/sysctl.d/60-zeatend-inotify.conf` | `/etc/sysctl.d/60-zeatend-inotify.conf` | `/etc/sysctl.d/60-zeatend-inotify.conf` |
 | 稽核政策（伺服器） | `/etc/rancher/k3s/audit-policy.yaml` | `/etc/rancher/rke2/audit-policy.yaml` | 無 |
 | 使用 `apiServer.authenticationConfig` 時的驗證設定 | `/etc/rancher/k3s/authentication/` | `/etc/rancher/rke2/authentication/` | `/etc/kubesolo/authentication/` |
 | 加入權杖（已加入的節點，權限 0600） | `/etc/rancher/k3s/zeatend-join-token` | `/etc/rancher/rke2/zeatend-join-token` | 無 |

@@ -356,6 +356,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         &direct,
     )?);
     host_files.extend(facts.facts.apparmor_profile());
+    host_files.push(facts.facts.inotify_sysctl());
 
     findings.push(Finding::SameRegion);
 
@@ -423,6 +424,7 @@ mod tests {
                 record: None,
                 kubernetes: None,
                 apparmor_restricts_unconfined: false,
+                inotify_max_user_watches: 0,
                 k3s_own_network: false,
                 installer_webhook: false,
                 longhorn: None,
@@ -468,6 +470,7 @@ mod tests {
                 "/etc/rancher/rke2/config.yaml.d/10-join.yaml",
                 "/etc/rancher/rke2/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml",
+                "/etc/sysctl.d/60-zeatend-inotify.conf",
             ]
         );
         assert_eq!(

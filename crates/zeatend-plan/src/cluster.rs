@@ -347,6 +347,46 @@ pub fn apparmor_profile() -> HostFile {
     }
 }
 
+/// The inotify limits of every node, for every distribution.
+pub const INOTIFY_SYSCTL_FILE: &str = "/etc/sysctl.d/60-zeatend-inotify.conf";
+
+/// The inotify instances of root.
+///
+/// The containers of a node run as root on the host, so they share the one limit of root. The
+/// kernel sets 128 (`inotify_user_setup` in `fs/notify/inotify/inotify_user.c`), and after a reboot
+/// the pods that start last get none.
+pub const INOTIFY_MAX_USER_INSTANCES: u64 = 1024;
+
+/// The least `fs.inotify.max_user_watches` a node gets.
+///
+/// The value kind gives for clusters of many nodes on one host
+/// (<https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files>).
+/// The kernel's default is 1% of memory divided by the cost of a watch, from 8192 to 1048576, so a
+/// host with less memory gets less. The value is a limit: the kernel uses memory only for the
+/// watches that are made.
+pub const INOTIFY_MIN_USER_WATCHES: u64 = 524_288;
+
+/// The inotify limits, given the host's `fs.inotify.max_user_watches`.
+///
+/// A host with more watches keeps its value. A host with exactly the minimum keeps the line too:
+/// that is what the next plan reads after this file is loaded.
+#[must_use]
+pub fn inotify_sysctl(host_watches: u64) -> HostFile {
+    let watches = if host_watches <= INOTIFY_MIN_USER_WATCHES {
+        format!("fs.inotify.max_user_watches={INOTIFY_MIN_USER_WATCHES}\n")
+    } else {
+        String::new()
+    };
+    HostFile {
+        path: INOTIFY_SYSCTL_FILE.to_owned(),
+        mode: 0o644,
+        content: format!(
+            "# Written by zeatend: containers share the inotify limits of root on the host.\n\
+             fs.inotify.max_user_instances={INOTIFY_MAX_USER_INSTANCES}\n{watches}"
+        ),
+    }
+}
+
 /// RKE2 and its control plane at idle, containerd, kubelet and the network included. On a 4 GiB VM
 /// with the default components, `free` showed 2640 MiB used, about 500 of it the components. The
 /// rest is split by the process figures from that VM: kube-apiserver about 980, etcd 97,
@@ -669,6 +709,7 @@ impl Rancher {
             layout.state_dir.to_owned(),
             crate::installer::RANCHER_STATE_DIR.to_owned(),
             self.paths().sysctl_file.to_owned(),
+            INOTIFY_SYSCTL_FILE.to_owned(),
             format!("{}/config.yaml", layout.config_dir),
             self.node_name_path(),
             self.node_ip_path(),
@@ -1136,6 +1177,20 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn inotify_watches_are_raised_to_the_minimum_and_never_lowered() {
+        let line = "fs.inotify.max_user_watches=524288\n";
+        for (host, raised) in [(0, true), (8192, true), (524_288, true), (1_048_576, false)] {
+            let file = inotify_sysctl(host);
+            assert!(
+                file.content
+                    .contains("fs.inotify.max_user_instances=1024\n"),
+                "{host}"
+            );
+            assert_eq!(file.content.contains(line), raised, "{host}");
+        }
+    }
 
     #[test]
     fn a_server_gets_the_servicelb_policy_as_a_manifest() {

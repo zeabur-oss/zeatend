@@ -49,6 +49,10 @@ pub struct Facts {
     /// [`cluster::apparmor_profile`].
     #[serde(skip)]
     pub apparmor_restricts_unconfined: bool,
+    /// `fs.inotify.max_user_watches`; 0 when it could not be read. See
+    /// [`cluster::inotify_sysctl`].
+    #[serde(default)]
+    pub inotify_max_user_watches: u64,
     /// The K3s configuration on the host turns flannel off: an earlier install gave the cluster a
     /// network plugin of its own, which zeatend keeps. See [`crate::k3s::runs_own_network`].
     #[serde(default)]
@@ -75,6 +79,12 @@ impl Facts {
     pub fn apparmor_profile(&self) -> Option<HostFile> {
         self.apparmor_restricts_unconfined
             .then(cluster::apparmor_profile)
+    }
+
+    /// The inotify limits for this host.
+    #[must_use]
+    pub fn inotify_sysctl(&self) -> HostFile {
+        cluster::inotify_sysctl(self.inotify_max_user_watches)
     }
 
     /// What `apply` does for Longhorn, when `storage` asks for it and the host was read.
@@ -310,6 +320,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         &facts.node_ips,
     )?);
     host_files.extend(facts.apparmor_profile());
+    host_files.push(facts.inotify_sysctl());
     upgrade::check_release(
         facts.record.as_ref(),
         config.distribution,
@@ -527,6 +538,7 @@ mod tests {
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,
+            inotify_max_user_watches: 0,
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,
@@ -648,6 +660,7 @@ mod tests {
                 "/var/lib/rancher/k3s/server/manifests/zeatend-servicelb-policy.yaml",
                 "/etc/rancher/k3s/config.yaml.d/15-node-name.yaml",
                 "/etc/rancher/k3s/config.yaml.d/20-node-ip.yaml",
+                "/etc/sysctl.d/60-zeatend-inotify.conf",
             ]
         );
         assert!(
@@ -679,6 +692,27 @@ mod tests {
     }
 
     #[test]
+    fn every_server_gets_the_inotify_limits() {
+        for distribution in ["k3s", "rke2", "kubesolo"] {
+            let plan = plan(
+                &config(&format!("distribution: {distribution}\n")),
+                &facts(),
+            )
+            .unwrap();
+            let file = plan
+                .host_files
+                .iter()
+                .find(|f| f.path == "/etc/sysctl.d/60-zeatend-inotify.conf")
+                .unwrap_or_else(|| panic!("{distribution}"));
+            assert!(
+                file.content
+                    .contains("fs.inotify.max_user_instances=1024\n"),
+                "{distribution}"
+            );
+        }
+    }
+
+    #[test]
     fn kubesolo_gets_its_archive_kubectl_and_configuration() {
         let plan = plan(&config("distribution: kubesolo\n"), &facts()).unwrap();
         let Release::KubeSolo(solo) = &plan.release else {
@@ -689,7 +723,11 @@ mod tests {
         assert_eq!(solo.kubectl.file, "kubectl");
         assert_eq!(
             plan.host_file_paths,
-            [kubesolo::CONFIG_FILE, kubesolo::UNIT_FILE]
+            [
+                kubesolo::CONFIG_FILE,
+                kubesolo::UNIT_FILE,
+                cluster::INOTIFY_SYSCTL_FILE
+            ]
         );
         let small = Facts {
             memory_mib: 1024,
@@ -776,6 +814,7 @@ mod tests {
         let named = Facts {
             node_name: Some("db-1".to_owned()),
             apparmor_restricts_unconfined: true,
+            inotify_max_user_watches: 0,
             ..facts()
         };
         // KubeSolo keeps the host name (node_name::kubesolo).
