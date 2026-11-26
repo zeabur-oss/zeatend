@@ -114,7 +114,7 @@ host:
   tlsSan: [k8s.example.com]
 ```
 
-K3s (`v1.37.2+k3s1`) and RKE2 (`v1.37.2+rke2r1`) install Kubernetes 1.37. KubeSolo `v1.3.0` installs
+K3s (`v1.37.2+k3s1`) and RKE2 (`v1.37.2+rke2r1`) install Kubernetes 1.37. KubeSolo `v1.3.1` installs
 Kubernetes 1.36.6, because KubeSolo has no 1.37 release yet.
 
 K3s and RKE2 deploy their packaged components as upstream ships them, Traefik among them. To run

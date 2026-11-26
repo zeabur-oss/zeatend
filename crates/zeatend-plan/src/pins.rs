@@ -165,7 +165,7 @@ impl ArchFiles {
 /// A `KubeSolo` release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KubeSolo {
-    /// `v1.3.0`.
+    /// `v1.3.1`.
     pub version: &'static str,
     /// The Kubernetes minor it ships.
     pub kubernetes: &'static str,
@@ -180,11 +180,11 @@ pub struct KubeSolo {
 /// minor behind K3s and RKE2. Upstream publishes checksums only on the release page, so the
 /// digests are copied here as for RKE2.
 pub const KUBESOLO: KubeSolo = KubeSolo {
-    version: "v1.3.0",
+    version: "v1.3.1",
     kubernetes: "1.36",
     offline: ArchFiles {
-        amd64: "32956d77c00990676dd9b28b99bbc02f6fb8abdcd410d294aae93a4d8e2c6786",
-        arm64: "3f401b96d5d88f913c3ade2538aa471a73feba1ec5eff484c6d2ed6d930553dd",
+        amd64: "c901645616d0828d477f1beae7962b45537be65abf728a551a9014d59c135d82",
+        arm64: "a987e6b63435910683bb5727289f521f85fc58bee689c97ed0991f14283cdaa1",
     },
 };
 
