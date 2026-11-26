@@ -3,11 +3,9 @@
 //! K3s, RKE2 and `KubeSolo` name a node after the host name unless told otherwise. A host name
 //! that changes, as some hypervisors and clouds do on reboot, registers a second node with the
 //! same address: the first goes `NotReady` and the network plugin refuses the address conflict.
-//! zeatend picks the name once and writes it into the distribution's configuration. `KubeSolo`
-//! keeps the host name; see [`kubesolo`].
+//! zeatend picks the name once and writes it into the distribution's configuration.
 
 use crate::PlanError;
-use crate::cluster::Distribution;
 use crate::finding::Finding;
 use crate::plan::Facts;
 
@@ -120,46 +118,11 @@ pub fn choose(
     Ok(name)
 }
 
-/// The node's name on `KubeSolo`: the host name in lower case, even one made from an address.
-///
-/// `KubeSolo` v1.3.0 gives the kubelet `kubernetes.nodeName` but starts kube-proxy without
-/// `--hostname-override`, so kube-proxy waits for a node named after the host name. Its health
-/// check fails while that node is missing, and `KubeSolo` stops after 10 minutes, before it
-/// deploys `CoreDNS`, and starts again.
-///
-/// # Errors
-///
-/// When the host name is not a node name, or the configuration or an earlier install names the
-/// node otherwise.
-pub fn kubesolo(configured: Option<&str>, facts: &Facts) -> Result<String, PlanError> {
-    let name = facts.hostname.trim().to_ascii_lowercase();
-    if !is_valid(&name) {
-        return Err(PlanError::Config(format!(
-            "KubeSolo names the node after the host name, and `{name}` is not a Kubernetes node \
-             name: set a host name of lowercase letters, digits, `-` and `.`"
-        )));
-    }
-    if let Some(existing) = facts.node_name.as_deref().filter(|n| *n != name) {
-        return Err(PlanError::Config(format!(
-            "this host is node `{existing}`, but its host name is now `{name}`, and KubeSolo \
-             follows the host name: set the host name back to `{existing}`"
-        )));
-    }
-    if let Some(other) = configured.filter(|n| *n != name) {
-        return Err(PlanError::Config(format!(
-            "host.nodeName: KubeSolo names the node after the host name `{name}`, not \
-             `{other}`: remove host.nodeName or set the host name to `{other}`"
-        )));
-    }
-    Ok(name)
-}
-
 /// A note when a new node would be named `localhost`. A node that has the name already keeps
 /// it, so it gets no note.
 #[must_use]
-pub fn localhost_note(name: &str, facts: &Facts, distribution: Distribution) -> Option<Finding> {
-    (name == "localhost" && facts.node_name.is_none())
-        .then_some(Finding::NodeNameLocalhost { distribution })
+pub fn localhost_note(name: &str, facts: &Facts) -> Option<Finding> {
+    (name == "localhost" && facts.node_name.is_none()).then_some(Finding::NodeNameLocalhost)
 }
 
 #[cfg(test)]
@@ -259,25 +222,5 @@ mod tests {
             choose(None, &facts("vps-1", None), &taken).unwrap(),
             "node-a1b2c3-3"
         );
-    }
-
-    #[test]
-    fn kubesolo_names_the_node_after_the_host_name() {
-        assert_eq!(kubesolo(None, &facts("VPS-1", None)).unwrap(), "vps-1");
-        assert_eq!(
-            kubesolo(None, &facts("ip-10-211-55-189", None)).unwrap(),
-            "ip-10-211-55-189"
-        );
-        assert_eq!(
-            kubesolo(Some("vps-1"), &facts("vps-1", Some("vps-1"))).unwrap(),
-            "vps-1"
-        );
-    }
-
-    #[test]
-    fn kubesolo_refuses_a_name_other_than_the_host_name() {
-        assert!(kubesolo(Some("db-1"), &facts("vps-1", None)).is_err());
-        assert!(kubesolo(None, &facts("parallels-vm", Some("vps-1"))).is_err());
-        assert!(kubesolo(None, &facts("vps_1", None)).is_err());
     }
 }

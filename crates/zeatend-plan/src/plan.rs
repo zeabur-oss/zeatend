@@ -257,15 +257,10 @@ impl From<pins::Asset> for Download {
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
     let configured = config.host.node_name.as_deref();
-    let node_name = if config.distribution == Distribution::KubeSolo {
-        node_name::kubesolo(configured, facts)?
-    } else {
-        node_name::choose(configured, facts, &[])?
-    };
-    let mut findings: Vec<Finding> =
-        node_name::localhost_note(&node_name, facts, config.distribution)
-            .into_iter()
-            .collect();
+    let node_name = node_name::choose(configured, facts, &[])?;
+    let mut findings: Vec<Finding> = node_name::localhost_note(&node_name, facts)
+        .into_iter()
+        .collect();
     let memory_tier = MemoryTier::of(facts.memory_mib);
     let tuning = HostTuning::new(config.distribution, memory_tier);
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
@@ -589,38 +584,18 @@ mod tests {
     }
 
     #[test]
-    fn a_k3s_node_named_localhost_gets_a_note() {
-        assert_eq!(
-            localhost_note("{}", &localhost()),
-            Some(Finding::NodeNameLocalhost {
-                distribution: Distribution::K3s
-            })
-        );
-        assert_eq!(
-            localhost_note("host:\n  nodeName: vps-1\n", &localhost()),
-            None
-        );
-        assert_eq!(localhost_note("{}", &facts()), None);
-    }
-
-    #[test]
-    fn an_rke2_node_named_localhost_gets_a_note() {
-        assert_eq!(
-            localhost_note("distribution: rke2\n", &localhost()),
-            Some(Finding::NodeNameLocalhost {
-                distribution: Distribution::Rke2
-            })
-        );
-    }
-
-    #[test]
-    fn a_kubesolo_node_named_localhost_gets_a_note() {
-        assert_eq!(
-            localhost_note("distribution: kubesolo\n", &localhost()),
-            Some(Finding::NodeNameLocalhost {
-                distribution: Distribution::KubeSolo
-            })
-        );
+    fn a_node_named_localhost_gets_a_note() {
+        for distribution in ["k3s", "rke2", "kubesolo"] {
+            let yaml = format!("distribution: {distribution}\n");
+            assert_eq!(
+                localhost_note(&yaml, &localhost()),
+                Some(Finding::NodeNameLocalhost),
+                "{distribution}"
+            );
+            let named = format!("{yaml}host:\n  nodeName: vps-1\n");
+            assert_eq!(localhost_note(&named, &localhost()), None, "{distribution}");
+            assert_eq!(localhost_note(&yaml, &facts()), None, "{distribution}");
+        }
     }
 
     #[test]
@@ -818,13 +793,8 @@ mod tests {
             inotify_max_user_watches: 0,
             ..facts()
         };
-        // KubeSolo keeps the host name (node_name::kubesolo).
-        let solo = Facts {
-            hostname: "db-1".to_owned(),
-            ..named.clone()
-        };
-        for (distribution, facts) in [("k3s", &named), ("rke2", &named), ("kubesolo", &solo)] {
-            let plan = plan(&config(&format!("distribution: {distribution}\n")), facts).unwrap();
+        for distribution in ["k3s", "rke2", "kubesolo"] {
+            let plan = plan(&config(&format!("distribution: {distribution}\n")), &named).unwrap();
             assert_eq!(plan.node_name, "db-1");
             assert!(
                 plan.host_files.contains(&cluster::apparmor_profile()),
