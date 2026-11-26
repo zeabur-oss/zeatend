@@ -60,7 +60,7 @@ fn mount_points(mounts: &str) -> Vec<String> {
 }
 
 /// The mount points in `mounts` (as in `/proc/mounts`) at or under `dir`, deepest first.
-fn mounts_under(mounts: &str, dir: &str) -> Vec<String> {
+pub(super) fn mounts_under(mounts: &str, dir: &str) -> Vec<String> {
     let prefix = format!("{dir}/");
     let mut found: Vec<String> = mount_points(mounts)
         .into_iter()

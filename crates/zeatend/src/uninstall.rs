@@ -10,6 +10,7 @@
 //! node list. The output names the `kubectl delete node` to run on a server.
 
 mod mounts;
+mod network;
 mod stop;
 mod volumes;
 
@@ -51,6 +52,7 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
     }
     let root = Path::new("/");
     let plan = uninstall::plan(uninstall::detect(|path| exists(root, path)));
+    let network = network::PodState::read(root, &plan.nodes);
     let remove: Vec<&str> = plan
         .remove
         .iter()
@@ -94,6 +96,9 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
     output::line(
         uninstall::describe(&plan, &remove, &volumes, delete_volumes, &kept_configs).trim_end(),
     );
+    if let Some(text) = network.describe() {
+        output::line(&format!("\n{text}"));
+    }
     if !yes {
         confirm()?;
     }
@@ -107,6 +112,9 @@ pub(crate) async fn run(yes: bool, delete_volumes: bool) -> Result<(), InstallEr
         volumes::stash(root, &plan.volumes)?;
     }
     uninstall_nodes(root, &plan.nodes).await?;
+    if let network::PodState::Remove(removal) = &network {
+        network::remove(root, removal).await?;
+    }
     output::step("Removing zeatend's files");
     remove_trees(root, &plan.remove)?;
     if delete_volumes {

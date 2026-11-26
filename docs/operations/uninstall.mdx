@@ -52,6 +52,8 @@ These stay:
   /etc/zeatend/config.yaml  (zeatend's configuration)
 ```
 
+On KubeSolo, `uninstall` also removes the pod network that KubeSolo's CNI configuration names: the network namespaces of its pods, the `cni0` bridge and the addresses in `/var/lib/cni`. It keeps the bridge and `/var/lib/kubelet` when K3s or RKE2 is on the same host.
+
 `--yes` removes without the prompt, such as in a script. Without a terminal to ask on, `uninstall` removes nothing until you add `--yes`.
 
 The volumes that stay are the folders of the `local-path` storage class, `/var/lib/zeabur/storage` and `/var/lib/longhorn`, where they exist. Zeatend moves the `local-path` folders out of the way of the distribution's own uninstall and puts them back. To delete them too, add `--delete-volumes`.

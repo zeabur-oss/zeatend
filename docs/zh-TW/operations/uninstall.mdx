@@ -52,6 +52,8 @@ These stay:
   /etc/zeatend/config.yaml  (zeatend's configuration)
 ```
 
+在 KubeSolo 上，`uninstall` 也會移除 KubeSolo 的 CNI 設定所列的網路：各副本的網路命名空間、`cni0` 橋接介面，以及 `/var/lib/cni` 中的位址。同一台主機上也有 K3s 或 RKE2 時，會保留橋接介面和 `/var/lib/kubelet`。
+
 加上 `--yes` 就會略過詢問直接移除，例如在指令碼中使用。沒有終端機可供詢問時，必須加上 `--yes`，`uninstall` 才會移除項目。
 
 如果伺服器上有 `local-path` 儲存類別的資料夾、`/var/lib/zeabur/storage` 和 `/var/lib/longhorn`，這些磁碟區都會保留。執行發行版本身的解除安裝之前，Zeatend 會先移開 `local-path` 資料夾，完成後再移回原處。要一併刪除，請加上 `--delete-volumes`。
