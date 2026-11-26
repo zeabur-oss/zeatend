@@ -11,17 +11,17 @@ Each event carries a random installation ID, the properties below and nothing el
 
 | Event | When |
 |---|---|
-| `zeatend_plan` | `zeatend plan` made a plan, or couldn't. The install screens send it each time they show the Review screen. |
+| `zeatend_plan` | `zeatend plan` made a plan, or couldn't. The install screens send it each time they show the Review screen. `zeatend uninstall` sends it once it knows what to remove. |
 | `zeatend_checks_failed` | Host checks failed in `zeatend plan`, or stopped `zeatend apply`. |
-| `zeatend_apply_started` | `zeatend apply` passed the host checks and starts to change the server. |
-| `zeatend_apply_finished` | That install or join ended. |
+| `zeatend_apply_started` | `zeatend apply` passed the host checks and starts to change the server, or `zeatend uninstall` was confirmed and starts to remove Zeatend's cluster. |
+| `zeatend_apply_finished` | That install, join or uninstall ended. |
 
 | Property | Events | Values |
 |---|---|---|
 | `zeatend_version` | all | Zeatend's version, such as `0.2.0` |
 | `distribution` | all | `k3s`, `rke2` or `kubesolo` |
 | `role` | all | `server` or `worker`. The first node is a `server`. |
-| `action` | all | `install` for the first node, `join` for a node that joins a cluster |
+| `action` | all | `install` for the first node, `join` for a node that joins a cluster, `uninstall` for `zeatend uninstall` |
 | `via` | all | `cli` for `zeatend plan` and `zeatend apply`, `tui` for the install screens |
 | `arch` | all | `amd64` or `arm64` |
 | `result` | `zeatend_plan` | `ok`, or `failed` when no plan could be made |
@@ -29,11 +29,11 @@ Each event carries a random installation ID, the properties below and nothing el
 | `checks` | `zeatend_checks_failed` | The codes of the failed checks, such as `swap.on` or `disk.low`, without their values |
 | `result` | `zeatend_apply_finished` | `ok` or `failed` |
 | `step` | `zeatend_apply_finished` | The step that failed: `longhorn` (preparing the server for Longhorn), `install` (writing the files, downloading and installing the release, starting the service) or `node` (waiting until the node is ready). Empty when it worked. |
-| `seconds` | `zeatend_apply_finished` | Seconds since the install or join started |
+| `seconds` | `zeatend_apply_finished` | Seconds since the install, join or uninstall started |
 | `$process_person_profile` | all | Always `false`: no person profile is made |
 | `$geoip_disable` | all | Always `true`: no location is looked up |
 
-Zeatend makes the installation ID the first time it is about to send an event, never when the program is off. It's a random UUID in `/etc/zeatend/installation-id`, which only root can read, and nothing about the server goes into it. `zeatend uninstall` keeps it with your configuration file. Delete the file to get a new one. This ID isn't the one Zeabur OSS uses, so the two can't be linked.
+Zeatend makes the installation ID the first time it is about to send an event, never when the program is off. It's a random UUID in `/etc/zeatend/installation-id`, which only root can read, and nothing about the server goes into it. `zeatend uninstall` sends its events before it removes anything, and keeps the ID with your configuration file. Delete the file to get a new one. This ID isn't the one Zeabur OSS uses, so the two can't be linked.
 
 When you install with the install screens, or with `zeatend apply` on a server with systemd, the install unit sends the events, so they're sent even when your SSH session ends.
 

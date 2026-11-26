@@ -390,7 +390,7 @@ async fn run(config: &Path, command: &Command) -> Result<(), InstallError> {
         delete_volumes,
     } = *command
     {
-        return uninstall::run(yes, delete_volumes).await;
+        return uninstall::run(config, yes, delete_volumes).await;
     }
     if let Command::Node {
         command: NodeCommand::Add { role, address, ttl },
