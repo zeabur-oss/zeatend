@@ -105,7 +105,7 @@ pub(crate) async fn add(options: &AddOptions) -> Result<(), InstallError> {
     let address = if let Some(address) = &options.address {
         address.clone()
     } else {
-        let name = facts::read()
+        let name = facts::read(None)
             .await?
             .node_name
             .ok_or(InstallError::NoNodeName)?;

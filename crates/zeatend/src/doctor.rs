@@ -43,34 +43,37 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
         output::line(i18n::messages().doctor_needs_root);
         return ExitCode::from(UNKNOWN);
     }
-    let (require_encrypted_disk, storage, network) = match load::document_or_defaults(config) {
-        Ok((Document::Install(config), _)) => (
-            config.host.require_encrypted_disk,
-            config.storage,
-            Network {
-                distribution: config.distribution,
-                version: config.version,
-                mirrors: config.registry_mirrors,
-                hosts: config.registry_hosts,
-                proxy: config.proxy,
-            },
-        ),
-        Ok((Document::Join(config), _)) => (
-            config.host.require_encrypted_disk,
-            config.storage,
-            Network {
-                distribution: config.distribution,
-                version: config.version,
-                mirrors: config.registry_mirrors,
-                hosts: config.registry_hosts,
-                proxy: config.proxy,
-            },
-        ),
-        Err(error) => {
-            output::line(&format!("{config}: {error}", config = config.display()));
-            return ExitCode::from(UNKNOWN);
-        }
-    };
+    let (require_encrypted_disk, storage, interface, network) =
+        match load::document_or_defaults(config) {
+            Ok((Document::Install(config), _)) => (
+                config.host.require_encrypted_disk,
+                config.storage,
+                config.network.interface,
+                Network {
+                    distribution: config.distribution,
+                    version: config.version,
+                    mirrors: config.registry_mirrors,
+                    hosts: config.registry_hosts,
+                    proxy: config.proxy,
+                },
+            ),
+            Ok((Document::Join(config), _)) => (
+                config.host.require_encrypted_disk,
+                config.storage,
+                config.network.interface,
+                Network {
+                    distribution: config.distribution,
+                    version: config.version,
+                    mirrors: config.registry_mirrors,
+                    hosts: config.registry_hosts,
+                    proxy: config.proxy,
+                },
+            ),
+            Err(error) => {
+                output::line(&format!("{config}: {error}", config = config.display()));
+                return ExitCode::from(UNKNOWN);
+            }
+        };
     let root = Path::new("/");
     let installed = uninstall::detect(|path| crate::uninstall::exists(root, path))
         .first()
@@ -83,6 +86,7 @@ pub(crate) async fn run(config: &Path) -> ExitCode {
                 require_encrypted_disk,
                 distribution: node.distribution,
                 role: node.role,
+                interface: interface.as_deref(),
             })
             .await;
             checks.extend(cluster(node).await.into_iter().map(Check::from));

@@ -274,6 +274,7 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::Downloads => "下载",
         Topic::Mirrors => "镜像源",
         Topic::NodeName => "节点名称",
+        Topic::NetworkInterface => "网络接口",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
@@ -396,6 +397,22 @@ fn finding(finding: &Finding) -> String {
         Finding::ForwardDrop => "iptables 的 FORWARD 策略是 DROP，Pod 连不上互联网。找出设置这项\
                                  策略的程序（例如 Docker、ufw）再修改。"
             .to_owned(),
+        Finding::InterfaceOk {
+            interface,
+            addresses,
+        } => format!("节点以 {interface} 上的 {} 注册", and_list(addresses)),
+        Finding::InterfaceMissing { interface } => format!(
+            "这台主机没有 {interface} 这个接口。把 network.interface 设为 `ip link` 列出的接口。"
+        ),
+        Finding::InterfaceNoAddress { interface } => format!(
+            "{interface} 没有节点可以注册的地址：没有 IPv4 地址，也没有非临时的 IPv6 地址。\
+             为它配置地址，或把 network.interface 设为其他接口。"
+        ),
+        Finding::InterfaceTailscale { interface, address } => format!(
+            "{interface} 是 Tailscale 的接口：{address} 在 100.64.0.0/10 之内。Tailscale 会把 \
+             flannel 的流量送回自己的隧道。移除 network.interface，改用 K3s 的 Tailscale 集成，\
+             做法见 https://oss.zeabur.com/zh-CN/docs/zeatend/operations/private-network/ 。"
+        ),
         Finding::NotInstalled => {
             "这台主机没有安装 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安装".to_owned()
         }

@@ -451,6 +451,7 @@ mod tests {
             } else {
                 vec!["10.0.0.5".to_owned()]
             },
+            external_ips: Vec::new(),
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: variant,

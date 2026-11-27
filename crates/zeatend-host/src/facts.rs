@@ -14,16 +14,17 @@ use crate::HostError;
 const MAX_USER_WATCHES: &str = "/proc/sys/fs/inotify/max_user_watches";
 const RESTRICT_UNCONFINED: &str = "/proc/sys/kernel/apparmor_restrict_unprivileged_unconfined";
 
-/// Reads the architecture, host name and memory.
+/// Reads the architecture, host name, memory and the node's addresses: those of `interface`
+/// (`network.interface`), or of the interfaces with default routes.
 ///
 /// # Errors
 ///
 /// When `/proc` cannot be read.
-pub async fn read() -> Result<Facts, HostError> {
+pub async fn read(interface: Option<&str>) -> Result<Facts, HostError> {
     let hostname = fs::read_to_string("/proc/sys/kernel/hostname")
         .map_err(HostError::io("/proc/sys/kernel/hostname"))?;
     let meminfo = fs::read_to_string("/proc/meminfo").map_err(HostError::io("/proc/meminfo"))?;
-    let node_ips = node_ips().await;
+    let NodeAddresses { internal, external } = node_addresses(interface).await;
     Ok(Facts {
         arch: arch(std::env::consts::ARCH).to_owned(),
         hostname: hostname.trim().to_owned(),
@@ -33,7 +34,8 @@ pub async fn read() -> Result<Facts, HostError> {
             what: "/proc/meminfo".to_owned(),
             reason: "no MemTotal".to_owned(),
         })?,
-        node_ips,
+        node_ips: internal,
+        external_ips: external,
         record: None,
         kubernetes: None,
         apparmor_restricts_unconfined: fs::read_to_string(RESTRICT_UNCONFINED)
@@ -136,11 +138,11 @@ fn cert_node_name(pem: &str) -> Option<String> {
 
 /// A global address of the host, as `ip -o addr` shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct HostAddress {
+pub(crate) struct HostAddress {
     /// The interface.
-    interface: String,
+    pub(crate) interface: String,
     /// The address, without its prefix length.
-    address: String,
+    pub(crate) address: String,
     /// An IPv6 privacy address, which the kernel replaces about once a day (RFC 8981).
     temporary: bool,
     /// Past its preferred lifetime, or not yet usable (tentative, failed duplicate detection).
@@ -157,7 +159,7 @@ impl HostAddress {
 }
 
 /// The host's global addresses with their flags.
-async fn host_addresses() -> Vec<HostAddress> {
+pub(crate) async fn host_addresses() -> Vec<HostAddress> {
     parse_addresses(
         &crate::cmd::run("ip", &["-o", "addr", "show", "scope", "global"], None)
             .await
@@ -165,7 +167,7 @@ async fn host_addresses() -> Vec<HostAddress> {
     )
 }
 
-fn parse_addresses(text: &str) -> Vec<HostAddress> {
+pub(crate) fn parse_addresses(text: &str) -> Vec<HostAddress> {
     text.lines()
         .filter_map(|line| {
             let mut words = line.split_whitespace();
@@ -205,23 +207,58 @@ fn route_interface(routes: &str) -> Option<String> {
     words.next().map(str::to_owned)
 }
 
+/// The addresses a node registers with.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct NodeAddresses {
+    /// `node-ip`.
+    internal: Vec<String>,
+    /// `node-external-ip`: the default-route addresses, when the node uses another interface.
+    external: Vec<String>,
+}
+
 /// The addresses the node registers with, never a temporary IPv6 address.
 ///
-/// These are the IPv4 and the IPv6 address of the interfaces with default routes, as K3s and RKE2
-/// pick them themselves. They take the first IPv6 address they find, which is often the temporary
-/// one; it changes within a day, and the node's address in the network policies goes stale. A
-/// configured address comes first, then one from SLAAC (EUI-64 or stable-privacy), which keeps its
-/// value.
-async fn node_ips() -> Vec<String> {
-    choose_node_ips(
+/// Without `interface`, these are the IPv4 and the IPv6 address of the interfaces with default
+/// routes, as K3s and RKE2 pick them themselves. They take the first IPv6 address they find,
+/// which is often the temporary one; it changes within a day, and the node's address in the
+/// network policies goes stale. A configured address comes first, then one from SLAAC (EUI-64 or
+/// stable-privacy), which keeps its value.
+///
+/// With `interface`, the same rule picks its addresses, and the default-route addresses that are
+/// not on it become the external ones, so Ingress and `LoadBalancer` addresses stay public.
+async fn node_addresses(interface: Option<&str>) -> NodeAddresses {
+    choose_addresses(
         &host_addresses().await,
+        interface,
         default_interface("-4").await.as_deref(),
         default_interface("-6").await.as_deref(),
     )
 }
 
-/// [`node_ips`] from what it reads.
-fn choose_node_ips(
+/// [`node_addresses`] from what it reads.
+fn choose_addresses(
+    addresses: &[HostAddress],
+    interface: Option<&str>,
+    v4_interface: Option<&str>,
+    v6_interface: Option<&str>,
+) -> NodeAddresses {
+    let default = choose_node_ips(addresses, v4_interface, v6_interface);
+    let Some(interface) = interface else {
+        return NodeAddresses {
+            internal: default,
+            external: Vec::new(),
+        };
+    };
+    let internal = choose_node_ips(addresses, Some(interface), Some(interface));
+    let external = default
+        .into_iter()
+        .filter(|a| !internal.contains(a))
+        .collect();
+    NodeAddresses { internal, external }
+}
+
+/// The IPv4 and the stable IPv6 address of the interfaces of the two default routes.
+pub(crate) fn choose_node_ips(
     addresses: &[HostAddress],
     v4_interface: Option<&str>,
     v6_interface: Option<&str>,
@@ -365,6 +402,43 @@ mod tests {
         assert_eq!(
             choose_node_ips(&only_temporary, Some("enp0s5"), Some("enp0s5")),
             ["192.0.2.121"]
+        );
+    }
+
+    #[test]
+    fn the_configured_interface_gives_the_node_addresses_and_the_default_route_the_external_ones() {
+        let addresses = parse_addresses(
+            "2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global eth0\\       valid_lft forever preferred_lft forever\n\
+             3: eth1    inet 10.0.0.7/24 brd 10.0.0.255 scope global eth1\\       valid_lft forever preferred_lft forever\n\
+             3: eth1    inet6 fd00::aa/64 scope global temporary dynamic \\       valid_lft 1sec preferred_lft 1sec\n\
+             3: eth1    inet6 fd00::7/64 scope global \\       valid_lft forever preferred_lft forever\n\
+             2: eth0    inet6 2001:db8::7/64 scope global \\       valid_lft forever preferred_lft forever\n",
+        );
+        assert_eq!(
+            choose_addresses(&addresses, Some("eth1"), Some("eth0"), Some("eth0")),
+            NodeAddresses {
+                internal: vec!["10.0.0.7".to_owned(), "fd00::7".to_owned()],
+                external: vec!["203.0.113.7".to_owned(), "2001:db8::7".to_owned()],
+            }
+        );
+        // The default route on the interface itself: nothing is external.
+        assert_eq!(
+            choose_addresses(&addresses, Some("eth1"), Some("eth1"), None),
+            NodeAddresses {
+                internal: vec!["10.0.0.7".to_owned(), "fd00::7".to_owned()],
+                external: Vec::new(),
+            }
+        );
+        assert_eq!(
+            choose_addresses(&addresses, None, Some("eth0"), Some("eth0")),
+            NodeAddresses {
+                internal: vec!["203.0.113.7".to_owned(), "2001:db8::7".to_owned()],
+                external: Vec::new(),
+            }
+        );
+        assert_eq!(
+            choose_addresses(&addresses, Some("eth9"), Some("eth0"), None).internal,
+            Vec::<String>::new()
         );
     }
 

@@ -299,6 +299,7 @@ pub(super) const fn topic(topic: Topic) -> &'static str {
         Topic::Downloads => "downloads",
         Topic::Mirrors => "registry mirrors",
         Topic::NodeName => "node name",
+        Topic::NetworkInterface => "network interface",
     }
 }
 
@@ -410,6 +411,28 @@ pub(crate) fn finding(finding: &Finding) -> String {
         Finding::ForwardDrop => "the iptables FORWARD policy is DROP, so Pods cannot reach the \
                                  internet. Find what sets it (Docker, ufw) and change it."
             .to_owned(),
+        Finding::InterfaceOk {
+            interface,
+            addresses,
+        } => format!(
+            "the node registers with {} on {interface}",
+            and_list(addresses)
+        ),
+        Finding::InterfaceMissing { interface } => format!(
+            "This host has no interface {interface}. Set network.interface to an interface that \
+             `ip link` lists."
+        ),
+        Finding::InterfaceNoAddress { interface } => format!(
+            "{interface} has no address the node can register with: no IPv4 address, and no IPv6 \
+             address that is not temporary. Give it an address, or set network.interface to \
+             another interface."
+        ),
+        Finding::InterfaceTailscale { interface, address } => format!(
+            "{interface} is a Tailscale interface: {address} is in 100.64.0.0/10. Tailscale sends \
+             flannel's traffic back into its own tunnel. Remove network.interface and use K3s's \
+             Tailscale integration, as \
+             https://oss.zeabur.com/docs/zeatend/operations/private-network/#tailscale says."
+        ),
         Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
                                   with `sudo zeatend apply`"
             .to_owned(),

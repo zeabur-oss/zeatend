@@ -29,6 +29,7 @@ fn facts() -> Facts {
         host_hex: "3fa2c1".to_owned(),
         memory_mib: 8 * 1024,
         node_ips: vec!["10.0.0.5".to_owned()],
+        external_ips: Vec::new(),
         record: None,
         kubernetes: None,
         apparmor_restricts_unconfined: false,

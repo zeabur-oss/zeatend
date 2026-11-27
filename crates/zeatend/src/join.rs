@@ -50,7 +50,7 @@ async fn read_facts(config: &JoinConfig, token: &str) -> Result<JoinFacts, Insta
         ports.push((p, open));
     }
     let unit = distribution.distribution().layout().unit(config.join.role);
-    let mut facts = facts::read().await?;
+    let mut facts = facts::read(config.network.interface.as_deref()).await?;
     if config.storage.longhorn {
         facts.longhorn = Some(longhorn::read().await);
     }
@@ -111,6 +111,7 @@ pub(crate) async fn show_plan(config: &JoinConfig, json: bool) -> Result<(), Ins
         config.distribution,
         plan.role,
         config.host.require_encrypted_disk,
+        config.network.interface.as_deref(),
     )
     .await;
     if !failed.is_empty() {
@@ -139,6 +140,7 @@ pub(crate) async fn apply(
         config.distribution,
         plan.role,
         config.host.require_encrypted_disk,
+        config.network.interface.as_deref(),
         &run,
     )
     .await?;

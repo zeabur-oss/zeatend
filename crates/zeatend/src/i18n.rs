@@ -648,6 +648,16 @@ mod tests {
                 found: vec!["docker.service".to_owned()],
             },
             Finding::ForwardDrop,
+            Finding::InterfaceMissing {
+                interface: "eth1".to_owned(),
+            },
+            Finding::InterfaceNoAddress {
+                interface: "eth1".to_owned(),
+            },
+            Finding::InterfaceTailscale {
+                interface: "tailscale0".to_owned(),
+                address: "100.101.102.103".to_owned(),
+            },
             Finding::RecordMissing {
                 path: "/var/lib/zeatend".to_owned(),
             },

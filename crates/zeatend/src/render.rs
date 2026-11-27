@@ -5,7 +5,7 @@ use zeatend_plan::config::Role;
 use zeatend_plan::finding::{Check, Status};
 use zeatend_plan::join::{self, JoinPlan};
 use zeatend_plan::longhorn::{ISCSID, MODULES, MODULES_FILE, MULTIPATH_FILE, Prep, Step};
-use zeatend_plan::plan::{Plan, Release};
+use zeatend_plan::plan::{Facts, Plan, Release};
 use zeatend_plan::record::Changes;
 
 use crate::i18n;
@@ -45,7 +45,7 @@ pub(crate) fn plan(plan: &Plan) -> String {
         }
     };
     node_name(&mut s, &plan.node_name);
-    node_addresses(&mut s, &facts.node_ips);
+    node_addresses(&mut s, facts);
     push(&mut s, "");
     s.push_str(&changes(plan.changes.as_ref(), unit));
     files(&mut s, &plan.host_file_paths, None);
@@ -144,7 +144,7 @@ pub(crate) fn join_plan(plan: &JoinPlan) -> String {
         ),
     );
     node_name(&mut s, &plan.node_name);
-    node_addresses(&mut s, &plan.facts.node_ips);
+    node_addresses(&mut s, &plan.facts);
     push(&mut s, "");
     let token = format!(
         "{} (the token, mode 0600)",
@@ -274,7 +274,8 @@ fn node_name(s: &mut String, name: &str) {
 }
 
 /// The addresses the node registers with.
-fn node_addresses(s: &mut String, addresses: &[String]) {
+fn node_addresses(s: &mut String, facts: &Facts) {
+    let addresses = &facts.node_ips;
     let text = if addresses.is_empty() {
         "chosen by Kubernetes: this host's addresses could not be read".to_owned()
     } else {
@@ -284,6 +285,12 @@ fn node_addresses(s: &mut String, addresses: &[String]) {
         )
     };
     push(s, &format!("Node addresses   {text}"));
+    if !facts.external_ips.is_empty() {
+        push(
+            s,
+            &format!("External         {}", facts.external_ips.join(", ")),
+        );
+    }
 }
 
 fn push(s: &mut String, line: &str) {
@@ -318,6 +325,7 @@ mod tests {
             host_hex: "a1b2c3".to_owned(),
             memory_mib: 8192,
             node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
+            external_ips: Vec::new(),
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,
