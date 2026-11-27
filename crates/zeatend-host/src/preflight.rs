@@ -2,7 +2,7 @@
 //! The checks produce data; an interface words each [`Finding`].
 
 use std::fs;
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, TcpListener};
 use std::path::Path;
 
 use zeatend_plan::cluster::{Distribution, PortUse};
@@ -10,6 +10,7 @@ use zeatend_plan::config::Role;
 use zeatend_plan::finding::{BusyPort, Check, Finding, Leftover};
 use zeatend_plan::kubesolo;
 
+use crate::facts::{self, HostAddress};
 use crate::{cmd, systemd};
 
 /// Whether a disk is encrypted, as far as the block devices tell.
@@ -25,7 +26,7 @@ pub enum Encryption {
 
 /// What the checks need to know.
 #[derive(Debug, Clone, Copy)]
-pub struct Options {
+pub struct Options<'a> {
     /// The cluster from an earlier `apply` is running, so its ports are expected to be in use.
     pub cluster_running: bool,
     /// Fail on a disk that is not encrypted.
@@ -34,6 +35,8 @@ pub struct Options {
     pub distribution: Distribution,
     /// A server also listens on the API and join ports. `KubeSolo` is a server.
     pub role: Role,
+    /// The interface the node uses, `network.interface`.
+    pub interface: Option<&'a str>,
 }
 
 /// Where a node of `distribution` keeps secrets or data: the root file system, the data
@@ -75,7 +78,7 @@ const DISK_ROOMY_GIB: u64 = 30;
 
 /// Runs every check.
 #[must_use]
-pub async fn run(options: Options) -> Vec<Check> {
+pub async fn run(options: Options<'_>) -> Vec<Check> {
     let mut checks = vec![
         root(),
         systemd(),
@@ -89,6 +92,9 @@ pub async fn run(options: Options) -> Vec<Check> {
     }
     if !options.cluster_running {
         checks.push(ports(options.distribution, options.role));
+    }
+    if let Some(interface) = options.interface {
+        checks.push(network_interface(interface).await);
     }
     checks.push(disk_space(options.distribution.layout().data_dir).await);
     checks.push(encryption(options.distribution, options.require_encrypted_disk).await);
@@ -218,6 +224,54 @@ fn docker_check(found: Vec<String>, iptables: &str) -> Finding {
         Finding::ForwardDrop
     } else {
         Finding::DockerNone
+    }
+}
+
+/// Tailscale's addresses: the shared address space of RFC 6598, `100.64.0.0/10`
+/// (<https://tailscale.com/kb/1015/100.x-addresses>).
+const TAILSCALE: (Ipv4Addr, u32) = (Ipv4Addr::new(100, 64, 0, 0), 10);
+
+/// The interface of `network.interface`: it exists, has an address the node registers with, and
+/// is not Tailscale's.
+async fn network_interface(interface: &str) -> Check {
+    let exists = Path::new("/sys/class/net").join(interface).exists();
+    interface_check(interface, exists, &facts::host_addresses().await).into()
+}
+
+/// [`network_interface`] from what it reads.
+///
+/// Tailscale offers every local address as a direct endpoint, `flannel.1`'s too, so flannel's
+/// VXLAN on `tailscale0` sends its packets back into the tunnel. K3s's own Tailscale
+/// integration, `vpn-auth`, is the way to run a cluster over Tailscale.
+fn interface_check(interface: &str, exists: bool, addresses: &[HostAddress]) -> Finding {
+    let name = interface.to_owned();
+    if !exists {
+        return Finding::InterfaceMissing { interface: name };
+    }
+    let (net, bits) = TAILSCALE;
+    let mask = u32::MAX << (32 - bits);
+    let tailscale = addresses
+        .iter()
+        .filter(|a| a.interface == interface)
+        .find(|a| {
+            a.address
+                .parse::<Ipv4Addr>()
+                .is_ok_and(|ip| u32::from(ip) & mask == u32::from(net))
+        });
+    if let Some(found) = tailscale {
+        return Finding::InterfaceTailscale {
+            interface: name,
+            address: found.address.clone(),
+        };
+    }
+    let chosen = facts::choose_node_ips(addresses, Some(interface), Some(interface));
+    if chosen.is_empty() {
+        Finding::InterfaceNoAddress { interface: name }
+    } else {
+        Finding::InterfaceOk {
+            interface: name,
+            addresses: chosen,
+        }
     }
 }
 
@@ -380,6 +434,65 @@ mod tests {
     use zeatend_plan::finding::Status;
 
     use super::*;
+
+    #[test]
+    fn the_interface_must_exist_hold_an_address_and_not_be_tailscale() {
+        let addresses = facts::parse_addresses(
+            "3: eth1    inet 10.0.0.7/24 brd 10.0.0.255 scope global eth1\\       valid_lft forever preferred_lft forever\n\
+             4: tailscale0    inet 100.101.102.103/32 scope global tailscale0\\       valid_lft forever preferred_lft forever\n\
+             5: eth2    inet6 fd00::aa/64 scope global temporary dynamic \\       valid_lft 1sec preferred_lft 1sec\n",
+        );
+        let ok = interface_check("eth1", true, &addresses);
+        assert_eq!(
+            ok,
+            Finding::InterfaceOk {
+                interface: "eth1".to_owned(),
+                addresses: vec!["10.0.0.7".to_owned()],
+            }
+        );
+        assert_eq!(ok.status(), Status::Pass);
+        for (interface, exists, refused) in [
+            (
+                "eth9",
+                false,
+                Finding::InterfaceMissing {
+                    interface: "eth9".to_owned(),
+                },
+            ),
+            // Only a temporary IPv6 address, which the node does not register with.
+            (
+                "eth2",
+                true,
+                Finding::InterfaceNoAddress {
+                    interface: "eth2".to_owned(),
+                },
+            ),
+            (
+                "eth3",
+                true,
+                Finding::InterfaceNoAddress {
+                    interface: "eth3".to_owned(),
+                },
+            ),
+            (
+                "tailscale0",
+                true,
+                Finding::InterfaceTailscale {
+                    interface: "tailscale0".to_owned(),
+                    address: "100.101.102.103".to_owned(),
+                },
+            ),
+        ] {
+            let found = interface_check(interface, exists, &addresses);
+            assert_eq!(found, refused);
+            assert_eq!(found.status(), Status::Fail, "{interface}");
+        }
+        // Just outside 100.64.0.0/10.
+        let near = facts::parse_addresses(
+            "3: wg0    inet 100.128.0.1/24 scope global wg0\\       valid_lft forever preferred_lft forever\n",
+        );
+        assert_eq!(interface_check("wg0", true, &near).status(), Status::Pass);
+    }
 
     #[test]
     fn docker_or_a_dropping_forward_policy_stops_the_install() {

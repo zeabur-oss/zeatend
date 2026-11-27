@@ -684,21 +684,95 @@ impl Rancher {
     }
 
     /// The drop-in naming the addresses the node registers with, so it does not pick a temporary
-    /// IPv6 address. `None` when the host's addresses could not be read.
+    /// IPv6 address. With `interface` (`network.interface`), the node registers with its
+    /// addresses (`internal`), the default-route addresses that are on another interface are its
+    /// external ones (`external`), and K3s runs flannel over it
+    /// (`flannel-iface`, <https://docs.k3s.io/cli/server>). `None` when there is nothing to write: no
+    /// interface, and the host's addresses could not be read.
     ///
     /// # Errors
     ///
     /// When the file cannot be serialised.
-    pub fn node_ip_file(self, addresses: &[String]) -> Result<Option<HostFile>, PlanError> {
-        if addresses.is_empty() {
+    pub fn node_ip_file(
+        self,
+        interface: Option<&str>,
+        internal: &[String],
+        external: &[String],
+    ) -> Result<Option<HostFile>, PlanError> {
+        if interface.is_none() && internal.is_empty() {
             return Ok(None);
         }
         RancherConfig {
-            node_ip: addresses.to_vec(),
+            node_ip: internal.to_vec(),
+            node_external_ip: external.to_vec(),
+            flannel_iface: interface.filter(|_| self == Self::K3s).map(str::to_owned),
             ..RancherConfig::default()
         }
         .file(self.node_ip_path())
         .map(Some)
+    }
+
+    /// On an RKE2 server, the chart values that run Canal's flannel over `interface`, as a
+    /// manifest the server's deploy controller applies
+    /// (<https://docs.rke2.io/networking/basic_network_options>). The value holds for every node
+    /// of the cluster: the chart passes it to the Canal `DaemonSet` (`FLANNELD_IFACE`). `None` on
+    /// K3s, which takes the interface per node, and without an interface.
+    ///
+    /// Without an interface on a server where zeatend wrote the manifest before (`written`), the
+    /// manifest stays with a blank interface, which is the default route. The deploy controller
+    /// does not delete a resource when its manifest goes
+    /// (<https://docs.rke2.io/install/packaged_components>), so a removed manifest leaves the old
+    /// interface in the cluster.
+    ///
+    /// # Errors
+    ///
+    /// When the manifest cannot be serialised.
+    pub fn canal_config(
+        self,
+        interface: Option<&str>,
+        written: bool,
+    ) -> Result<Option<HostFile>, PlanError> {
+        #[derive(Serialize)]
+        struct Values<'a> {
+            flannel: Flannel<'a>,
+        }
+        #[derive(Serialize)]
+        struct Flannel<'a> {
+            iface: &'a str,
+        }
+        if self != Self::Rke2 {
+            return Ok(None);
+        }
+        let Some(interface) = interface.or_else(|| written.then_some("")) else {
+            return Ok(None);
+        };
+        let values = serde_saphyr::to_string(&Values {
+            flannel: Flannel { iface: interface },
+        })
+        .map_err(|e| PlanError::HostFile {
+            path: Self::canal_config_path(),
+            reason: e.to_string(),
+        })?;
+        let config = HelmChartConfig {
+            api_version: "helm.cattle.io/v1",
+            kind: "HelmChartConfig",
+            metadata: managed("rke2-canal", "kube-system"),
+            spec: HelmChartConfigSpec {
+                values_content: values,
+            },
+        };
+        manifest(
+            Self::canal_config_path(),
+            crate::registry::HEADER,
+            &[config],
+        )
+        .map(Some)
+    }
+
+    /// Where [`Self::canal_config`] goes.
+    #[must_use]
+    pub fn canal_config_path() -> String {
+        format!("{}/zeatend-canal-config.yaml", crate::rke2::MANIFESTS_DIR)
     }
 
     /// Where [`Self::node_ip_file`] goes.
@@ -875,6 +949,10 @@ pub(crate) struct RancherConfig {
     pub(crate) node_name: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) node_ip: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) node_external_ip: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) flannel_iface: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) profile: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -924,6 +1002,22 @@ impl RancherConfig {
     pub(crate) fn file(&self, path: String) -> Result<HostFile, PlanError> {
         HostFile::yaml(path, HEADER, self)
     }
+}
+
+/// A `HelmChartConfig` of the Helm controller in K3s and RKE2: values for a packaged chart.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HelmChartConfig {
+    api_version: &'static str,
+    kind: &'static str,
+    metadata: ObjectMeta,
+    spec: HelmChartConfigSpec,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HelmChartConfigSpec {
+    values_content: String,
 }
 
 /// The list settings zeatend reads from the K3s or RKE2 configuration of an earlier install.
@@ -1382,13 +1476,97 @@ mod tests {
             assert_eq!(join.mode, 0o600);
             assert!(join.path.starts_with(d.distribution().layout().config_dir));
             let ip = d
-                .node_ip_file(&["10.0.0.6".to_owned(), "fd00::6".to_owned()])
+                .node_ip_file(None, &["10.0.0.6".to_owned(), "fd00::6".to_owned()], &[])
                 .unwrap()
                 .unwrap();
             let value: Value = serde_saphyr::from_str(&ip.content).unwrap();
-            assert_eq!(value["node-ip"], serde_json::json!(["10.0.0.6", "fd00::6"]));
-            assert_eq!(d.node_ip_file(&[]).unwrap(), None);
+            assert_eq!(
+                value,
+                serde_json::json!({"node-ip": ["10.0.0.6", "fd00::6"]})
+            );
+            assert_eq!(d.node_ip_file(None, &[], &[]).unwrap(), None);
         }
+    }
+
+    #[test]
+    fn the_interface_carries_the_node_addresses_and_the_pod_network() {
+        let internal = ["10.0.0.6".to_owned()];
+        let external = ["203.0.113.6".to_owned()];
+        let k3s = Rancher::K3s
+            .node_ip_file(Some("eth1"), &internal, &external)
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_saphyr::from_str(&k3s.content).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "node-ip": ["10.0.0.6"],
+                "node-external-ip": ["203.0.113.6"],
+                "flannel-iface": "eth1",
+            })
+        );
+        // RKE2 sets Canal's interface for the whole cluster, in a manifest of the server.
+        let rke2 = Rancher::Rke2
+            .node_ip_file(Some("eth1"), &internal, &external)
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_saphyr::from_str(&rke2.content).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"node-ip": ["10.0.0.6"], "node-external-ip": ["203.0.113.6"]})
+        );
+        let canal = Rancher::Rke2
+            .canal_config(Some("eth1"), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            canal.path,
+            "/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml"
+        );
+        assert!(canal.content.starts_with(crate::registry::HEADER));
+        let documents: Vec<Value> = canal
+            .content
+            .split("---\n")
+            .skip(1)
+            .map(|d| serde_json::from_str(d).unwrap())
+            .collect();
+        assert_eq!(
+            documents,
+            [serde_json::json!({
+                "apiVersion": "helm.cattle.io/v1",
+                "kind": "HelmChartConfig",
+                "metadata": {
+                    "name": "rke2-canal",
+                    "namespace": "kube-system",
+                    "labels": {"app.kubernetes.io/managed-by": "zeatend"},
+                },
+                "spec": {"valuesContent": "flannel:\n  iface: eth1\n"},
+            })]
+        );
+        assert_eq!(
+            Rancher::K3s.canal_config(Some("eth1"), false).unwrap(),
+            None
+        );
+        assert_eq!(Rancher::K3s.canal_config(None, true).unwrap(), None);
+        assert_eq!(Rancher::Rke2.canal_config(None, false).unwrap(), None);
+        // Once written, the manifest stays and sets the default route back.
+        let reset = Rancher::Rke2.canal_config(None, true).unwrap().unwrap();
+        assert!(
+            reset
+                .content
+                .contains(r#""valuesContent":"flannel:\n  iface: \"\"\n""#),
+            "{}",
+            reset.content
+        );
+        // An interface without a readable address still writes the CNI interface.
+        assert!(
+            Rancher::K3s
+                .node_ip_file(Some("eth1"), &[], &[])
+                .unwrap()
+                .unwrap()
+                .content
+                .contains("flannel-iface: eth1")
+        );
     }
 
     #[test]

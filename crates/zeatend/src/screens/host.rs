@@ -52,7 +52,7 @@ impl Host {
 ///
 /// When `/proc` cannot be read.
 pub(crate) async fn read(require_encrypted_disk: bool) -> Result<Host, HostError> {
-    let facts = facts::read().await?;
+    let facts = facts::read(None).await?;
     let addresses = facts::addresses().await;
     let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
     let (kubesolo, k3s, rke2) = tokio::join!(
@@ -81,6 +81,7 @@ async fn checks(distribution: Distribution, require_encrypted_disk: bool) -> Vec
         require_encrypted_disk,
         distribution,
         role: Role::Server,
+        interface: None,
     })
     .await
 }

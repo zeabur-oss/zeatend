@@ -49,12 +49,62 @@ pub struct Config {
     /// The proxy for zeatend's downloads and the node's service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<Proxy>,
+    /// The network the node uses. K3s and RKE2 only.
+    #[serde(default, skip_serializing_if = "Network::is_empty")]
+    pub network: Network,
     /// Host settings.
     #[serde(default)]
     pub host: Host,
     /// `false` turns off the experience program (docs/reference/telemetry.mdx).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub telemetry: Option<bool>,
+}
+
+/// The network a node uses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Network {
+    /// The interface, such as `eth1` on a private network. The node registers with its
+    /// addresses and the pod network runs over it; the default-route addresses become the
+    /// node's external addresses. Absent: the interfaces with default routes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interface: Option<String>,
+}
+
+impl Network {
+    /// Nothing is set.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.interface.is_none()
+    }
+
+    /// The interface is a name Linux takes: 1 to 15 bytes, none of them `/`, `:`, white space or
+    /// a control character, and not `.` or `..`. `KubeSolo` takes none.
+    fn check(&self, distribution: Distribution) -> Result<(), PlanError> {
+        let Some(name) = self.interface.as_deref() else {
+            return Ok(());
+        };
+        if distribution == Distribution::KubeSolo {
+            return Err(PlanError::Config(
+                "network.interface: KubeSolo runs one node and has no network between nodes; \
+                 remove it"
+                    .to_owned(),
+            ));
+        }
+        let valid = (1..=15).contains(&name.len())
+            && name != "."
+            && name != ".."
+            && !name
+                .bytes()
+                .any(|b| b == b'/' || b == b':' || b.is_ascii_whitespace() || b.is_ascii_control());
+        if valid {
+            Ok(())
+        } else {
+            Err(PlanError::Config(format!(
+                "network.interface: `{name}` is not an interface name such as eth1"
+            )))
+        }
+    }
 }
 
 /// A packaged component of K3s or RKE2 that the configuration can turn off.
@@ -195,6 +245,9 @@ pub struct JoinConfig {
     /// The proxy for zeatend's downloads and the node's service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxy: Option<Proxy>,
+    /// The network the node uses.
+    #[serde(default, skip_serializing_if = "Network::is_empty")]
+    pub network: Network,
     /// Host settings. `tlsSan` applies to servers only.
     #[serde(default)]
     pub host: Host,
@@ -346,6 +399,7 @@ impl JoinConfig {
         }
         check_disable(self.distribution, &self.disable)?;
         self.api_server.check()?;
+        self.network.check(self.distribution)?;
         registry::check(
             &self.registry_mirrors,
             &self.registry_hosts,
@@ -487,6 +541,7 @@ impl Config {
             ));
         }
         self.api_server.check()?;
+        self.network.check(self.distribution)?;
         registry::check(
             &self.registry_mirrors,
             &self.registry_hosts,
@@ -509,6 +564,41 @@ mod tests {
         assert_eq!(solo.distribution, Distribution::KubeSolo);
         assert!(Config::parse("typo: 1\n").is_err());
         assert!(Config::parse("use: personal\n").is_err());
+    }
+
+    #[test]
+    fn network_interface_names_an_interface_of_k3s_or_rke2() {
+        for distribution in ["k3s", "rke2"] {
+            let c = Config::parse(&format!(
+                "distribution: {distribution}\nnetwork:\n  interface: eth1\n"
+            ))
+            .unwrap();
+            assert_eq!(c.network.interface.as_deref(), Some("eth1"));
+        }
+        let solo = Config::parse("distribution: kubesolo\nnetwork: {interface: eth1}\n")
+            .unwrap_err()
+            .to_string();
+        assert!(solo.contains("KubeSolo runs one node"), "{solo}");
+        for bad in [
+            "\"\"",
+            "../etc",
+            "eth0:1",
+            "a-name-of-16-bytes",
+            "\"..\"",
+            "\"e th\"",
+        ] {
+            let error = Config::parse(&format!("network: {{interface: {bad}}}\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("is not an interface name"), "{bad}: {error}");
+        }
+        assert!(Config::parse("network: {iface: eth1}\n").is_err());
+        let join = JoinConfig::parse(
+            "join:\n  server: https://10.0.0.5:6443\n  tokenFile: /t\nnetwork: {interface: \"a/b\"}\n",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(join.contains("network.interface"), "{join}");
     }
 
     #[test]

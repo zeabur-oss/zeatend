@@ -37,6 +37,7 @@ apiServer:
 | `proxy.noProxy` | 无 | 除了集群需要的主机和网段，节点还要直接连接的主机和网段。 |
 | `registryMirrors` | 无 | 为每个镜像仓库（例如 `docker.io`，或代表其他所有仓库的 `"*"`）列出镜像源。containerd 依次尝试，最后才试镜像仓库本身。 |
 | `registryHosts` | 无 | 按 `<host>` 或 `<host>:<port>` 设置镜像源或镜像仓库的 `caFile`、`username` 和 `passwordFile`。 |
+| `network.interface` | 默认路由所在的接口 | 节点注册时使用、Pod 网络经过的接口，例如私有网络上的 `eth1`。参见[使用私有网络](../operations/private-network.mdx)。仅适用于 K3s 和 RKE2。 |
 | `host.tlsSan` | 无 | 为 API 服务器证书添加的名称和地址，例如 DNS 名称。 |
 | `host.nodeName` | 主机名 | 节点在 Kubernetes 中的名称。 |
 | `host.requireEncryptedDisk` | `false` | 集群数据不在加密磁盘上时，停止安装。 |
@@ -86,6 +87,7 @@ join:
 | `join.tokenFile` | 存放加入令牌的文件，权限为 0600。用此设置替代 `join.token`。 |
 | `join.nodeNames` | 集群已有节点的名称，当前节点会避开这些名称。 |
 | `disable`、`apiServer` | 仅适用于 RKE2 服务器节点。每台服务器都会部署内置组件并运行 API 服务器，因此所有服务器必须使用相同的值。 |
+| `network` | 与第一台服务器相同。RKE2 的每个节点要配置相同的接口。`zeatend node add` 不会输出这一段。 |
 | `host` | 与第一台服务器相同。`tlsSan` 仅适用于服务器节点。 |
 | `storage` | `zeatend node add` 会开启 `storage.longhorn`。 |
 | `telemetry` | 与第一台服务器相同。 |

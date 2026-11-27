@@ -75,6 +75,8 @@ pub enum Topic {
     Mirrors,
     /// The node's name in Kubernetes.
     NodeName,
+    /// The interface of `network.interface`.
+    NetworkInterface,
 }
 
 /// Files of another Kubernetes distribution.
@@ -245,6 +247,35 @@ pub enum Finding {
     /// The iptables FORWARD policy is DROP.
     #[serde(rename = "docker.forwardDrop")]
     ForwardDrop,
+    /// The interface of `network.interface` has the addresses the node registers with.
+    #[serde(rename = "interface.ok")]
+    InterfaceOk {
+        /// The interface.
+        interface: String,
+        /// Its addresses.
+        addresses: Vec<String>,
+    },
+    /// The host has no interface of that name.
+    #[serde(rename = "interface.missing")]
+    InterfaceMissing {
+        /// The interface.
+        interface: String,
+    },
+    /// The interface has no address the node can register with: no IPv4 address and no IPv6
+    /// address that is not temporary.
+    #[serde(rename = "interface.noAddress")]
+    InterfaceNoAddress {
+        /// The interface.
+        interface: String,
+    },
+    /// The interface is Tailscale's: it has an address in `100.64.0.0/10`.
+    #[serde(rename = "interface.tailscale")]
+    InterfaceTailscale {
+        /// The interface.
+        interface: String,
+        /// The address.
+        address: String,
+    },
     /// K3s, RKE2 and `KubeSolo` are not installed.
     #[serde(rename = "service.none")]
     NotInstalled,
@@ -523,6 +554,10 @@ impl Finding {
             Self::DownloadsOk { .. } | Self::DownloadsNo { .. } => Topic::Downloads,
             Self::MirrorOk { .. } | Self::MirrorNo { .. } => Topic::Mirrors,
             Self::NodeNameLocalhost => Topic::NodeName,
+            Self::InterfaceOk { .. }
+            | Self::InterfaceMissing { .. }
+            | Self::InterfaceNoAddress { .. }
+            | Self::InterfaceTailscale { .. } => Topic::NetworkInterface,
         }
     }
 
@@ -548,7 +583,8 @@ impl Finding {
             | Self::SecretsEncrypted { .. }
             | Self::LonghornReady
             | Self::DownloadsOk { .. }
-            | Self::MirrorOk { .. } => Status::Pass,
+            | Self::MirrorOk { .. }
+            | Self::InterfaceOk { .. } => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -593,7 +629,10 @@ impl Finding {
             | Self::NodesUnknown { .. }
             | Self::SecretsPlain { .. }
             | Self::ServerUnreachable { .. }
-            | Self::LonghornMissing { .. } => Status::Fail,
+            | Self::LonghornMissing { .. }
+            | Self::InterfaceMissing { .. }
+            | Self::InterfaceNoAddress { .. }
+            | Self::InterfaceTailscale { .. } => Status::Fail,
         }
     }
 }

@@ -108,6 +108,7 @@ pub(crate) async fn show_plan(config: &Config, json: bool) -> Result<(), Install
         config.distribution,
         Role::Server,
         config.host.require_encrypted_disk,
+        config.network.interface.as_deref(),
     )
     .await;
     if !failed.is_empty() {
@@ -133,6 +134,7 @@ pub(crate) async fn run(
         config.distribution,
         Role::Server,
         config.host.require_encrypted_disk,
+        config.network.interface.as_deref(),
         &run,
     )
     .await?;
@@ -256,7 +258,7 @@ pub(crate) async fn running_kubernetes(kubectl: &Kubectl) -> Option<Kubernetes> 
 /// Kubernetes version read from the host.
 pub(crate) async fn install_plan(config: &Config) -> Result<Plan, InstallError> {
     let layout = config.distribution.layout();
-    let mut facts = facts::read().await?;
+    let mut facts = facts::read(config.network.interface.as_deref()).await?;
     if config.storage.longhorn {
         facts.longhorn = Some(longhorn::read().await);
     }
@@ -473,9 +475,10 @@ pub(crate) async fn check_host(
     distribution: Distribution,
     role: Role,
     require_encrypted_disk: bool,
+    interface: Option<&str>,
     run: &Run,
 ) -> Result<(), InstallError> {
-    let failed = show_checks(distribution, role, require_encrypted_disk).await;
+    let failed = show_checks(distribution, role, require_encrypted_disk, interface).await;
     if !failed.is_empty() {
         telemetry::checks_failed(run.clone(), Command::Apply, &failed);
         return Err(InstallError::HostNotReady);
@@ -488,6 +491,7 @@ pub(crate) async fn show_checks(
     distribution: Distribution,
     role: Role,
     require_encrypted_disk: bool,
+    interface: Option<&str>,
 ) -> Vec<Finding> {
     let messages = i18n::messages();
     let unit = distribution.layout().unit(role);
@@ -496,6 +500,7 @@ pub(crate) async fn show_checks(
         require_encrypted_disk,
         distribution,
         role,
+        interface,
     })
     .await;
     for check in &checks {
@@ -827,6 +832,7 @@ mod tests {
             host_hex: "a1b2c3".to_owned(),
             memory_mib: 8192,
             node_ips: Vec::new(),
+            external_ips: Vec::new(),
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,

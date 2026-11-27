@@ -8,6 +8,7 @@
   label: 运维
   pages:
     add-nodes: 添加节点
+    private-network: 使用私有网络
     maintain: 维护集群
     uninstall: 卸载
 - group: reference

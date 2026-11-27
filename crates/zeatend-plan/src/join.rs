@@ -283,6 +283,25 @@ fn standing_findings(distribution: Rancher, role: Role, token_pinned: bool) -> V
     findings
 }
 
+/// The files of `network.interface` and the node's addresses. Only a server deploys Canal's
+/// settings, which hold for the whole cluster.
+fn network_files(
+    distribution: Rancher,
+    config: &JoinConfig,
+    facts: &Facts,
+) -> Result<Vec<HostFile>, PlanError> {
+    let interface = config.network.interface.as_deref();
+    let mut files: Vec<HostFile> = distribution
+        .node_ip_file(interface, &facts.node_ips, &facts.external_ips)?
+        .into_iter()
+        .collect();
+    if config.join.role == Role::Server {
+        let written = facts.registry_files.contains(&Rancher::canal_config_path());
+        files.extend(distribution.canal_config(interface, written)?);
+    }
+    Ok(files)
+}
+
 /// Computes the plan of a joining node.
 ///
 /// # Errors
@@ -345,7 +364,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     };
     host_files.push(distribution.join_file(&join.server)?);
     host_files.push(distribution.node_name_file(&node_name)?);
-    host_files.extend(distribution.node_ip_file(&facts.facts.node_ips)?);
+    host_files.extend(network_files(distribution, config, &facts.facts)?);
     let (host, port) = crate::config::server_address(&join.server, distribution.join_port())?;
     let mut direct = facts.facts.node_ips.clone();
     direct.push(host.clone());
@@ -420,6 +439,7 @@ mod tests {
                 host_hex: "a1b2c3".to_owned(),
                 memory_mib: 4096,
                 node_ips: vec!["10.0.0.6".to_owned(), "fd00::6".to_owned()],
+                external_ips: Vec::new(),
                 record: None,
                 kubernetes: None,
                 apparmor_restricts_unconfined: false,
@@ -494,6 +514,47 @@ mod tests {
         assert!(p.findings.iter().all(|c| c.status == Status::Warn));
         let udp = p.ports.iter().find(|p| p.protocol == "udp").unwrap();
         assert_eq!(udp.open, None);
+    }
+
+    #[test]
+    fn a_joining_node_uses_the_configured_interface() {
+        let mut read = facts(&[600]);
+        read.facts.node_ips = vec!["10.0.0.6".to_owned()];
+        read.facts.external_ips = vec!["203.0.113.6".to_owned()];
+        let worker = plan(&config("network: {interface: eth1}\n"), &read).unwrap();
+        let node_ip = worker
+            .host_files
+            .iter()
+            .find(|f| f.path == "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml")
+            .unwrap();
+        assert_eq!(
+            serde_saphyr::from_str::<serde_json::Value>(&node_ip.content).unwrap(),
+            serde_json::json!({"node-ip": ["10.0.0.6"], "node-external-ip": ["203.0.113.6"]})
+        );
+        // A worker deploys no manifests; a server writes Canal's interface as the first one does.
+        let canal = Rancher::canal_config_path();
+        assert!(!worker.host_file_paths.contains(&canal));
+        let server = plan(
+            &config("  role: server\nnetwork: {interface: eth1}\n"),
+            &read,
+        );
+        assert!(server.unwrap().host_file_paths.contains(&canal));
+        // The node's registry traffic to its own addresses stays direct.
+        let proxied = plan(
+            &config("network: {interface: eth1}\nproxy: {https: \"http://proxy:3128\"}\n"),
+            &read,
+        )
+        .unwrap();
+        let environment = proxied
+            .host_files
+            .iter()
+            .find(|f| f.content.contains("NO_PROXY="))
+            .unwrap();
+        assert!(
+            environment.content.contains("10.0.0.6"),
+            "{}",
+            environment.content
+        );
     }
 
     #[test]

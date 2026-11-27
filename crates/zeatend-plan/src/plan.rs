@@ -39,6 +39,10 @@ pub struct Facts {
     /// The addresses the node registers with (`node-ip`); empty leaves the choice to the
     /// distribution.
     pub node_ips: Vec<String>,
+    /// The default-route addresses when `network.interface` names another interface
+    /// (`node-external-ip`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_ips: Vec<String>,
     /// What an earlier `apply` or `join` recorded on the host.
     #[serde(skip)]
     pub record: Option<Record>,
@@ -65,7 +69,8 @@ pub struct Facts {
     #[serde(skip)]
     pub longhorn: Option<longhorn::HostState>,
     /// The files of registry and proxy settings that zeatend wrote on the host before, among
-    /// [`crate::registry::optional_files`] and the `hosts.toml` files of `KubeSolo`.
+    /// [`crate::registry::optional_files`] and the `hosts.toml` files of `KubeSolo`, and RKE2's
+    /// [`Rancher::canal_config`].
     #[serde(default)]
     pub registry_files: Vec<String>,
     /// The password of each registry host with a `passwordFile`, read on the host.
@@ -280,7 +285,10 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
             api_server: config.api_server.clone(),
         })?;
         files.push(rancher.node_name_file(&node_name)?);
-        files.extend(rancher.node_ip_file(&facts.node_ips)?);
+        let interface = config.network.interface.as_deref();
+        files.extend(rancher.node_ip_file(interface, &facts.node_ips, &facts.external_ips)?);
+        let written = facts.registry_files.contains(&Rancher::canal_config_path());
+        files.extend(rancher.canal_config(interface, written)?);
         (Release::Cluster(cluster), files)
     } else {
         let arch = facts.arch.as_str();
@@ -530,6 +538,7 @@ mod tests {
             host_hex: "a1b2c3".to_owned(),
             memory_mib: 8192,
             node_ips: vec!["10.0.0.5".to_owned()],
+            external_ips: Vec::new(),
             record: None,
             kubernetes: None,
             apparmor_restricts_unconfined: false,
@@ -544,6 +553,56 @@ mod tests {
 
     fn topics(plan: &Plan) -> Vec<Topic> {
         plan.findings.iter().map(|c| c.name).collect()
+    }
+
+    #[test]
+    fn the_first_server_uses_the_configured_interface() {
+        let private = Facts {
+            node_ips: vec!["10.0.0.5".to_owned()],
+            external_ips: vec!["203.0.113.5".to_owned()],
+            ..facts()
+        };
+        let file = |plan: &Plan, path: &str| {
+            plan.host_files
+                .iter()
+                .find(|f| f.path == path)
+                .map(|f| f.content.clone())
+        };
+        let k3s = plan(&config("network: {interface: eth1}\n"), &private).unwrap();
+        let node_ip = file(&k3s, "/etc/rancher/k3s/config.yaml.d/20-node-ip.yaml").unwrap();
+        assert_eq!(
+            serde_saphyr::from_str::<serde_json::Value>(&node_ip).unwrap(),
+            serde_json::json!({
+                "node-ip": ["10.0.0.5"],
+                "node-external-ip": ["203.0.113.5"],
+                "flannel-iface": "eth1",
+            })
+        );
+        let rke2 = plan(
+            &config("distribution: rke2\nnetwork: {interface: eth1}\n"),
+            &private,
+        )
+        .unwrap();
+        let node_ip = file(&rke2, "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml").unwrap();
+        assert!(!node_ip.contains("flannel"), "{node_ip}");
+        let canal = file(&rke2, &Rancher::canal_config_path()).unwrap();
+        assert!(
+            canal.contains(r#""valuesContent":"flannel:\n  iface: eth1\n""#),
+            "{canal}"
+        );
+        // Without the setting, nothing names an interface.
+        let plain = plan(&config("distribution: rke2\n"), &facts()).unwrap();
+        assert!(file(&plain, &Rancher::canal_config_path()).is_none());
+        // Once the setting goes, the manifest stays with a blank interface, because RKE2 keeps
+        // the resource of a removed manifest.
+        let earlier = Facts {
+            registry_files: vec![Rancher::canal_config_path()],
+            ..facts()
+        };
+        let cleared = plan(&config("distribution: rke2\n"), &earlier).unwrap();
+        assert_eq!(cleared.removed_files, Vec::<String>::new());
+        let canal = file(&cleared, &Rancher::canal_config_path()).unwrap();
+        assert!(!canal.contains("eth1"), "{canal}");
     }
 
     #[test]

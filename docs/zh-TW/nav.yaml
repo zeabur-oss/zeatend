@@ -8,6 +8,7 @@
   label: 維運
   pages:
     add-nodes: 新增節點
+    private-network: 使用私有網路
     maintain: 維護叢集
     uninstall: 解除安裝
 - group: reference

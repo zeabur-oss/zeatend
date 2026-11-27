@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::PlanError;
 use crate::authentication::ApiServer;
 use crate::cluster::{Distribution, Rancher, disabled_components};
-use crate::config::{Config, Document, Host, Join, JoinConfig, Role};
+use crate::config::{Config, Document, Host, Join, JoinConfig, Network, Role};
 use crate::longhorn::Storage;
 
 /// The installer's configuration file.
@@ -150,6 +150,7 @@ pub fn document(yaml: &str) -> Result<Document, PlanError> {
         registry_mirrors: BTreeMap::new(),
         registry_hosts: BTreeMap::new(),
         proxy: None,
+        network: Network::default(),
     };
     config.check()?;
     Ok(Document::Join(config))

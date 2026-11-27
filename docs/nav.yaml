@@ -6,7 +6,7 @@
   pages: [install, install-with-commands, without-github]
 - group: operations
   label: Operate
-  pages: [add-nodes, maintain, uninstall]
+  pages: [add-nodes, private-network, maintain, uninstall]
 - group: reference
   label: Reference
   pages: [commands, configuration, hosts, telemetry]

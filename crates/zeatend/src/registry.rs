@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 
 use zeatend_host::files;
-use zeatend_plan::cluster::Distribution;
+use zeatend_plan::cluster::{Distribution, Rancher};
 use zeatend_plan::config::Role;
 use zeatend_plan::plan::Facts;
 use zeatend_plan::registry::{self, HEADER, KUBESOLO_REGISTRY_DIR, Password, RegistryHost};
@@ -14,7 +14,8 @@ use zeatend_plan::registry::{self, HEADER, KUBESOLO_REGISTRY_DIR, Password, Regi
 use crate::InstallError;
 
 /// Reads the password of each host in `hosts` with a `passwordFile`, and the files zeatend wrote
-/// for these settings on a node of `distribution` that runs `role`, into `facts`.
+/// for these settings and for `network.interface` on a node of `distribution` that runs `role`,
+/// into `facts`.
 ///
 /// # Errors
 ///
@@ -36,6 +37,9 @@ pub(crate) fn read(
         }
     }
     let mut candidates = registry::optional_files(distribution, role);
+    if distribution == Distribution::Rke2 && role == Role::Server {
+        candidates.push(Rancher::canal_config_path());
+    }
     if distribution == Distribution::KubeSolo {
         candidates.extend(
             fs::read_dir(KUBESOLO_REGISTRY_DIR)
