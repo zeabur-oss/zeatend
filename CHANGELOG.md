@@ -4,6 +4,16 @@ All notable changes to Zeabur Zeatend. Versions follow [Semantic Versioning](htt
 
 ## 0.1.3 (2026-11-27)
 
+### Features
+
+#### Choose the network interface a node uses
+
+The new setting `network.interface` names the interface a node uses for the cluster network, such as the private interface of a cloud VPC. zeatend takes the node addresses from it, sets the CNI on it (`flannel-iface` on K3s, Canal's interface on RKE2), keeps the default-route addresses as the node's external addresses, and uses it for the join and registry addresses. KubeSolo doesn't take it, and preflight refuses a Tailscale interface.
+
+#### An uninstall sends its events
+
+`zeatend uninstall` now sends `zeatend_plan`, `zeatend_apply_started` and `zeatend_apply_finished` with `action: uninstall`, before it removes anything, unless telemetry is off. See the experience program reference.
+
 ### Fixes
 
 #### K3s and RKE2 nodes stop their pods before the host shuts down
@@ -18,21 +28,13 @@ The containers of a node share the inotify limits of root on the host. With the 
 
 KubeSolo's built-in bridge network enforces no network policies, so Zeabur OSS can't isolate its projects from each other on a KubeSolo host. The README, the overview and the install guide say so and point to K3s or RKE2 when projects must stay apart.
 
-#### KubeSolo nodes take host.nodeName
+#### KubeSolo nodes take `host.nodeName`
 
 A KubeSolo node now takes `host.nodeName` and the node-name field like a K3s or RKE2 node, and a host name made from an address becomes `node-` and six hex digits. KubeSolo v1.3.1 uses the configured name in kube-proxy. A KubeSolo node that is already installed keeps its name.
 
 #### KubeSolo v1.3.1
 
-Zeatend installs KubeSolo v1.3.1, which still ships Kubernetes 1.36.6. It fixes an idle node that used about 1.3 CPU cores since v1.3.0, and aggregated APIs such as metrics-server that rejected the API server a year after the install ([release notes](https://github.com/portainer/kubesolo/releases/tag/v1.3.1)). `zeatend apply` on a KubeSolo v1.3.0 host upgrades it.
-
-#### Choose the network interface a node uses
-
-The new setting `network.interface` names the interface a node uses for the cluster network, such as the private interface of a cloud VPC. zeatend takes the node addresses from it, sets the CNI on it (`flannel-iface` on K3s, Canal's interface on RKE2), keeps the default-route addresses as the node's external addresses, and uses it for the join and registry addresses. KubeSolo and Tailscale interfaces reject it.
-
-#### An uninstall sends its events
-
-`zeatend uninstall` now sends `zeatend_plan`, `zeatend_apply_started` and `zeatend_apply_finished` with `action: uninstall`, before it removes anything, unless telemetry is off. See the experience program reference.
+zeatend installs KubeSolo v1.3.1, which still ships Kubernetes 1.36.6. It fixes an idle node that used about 1.3 CPU cores since v1.3.0, and aggregated APIs such as metrics-server that rejected the API server a year after the install ([release notes](https://github.com/portainer/kubesolo/releases/tag/v1.3.1)). `zeatend apply` on a KubeSolo v1.3.0 host upgrades it.
 
 ## 0.1.2 (2026-11-25)
 
