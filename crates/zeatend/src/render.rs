@@ -330,6 +330,7 @@ mod tests {
             kubernetes: None,
             apparmor_restricts_unconfined: false,
             inotify_max_user_watches: 0,
+            service_family: None,
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,

@@ -22,6 +22,7 @@ network:
 - 以這個介面的 IPv4 位址和 IPv6 位址註冊節點（`node-ip`），不使用暫時的 IPv6 位址。
 - 讓 Pod 網路走這個介面：K3s 設定 `flannel-iface`，RKE2 設定 Canal 的介面。
 - 預設路由的位址如果在其他介面上，就保留為節點的外部位址（`node-external-ip`），Ingress 和 `LoadBalancer` 的位址仍然是公開位址。
+- 在伺服器上，向叢集公布這個介面的位址（`advertise-address`），Pod 透過 `kubernetes` Service 連到 API 伺服器時走私有網路。公布的位址和 Service 網段同一個 family：如果 `config.yaml.d/90-local.yaml` 的 `service-cidr` 第一段是 IPv6，或這個介面沒有 IPv4 位址，就公布 IPv6 位址；其他情況公布 IPv4 位址。
 - `zeatend node add` 輸出的加入位址改用這個介面的位址；節點使用代理伺服器時，連到這些位址不經過代理。
 
 `plan` 在「Node addresses」和「External」兩行列出這些位址。主機沒有這個名稱的介面、介面沒有節點可以註冊的位址，或介面是 [Tailscale 的介面](#tailscale)時，主機檢查會讓 `apply` 停止。KubeSolo 只有一個節點，不接受這項設定。

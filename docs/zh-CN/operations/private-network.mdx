@@ -22,6 +22,7 @@ network:
 - 用这个接口的 IPv4 地址和 IPv6 地址注册节点（`node-ip`），不使用临时 IPv6 地址。
 - 让 Pod 网络走这个接口：K3s 设置 `flannel-iface`，RKE2 设置 Canal 的接口。
 - 如果默认路由的地址在其他接口上，就把它们保留为节点的外部地址（`node-external-ip`），Ingress 和 `LoadBalancer` 的地址仍是公网地址。
+- 在服务器上，向集群公布这个接口的地址（`advertise-address`），Pod 通过 `kubernetes` Service 访问 API 服务器时走私有网络。公布的地址和 Service 网段属于同一个 family：如果 `config.yaml.d/90-local.yaml` 的 `service-cidr` 第一段是 IPv6，或这个接口没有 IPv4 地址，就公布 IPv6 地址；其他情况公布 IPv4 地址。
 - `zeatend node add` 输出的加入地址改用这个接口的地址；节点使用代理时，访问这些地址不经过代理。
 
 `plan` 在 “Node addresses” 和 “External” 两行列出这些地址。如果主机没有这个名称的接口、接口没有节点可以注册的地址，或者接口是 [Tailscale 的接口](#tailscale)，主机检查会让 `apply` 停止。KubeSolo 只有一个节点，不接受这项配置。

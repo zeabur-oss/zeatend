@@ -295,7 +295,13 @@ fn network_files(
 ) -> Result<Vec<HostFile>, PlanError> {
     let interface = config.network.interface.as_deref();
     let mut files: Vec<HostFile> = distribution
-        .node_ip_file(interface, &facts.node_ips, &facts.external_ips)?
+        .node_ip_file(
+            config.join.role,
+            facts.service_family,
+            interface,
+            &facts.node_ips,
+            &facts.external_ips,
+        )?
         .into_iter()
         .collect();
     if config.join.role == Role::Server {
@@ -460,6 +466,7 @@ mod tests {
                 kubernetes: None,
                 apparmor_restricts_unconfined: false,
                 inotify_max_user_watches: 0,
+                service_family: None,
                 k3s_own_network: false,
                 installer_webhook: false,
                 longhorn: None,
@@ -558,6 +565,15 @@ mod tests {
         .unwrap();
         assert!(server.host_file_paths.contains(&canal));
         assert_eq!(server.canal_iface.as_deref(), Some("eth1"));
+        let node_ip = server
+            .host_files
+            .iter()
+            .find(|f| f.path == "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml")
+            .unwrap();
+        assert_eq!(
+            serde_saphyr::from_str::<serde_json::Value>(&node_ip.content).unwrap()["advertise-address"],
+            "10.0.0.6"
+        );
         // The node's registry traffic to its own addresses stays direct.
         let proxied = plan(
             &config("network: {interface: eth1}\nproxy: {https: \"http://proxy:3128\"}\n"),

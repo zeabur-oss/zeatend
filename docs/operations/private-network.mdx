@@ -22,6 +22,7 @@ List the host's interfaces and their addresses with `ip -br addr`. With the sett
 - Registers the node with the interface's IPv4 address and its IPv6 address, leaving out temporary IPv6 addresses (`node-ip`).
 - Runs the pod network over the interface: `flannel-iface` on K3s, Canal's interface on RKE2.
 - Keeps the addresses of the default routes as the node's external addresses (`node-external-ip`) when they are on another interface, so Ingress and `LoadBalancer` addresses stay public.
+- On a server, advertises the interface's address to the cluster (`advertise-address`), so the pods reach the API server through the `kubernetes` Service over the private network. The address is in the family of the service network: IPv6 when `service-cidr` in `config.yaml.d/90-local.yaml` starts with an IPv6 range or the interface has no IPv4 address, else IPv4.
 - Uses the interface's addresses for the join address that `zeatend node add` prints, and reaches them directly when the node uses a proxy.
 
 `plan` shows the addresses on the `Node addresses` and `External` lines. Its host checks stop `apply` when the host has no interface of that name, when the interface has no address the node can register with, or when it's a [Tailscale interface](#tailscale). KubeSolo runs one node, so it doesn't take the setting.
