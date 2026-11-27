@@ -260,6 +260,12 @@ async fn node_addresses(interface: Option<&str>) -> NodeAddresses {
     )
 }
 
+/// Whether the node registers with IPv6 addresses only, with `interface` as `network.interface`.
+pub(crate) async fn ipv6_only(interface: Option<&str>) -> bool {
+    let internal = node_addresses(interface).await.internal;
+    !internal.is_empty() && internal.iter().all(|a| a.contains(':'))
+}
+
 /// [`node_addresses`] from what it reads.
 fn choose_addresses(
     addresses: &[HostAddress],

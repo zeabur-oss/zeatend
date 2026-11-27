@@ -19,6 +19,12 @@ description: Zeatend 支持安装的服务器、固定的版本、所需端口�
 
 时钟未同步、启用了 swap、内核为崩溃内核预留了内存、其他 Kubernetes 安装在主机上留下文件，或集群数据不在加密磁盘上时，主机检查也会发出警告。
 
+RKE2 节点的地址如果全是 IPv6，`/etc/hosts` 必须把 `localhost` 指向 `::1`。这时 RKE2 让 etcd、controller manager、scheduler 和 kube-proxy 只监听 `::1`，它们的健康检查却访问 `localhost`。Ubuntu 的 `/etc/hosts` 只把它指向 `127.0.0.1`，所以在 `::1` 那一行加上 `localhost` 之前，主机检查会阻止 `apply`：
+
+```text
+::1     localhost ip6-localhost ip6-loopback
+```
+
 ## 版本
 
 每个 Zeatend 版本都会为各发行版固定一个版本，并用 Zeatend 内置的摘要检查下载内容。`zeatend plan` 会输出将安装的版本。当前版本固定使用：
