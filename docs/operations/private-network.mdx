@@ -1,0 +1,134 @@
+---
+title: Use a private network
+description: Run the cluster's traffic over a private interface such as a cloud VPC, run K3s over Tailscale, and move an installed cluster to another interface.
+---
+
+A node registers with the addresses of the interfaces that hold the default routes. On a server with a private network on a second interface, such as a cloud VPC or a LAN in a data centre, the default route is usually the public interface. The API server, the kubelet and the pods' traffic then go over the public network, and the firewall must open the node ports to the internet.
+
+`network.interface` names the interface the node uses instead.
+
+## Choose the interface
+
+Add the setting to `/etc/zeatend/config.yaml` on the first server, before the first `apply`:
+
+```yaml
+distribution: k3s
+network:
+  interface: eth1
+```
+
+List the host's interfaces and their addresses with `ip -br addr`. With the setting, Zeatend:
+
+- Registers the node with the interface's IPv4 address and its IPv6 address, leaving out temporary IPv6 addresses (`node-ip`).
+- Runs the pod network over the interface: `flannel-iface` on K3s, Canal's interface on RKE2.
+- Keeps the addresses of the default routes as the node's external addresses (`node-external-ip`) when they are on another interface, so Ingress and `LoadBalancer` addresses stay public.
+- Uses the interface's addresses for the join address that `zeatend node add` prints, and reaches them directly when the node uses a proxy.
+
+`plan` shows the addresses on the `Node addresses` and `External` lines. Its host checks stop `apply` when the host has no interface of that name, when the interface has no address the node can register with, or when it's a [Tailscale interface](#tailscale). KubeSolo runs one node, so it doesn't take the setting.
+
+Allow the [ports between the nodes](add-nodes.mdx#before-you-begin) on the private network. Only the ports that clients use, such as 80, 443 and 6443, need to be open on the public interface.
+
+### Nodes that join
+
+Add the same section to the file that `zeatend node add` prints, before you run `apply` on the new server. The new server reaches the first one at its `InternalIP`, which is now the address on the private interface.
+
+```yaml
+distribution: rke2
+join:
+  server: https://10.0.0.5:9345
+  role: worker
+  tokenFile: /etc/zeatend/join-token
+network:
+  interface: eth1
+```
+
+On K3s, each node names its own interface. On RKE2, Canal takes one interface name for the whole cluster: every server writes it in `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`, a `HelmChartConfig` named `rke2-canal`. Give every RKE2 node an interface of the same name and the same `network.interface`. If you keep your own `rke2-canal` `HelmChartConfig` in the manifests directory, set `flannel.iface` in it instead of `network.interface`, because two of them overwrite each other.
+
+## Tailscale
+
+Don't set `network.interface` to `tailscale0`. Tailscale offers each of the host's addresses as a way to reach the node, the pod network's own `flannel.1` too, so the pods' traffic over `tailscale0` returns into the tunnel. An interface whose peers have fixed addresses, such as a WireGuard interface `wg0`, doesn't have this problem.
+
+K3s has its own Tailscale integration, which is still experimental: K3s joins each node to your tailnet and sends the pods' traffic through Tailscale subnet routes ([Distributed hybrid or multicloud cluster](https://docs.k3s.io/networking/distributed-multicloud)). Zeatend doesn't set it up, and RKE2 has no such integration. Without `network.interface`, set it up on K3s like this:
+
+<Steps>
+<Step>
+
+### Let the nodes announce the pod network
+
+In your tailnet's access controls, approve the pod network as a route, and let pods reach each other. K3s's pod network is `10.42.0.0/16` unless you set `cluster-cidr`; a dual-stack cluster adds its IPv6 network.
+
+```json
+"autoApprovers": {
+  "routes": {
+    "10.42.0.0/16": ["you@example.com"]
+  }
+}
+```
+
+An approver is a user, a group or a tag ([Tailscale policy file syntax](https://tailscale.com/kb/1337/policy-syntax)). Create an auth key for the nodes in the admin console.
+
+</Step>
+<Step>
+
+### Give each node the key
+
+Install Tailscale on each server, then write the key into a file only root can read:
+
+```sh
+sudo install -D -m 0600 /dev/null /etc/rancher/k3s/vpn-auth
+echo 'name=tailscale,joinKey=<auth key>,extraArgs=--snat-subnet-routes=false' | sudo tee /etc/rancher/k3s/vpn-auth > /dev/null
+```
+
+`--snat-subnet-routes=false` keeps the address of the pod that sent a packet, so network policies see the real sender ([Subnet routers](https://tailscale.com/kb/1019/subnets)). Then name the file in `/etc/rancher/k3s/config.yaml.d/90-local.yaml`, where Zeatend leaves your settings alone:
+
+```yaml
+vpn-auth-file: /etc/rancher/k3s/vpn-auth
+```
+
+</Step>
+<Step>
+
+### Join through the Tailscale address
+
+Install the first server with `sudo zeatend apply`. On it, print the join file with the server's Tailscale address:
+
+```sh
+sudo zeatend node add --address "$(tailscale ip -4)"
+```
+
+On each new server, write the key file and `90-local.yaml` as above before you run `apply`.
+
+</Step>
+</Steps>
+
+## Move an installed cluster to another interface
+
+Zeatend doesn't move the nodes of an installed cluster from one network to another. Move the nodes one at a time, and test the steps on a copy of the cluster first.
+
+<Steps>
+<Step>
+
+### Move the K3s server
+
+Add `network.interface` to `/etc/zeatend/config.yaml` on the server and run `sudo zeatend plan`, then `sudo zeatend apply`. Zeatend writes `config.yaml.d/20-node-ip.yaml` again and restarts K3s. Check the new address in the `INTERNAL-IP` column:
+
+```sh
+sudo kubectl get nodes -o wide
+```
+
+</Step>
+<Step>
+
+### Move each worker
+
+On each worker, add `network.interface` and set `join.server` to the server's new address in `/etc/zeatend/config.yaml`, then run `sudo zeatend apply`.
+
+</Step>
+<Step>
+
+### Replace RKE2 servers
+
+An RKE2 server is also an etcd member, and Zeatend doesn't move an etcd member to a new address. Replace the servers one at a time instead: add a new server with `network.interface`, wait until it's `Ready`, then [remove an old one](add-nodes.mdx#remove-a-node). Keep three servers or more while you do this, so etcd keeps a majority. Move RKE2 workers as on K3s.
+
+</Step>
+</Steps>

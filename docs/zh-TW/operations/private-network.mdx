@@ -1,0 +1,134 @@
+---
+title: 使用私有網路
+description: 讓叢集的流量走私有網路介面（例如雲端 VPC），在 Tailscale 上執行 K3s，以及把已安裝的叢集移到其他介面。
+---
+
+節點預設以預設路由所在介面的位址註冊。如果伺服器的私有網路在第二張網路介面上，例如雲端 VPC 或機房的區域網路，預設路由通常是公開介面。這時 API 伺服器、kubelet 和 Pod 的流量都會走公開網路，防火牆也得對網際網路開放節點的連接埠。
+
+`network.interface` 可以指定節點改用哪個介面。
+
+## 選擇介面
+
+在第一次 `apply` 之前，把設定加進第一台伺服器的 `/etc/zeatend/config.yaml`：
+
+```yaml
+distribution: k3s
+network:
+  interface: eth1
+```
+
+用 `ip -br addr` 列出主機的介面與位址。設定之後，Zeatend 會：
+
+- 以這個介面的 IPv4 位址和 IPv6 位址註冊節點（`node-ip`），不使用暫時的 IPv6 位址。
+- 讓 Pod 網路走這個介面：K3s 設定 `flannel-iface`，RKE2 設定 Canal 的介面。
+- 預設路由的位址如果在其他介面上，就保留為節點的外部位址（`node-external-ip`），Ingress 和 `LoadBalancer` 的位址仍然是公開位址。
+- `zeatend node add` 輸出的加入位址改用這個介面的位址；節點使用代理伺服器時，連到這些位址不經過代理。
+
+`plan` 在「Node addresses」和「External」兩行列出這些位址。主機沒有這個名稱的介面、介面沒有節點可以註冊的位址，或介面是 [Tailscale 的介面](#tailscale)時，主機檢查會讓 `apply` 停止。KubeSolo 只有一個節點，不接受這項設定。
+
+在私有網路上開放[節點之間的連接埠](add-nodes.mdx)。公開介面只需要開放用戶端會用到的連接埠，例如 80、443 和 6443。
+
+### 加入叢集的節點
+
+在新伺服器執行 `apply` 之前，把同樣的區段加進 `zeatend node add` 輸出的設定檔。新伺服器會透過第一台伺服器的 `InternalIP` 連線，而這個位址現在是私有介面上的位址。
+
+```yaml
+distribution: rke2
+join:
+  server: https://10.0.0.5:9345
+  role: worker
+  tokenFile: /etc/zeatend/join-token
+network:
+  interface: eth1
+```
+
+K3s 的每個節點各自指定介面。RKE2 的 Canal 則整個叢集只用一個介面名稱：每台伺服器都會把它寫進 `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`，也就是名為 `rke2-canal` 的 `HelmChartConfig`。所以 RKE2 的每個節點都要有同名的介面，並設定相同的 `network.interface`。如果你在 manifests 目錄放了自己的 `rke2-canal` `HelmChartConfig`，就在那份檔案設定 `flannel.iface`，不要設定 `network.interface`，否則兩份設定會互相覆蓋。
+
+## Tailscale
+
+不要把 `network.interface` 設為 `tailscale0`。Tailscale 會把主機的每個位址都當成連到這個節點的途徑，連 Pod 網路自己的 `flannel.1` 也包括在內，所以走 `tailscale0` 的 Pod 流量會繞回通道裡。如果介面另一端的位址固定，例如 WireGuard 的 `wg0`，就沒有這個問題。
+
+K3s 內建 Tailscale 整合，目前仍是實驗功能：K3s 會讓每個節點加入你的 tailnet，並透過 Tailscale 的子網路路由傳送 Pod 的流量（[Distributed hybrid or multicloud cluster](https://docs.k3s.io/networking/distributed-multicloud)）。Zeatend 不會幫你設定這項整合，RKE2 也沒有類似的整合。不設定 `network.interface`，在 K3s 照以下步驟設定：
+
+<Steps>
+<Step>
+
+### 允許節點公告 Pod 網路
+
+在 tailnet 的存取控制中，把 Pod 網路核准為路由，並允許 Pod 互相連線。K3s 的 Pod 網路是 `10.42.0.0/16`，除非你設定了 `cluster-cidr`；雙堆疊叢集還要加上它的 IPv6 網路。
+
+```json
+"autoApprovers": {
+  "routes": {
+    "10.42.0.0/16": ["you@example.com"]
+  }
+}
+```
+
+核准者可以是使用者、群組或標籤（[Tailscale policy file syntax](https://tailscale.com/kb/1337/policy-syntax)）。在管理主控台為節點建立驗證金鑰。
+
+</Step>
+<Step>
+
+### 把金鑰交給每個節點
+
+在每台伺服器安裝 Tailscale，再把金鑰寫進只有 root 能讀的檔案：
+
+```sh
+sudo install -D -m 0600 /dev/null /etc/rancher/k3s/vpn-auth
+echo 'name=tailscale,joinKey=<auth key>,extraArgs=--snat-subnet-routes=false' | sudo tee /etc/rancher/k3s/vpn-auth > /dev/null
+```
+
+`--snat-subnet-routes=false` 會保留送出封包的 Pod 位址，網路原則才看得到真正的來源（[Subnet routers](https://tailscale.com/kb/1019/subnets)）。接著在 `/etc/rancher/k3s/config.yaml.d/90-local.yaml` 指定這個檔案，Zeatend 不會改動這份檔案裡的設定：
+
+```yaml
+vpn-auth-file: /etc/rancher/k3s/vpn-auth
+```
+
+</Step>
+<Step>
+
+### 透過 Tailscale 位址加入
+
+用 `sudo zeatend apply` 安裝第一台伺服器，接著在這台伺服器上，用伺服器自己的 Tailscale 位址輸出加入用的設定檔：
+
+```sh
+sudo zeatend node add --address "$(tailscale ip -4)"
+```
+
+在每台新伺服器執行 `apply` 之前，照上一步寫好金鑰檔和 `90-local.yaml`。
+
+</Step>
+</Steps>
+
+## 把已安裝的叢集移到其他介面
+
+Zeatend 不會把已安裝叢集的節點從一個網路移到另一個網路。請一次移動一個節點，並先在叢集的複本上測試這些步驟。
+
+<Steps>
+<Step>
+
+### 移動 K3s 伺服器
+
+在伺服器的 `/etc/zeatend/config.yaml` 加上 `network.interface`，先執行 `sudo zeatend plan`，再執行 `sudo zeatend apply`。Zeatend 會重新寫入 `config.yaml.d/20-node-ip.yaml` 並重新啟動 K3s。在 `INTERNAL-IP` 欄確認新的位址：
+
+```sh
+sudo kubectl get nodes -o wide
+```
+
+</Step>
+<Step>
+
+### 移動每個工作節點
+
+在每個工作節點的 `/etc/zeatend/config.yaml` 加上 `network.interface`，並把 `join.server` 改成伺服器的新位址，再執行 `sudo zeatend apply`。
+
+</Step>
+<Step>
+
+### 更換 RKE2 伺服器
+
+RKE2 伺服器同時是 etcd 成員，而 Zeatend 不會把 etcd 成員移到新的位址。所以要一次更換一台伺服器：加入一台設定了 `network.interface` 的新伺服器，等它進入 `Ready` 狀態，再[移除一台舊伺服器](add-nodes.mdx)。更換期間保持至少三台伺服器，etcd 才能維持多數。RKE2 的工作節點和 K3s 一樣移動即可。
+
+</Step>
+</Steps>
