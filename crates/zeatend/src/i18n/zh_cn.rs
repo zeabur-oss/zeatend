@@ -417,8 +417,8 @@ fn finding(finding: &Finding) -> String {
         Finding::IptablesOk => "iptables-save 能读取主机的规则".to_owned(),
         Finding::IptablesUnreadable { command, error } => format!(
             "{command} 运行失败（{error}），Calico 和 kube-proxy 读不到规则，无法启动。\
-             有其他程序写入了 iptables 无法解析的 nftables 规则。把 Tailscale 改为 iptables \
-             模式，做法见 https://oss.zeabur.com/zh-CN/docs/zeatend/operations/private-network/ 。"
+             可能有其他程序写入了 iptables 无法解析的 nftables 规则；如果是 Tailscale，改用 \
+             iptables 模式，做法见 https://oss.zeabur.com/zh-CN/docs/zeatend/operations/private-network/ 。"
         ),
         Finding::NotInstalled => {
             "这台主机没有安装 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安装".to_owned()
