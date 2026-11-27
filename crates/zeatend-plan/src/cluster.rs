@@ -172,6 +172,16 @@ pub enum PortUse {
     CanalVxlan,
 }
 
+/// An IP address family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IpFamily {
+    /// IPv4.
+    V4,
+    /// IPv6.
+    V6,
+}
+
 /// K3s or RKE2: the distributions that run the same server, take workers and read
 /// `/etc/rancher/<name>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -683,6 +693,37 @@ impl Rancher {
         )
     }
 
+    /// The family of the first range of `service-cidr` in the K3s or RKE2 configuration file
+    /// `config`; `None` when the file does not set it. The first range is the primary service
+    /// network, and the API server's `advertise-address` must be in its family: K3s with
+    /// `service-cidr: fd00:43::/112` and an IPv4 address does not start.
+    #[must_use]
+    pub fn service_family(config: &str) -> Option<IpFamily> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Ranges {
+            One(String),
+            Many(Vec<String>),
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct Services {
+            service_cidr: Option<Ranges>,
+        }
+        let first = match serde_saphyr::from_str::<Services>(config)
+            .ok()?
+            .service_cidr?
+        {
+            Ranges::One(ranges) => ranges,
+            Ranges::Many(ranges) => ranges.into_iter().next()?,
+        };
+        Some(if first.split(',').next()?.contains(':') {
+            IpFamily::V6
+        } else {
+            IpFamily::V4
+        })
+    }
+
     /// The drop-in naming the addresses the node registers with, so it does not pick a temporary
     /// IPv6 address. With `interface` (`network.interface`), the node registers with its
     /// addresses (`internal`), the default-route addresses that are on another interface are its
@@ -690,11 +731,21 @@ impl Rancher {
     /// (`flannel-iface`, <https://docs.k3s.io/cli/server>). `None` when there is nothing to write: no
     /// interface, and the host's addresses could not be read.
     ///
+    /// A server with `interface` also advertises its first address on it in the family of the
+    /// primary service network (`advertise-address`): `services` when the configuration sets
+    /// `service-cidr`, else IPv4 when the node has an IPv4 address, as K3s then takes
+    /// `10.43.0.0/16`, and IPv6 when it has none, as K3s then takes `fd00:43::/112`. Without it,
+    /// the API server advertises `node-external-ip`, and the `kubernetes` Service sends the pods to
+    /// the public addresses (<https://docs.k3s.io/cli/server>,
+    /// <https://docs.rke2.io/reference/server_config>). An agent takes no such flag.
+    ///
     /// # Errors
     ///
     /// When the file cannot be serialised.
     pub fn node_ip_file(
         self,
+        role: Role,
+        services: Option<IpFamily>,
         interface: Option<&str>,
         internal: &[String],
         external: &[String],
@@ -702,9 +753,30 @@ impl Rancher {
         if interface.is_none() && internal.is_empty() {
             return Ok(None);
         }
+        let family = |a: &String| {
+            a.parse::<std::net::IpAddr>().ok().map(|ip| {
+                if ip.is_ipv6() {
+                    IpFamily::V6
+                } else {
+                    IpFamily::V4
+                }
+            })
+        };
+        let services = services.unwrap_or_else(|| {
+            if internal.iter().any(|a| family(a) == Some(IpFamily::V4)) {
+                IpFamily::V4
+            } else {
+                IpFamily::V6
+            }
+        });
+        let advertise_address = interface
+            .filter(|_| role == Role::Server)
+            .and_then(|_| internal.iter().find(|a| family(a) == Some(services)))
+            .cloned();
         RancherConfig {
             node_ip: internal.to_vec(),
             node_external_ip: external.to_vec(),
+            advertise_address,
             flannel_iface: interface.filter(|_| self == Self::K3s).map(str::to_owned),
             ..RancherConfig::default()
         }
@@ -959,6 +1031,8 @@ pub(crate) struct RancherConfig {
     pub(crate) node_ip: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) node_external_ip: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) advertise_address: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) flannel_iface: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1502,7 +1576,13 @@ mod tests {
             assert_eq!(join.mode, 0o600);
             assert!(join.path.starts_with(d.distribution().layout().config_dir));
             let ip = d
-                .node_ip_file(None, &["10.0.0.6".to_owned(), "fd00::6".to_owned()], &[])
+                .node_ip_file(
+                    Role::Server,
+                    None,
+                    None,
+                    &["10.0.0.6".to_owned(), "fd00::6".to_owned()],
+                    &[],
+                )
                 .unwrap()
                 .unwrap();
             let value: Value = serde_saphyr::from_str(&ip.content).unwrap();
@@ -1510,7 +1590,10 @@ mod tests {
                 value,
                 serde_json::json!({"node-ip": ["10.0.0.6", "fd00::6"]})
             );
-            assert_eq!(d.node_ip_file(None, &[], &[]).unwrap(), None);
+            assert_eq!(
+                d.node_ip_file(Role::Server, None, None, &[], &[]).unwrap(),
+                None
+            );
         }
     }
 
@@ -1519,7 +1602,7 @@ mod tests {
         let internal = ["10.0.0.6".to_owned()];
         let external = ["203.0.113.6".to_owned()];
         let k3s = Rancher::K3s
-            .node_ip_file(Some("eth1"), &internal, &external)
+            .node_ip_file(Role::Worker, None, Some("eth1"), &internal, &external)
             .unwrap()
             .unwrap();
         let value: Value = serde_saphyr::from_str(&k3s.content).unwrap();
@@ -1533,7 +1616,7 @@ mod tests {
         );
         // RKE2 sets Canal's interface for the whole cluster, in a manifest of the server.
         let rke2 = Rancher::Rke2
-            .node_ip_file(Some("eth1"), &internal, &external)
+            .node_ip_file(Role::Worker, None, Some("eth1"), &internal, &external)
             .unwrap()
             .unwrap();
         let value: Value = serde_saphyr::from_str(&rke2.content).unwrap();
@@ -1587,7 +1670,7 @@ mod tests {
         // An interface without a readable address still writes the CNI interface.
         assert!(
             Rancher::K3s
-                .node_ip_file(Some("eth1"), &[], &[])
+                .node_ip_file(Role::Worker, None, Some("eth1"), &[], &[])
                 .unwrap()
                 .unwrap()
                 .content
@@ -1624,6 +1707,67 @@ mod tests {
                 Some(iface)
             );
         }
+    }
+
+    #[test]
+    fn a_server_on_an_interface_advertises_its_address_in_the_family_of_the_services() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        struct NodeIp {
+            advertise_address: Option<String>,
+        }
+        let advertised = |role, services, interface, internal: &[&str]| {
+            let internal: Vec<String> = internal.iter().map(|a| (*a).to_owned()).collect();
+            let file = Rancher::Rke2
+                .node_ip_file(role, services, interface, &internal, &[])
+                .unwrap()
+                .unwrap();
+            serde_saphyr::from_str::<NodeIp>(&file.content)
+                .unwrap()
+                .advertise_address
+        };
+        let both = ["fd00::6", "10.0.0.6"];
+        assert_eq!(
+            advertised(Role::Server, None, Some("wg0"), &both).as_deref(),
+            Some("10.0.0.6")
+        );
+        assert_eq!(
+            advertised(Role::Server, Some(IpFamily::V6), Some("wg0"), &both).as_deref(),
+            Some("fd00::6")
+        );
+        // K3s gives a node without IPv4 an IPv6 service network.
+        assert_eq!(
+            advertised(Role::Server, None, Some("wg0"), &["fd00::6"]).as_deref(),
+            Some("fd00::6")
+        );
+        // No address in the family leaves the choice to the distribution.
+        assert_eq!(
+            advertised(Role::Server, Some(IpFamily::V4), Some("wg0"), &["fd00::6"]),
+            None
+        );
+        assert_eq!(advertised(Role::Server, None, None, &["10.0.0.6"]), None);
+        assert_eq!(
+            advertised(Role::Worker, None, Some("wg0"), &["10.0.0.6"]),
+            None
+        );
+    }
+
+    #[test]
+    fn the_first_service_range_gives_the_family() {
+        assert_eq!(Rancher::service_family("node-name: a\n"), None);
+        assert_eq!(Rancher::service_family("not: [yaml"), None);
+        assert_eq!(
+            Rancher::service_family("service-cidr: 10.43.0.0/16\n"),
+            Some(IpFamily::V4)
+        );
+        assert_eq!(
+            Rancher::service_family("service-cidr: fd00:43::/112,10.43.0.0/16\n"),
+            Some(IpFamily::V6)
+        );
+        assert_eq!(
+            Rancher::service_family("service-cidr:\n  - 10.43.0.0/16\n  - fd00:43::/112\n"),
+            Some(IpFamily::V4)
+        );
     }
 
     #[test]

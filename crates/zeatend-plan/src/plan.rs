@@ -57,6 +57,11 @@ pub struct Facts {
     /// [`cluster::inotify_sysctl`].
     #[serde(default)]
     pub inotify_max_user_watches: u64,
+    /// The family of the primary service network when the K3s or RKE2 configuration on the host
+    /// sets `service-cidr`; a server's advertised address takes it. See
+    /// [`crate::cluster::Rancher::service_family`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service_family: Option<cluster::IpFamily>,
     /// The K3s configuration on the host turns flannel off: an earlier install gave the cluster a
     /// network plugin of its own, which zeatend keeps. See [`crate::k3s::runs_own_network`].
     #[serde(default)]
@@ -264,8 +269,7 @@ impl From<pins::Asset> for Download {
 /// the release or skip a Kubernetes minor version (see [`upgrade`]).
 pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
     facts.check_zeatend_version()?;
-    let configured = config.host.node_name.as_deref();
-    let node_name = node_name::choose(configured, facts, &[])?;
+    let node_name = node_name::choose(config.host.node_name.as_deref(), facts, &[])?;
     let mut findings: Vec<Finding> = node_name::localhost_note(&node_name, facts)
         .into_iter()
         .collect();
@@ -290,7 +294,13 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         })?;
         files.push(rancher.node_name_file(&node_name)?);
         let interface = config.network.interface.as_deref();
-        files.extend(rancher.node_ip_file(interface, &facts.node_ips, &facts.external_ips)?);
+        files.extend(rancher.node_ip_file(
+            Role::Server,
+            facts.service_family,
+            interface,
+            &facts.node_ips,
+            &facts.external_ips,
+        )?);
         let written = facts.registry_files.contains(&Rancher::canal_config_path());
         files.extend(rancher.canal_config(interface, written)?);
         canal_iface = rancher.canal_iface(interface, written).map(str::to_owned);
@@ -549,6 +559,7 @@ mod tests {
             kubernetes: None,
             apparmor_restricts_unconfined: false,
             inotify_max_user_watches: 0,
+            service_family: None,
             k3s_own_network: false,
             installer_webhook: false,
             longhorn: None,
@@ -581,6 +592,7 @@ mod tests {
             serde_json::json!({
                 "node-ip": ["10.0.0.5"],
                 "node-external-ip": ["203.0.113.5"],
+                "advertise-address": "10.0.0.5",
                 "flannel-iface": "eth1",
             })
         );
@@ -590,7 +602,14 @@ mod tests {
         )
         .unwrap();
         let node_ip = file(&rke2, "/etc/rancher/rke2/config.yaml.d/20-node-ip.yaml").unwrap();
-        assert!(!node_ip.contains("flannel"), "{node_ip}");
+        assert_eq!(
+            serde_saphyr::from_str::<serde_json::Value>(&node_ip).unwrap(),
+            serde_json::json!({
+                "node-ip": ["10.0.0.5"],
+                "node-external-ip": ["203.0.113.5"],
+                "advertise-address": "10.0.0.5",
+            })
+        );
         let canal = file(&rke2, &Rancher::canal_config_path()).unwrap();
         assert!(
             canal.contains(r#""valuesContent":"flannel:\n  iface: eth1\n""#),

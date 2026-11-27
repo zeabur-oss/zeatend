@@ -5,7 +5,7 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use zeatend_plan::cluster::{Distribution, Rancher};
+use zeatend_plan::cluster::{Distribution, IpFamily, Rancher};
 use zeatend_plan::plan::Facts;
 use zeatend_plan::{installer, k3s, kubesolo};
 
@@ -44,6 +44,7 @@ pub async fn read(interface: Option<&str>) -> Result<Facts, HostError> {
             .ok()
             .and_then(|v| v.trim().parse().ok())
             .unwrap_or(0),
+        service_family: installed_service_family(Path::new("/")),
         k3s_own_network: fs::read_to_string(k3s::CONFIG_FILE)
             .is_ok_and(|config| k3s::runs_own_network(&config)),
         installer_webhook: Path::new(installer::KUBESOLO_WEBHOOK_SCRIPT).exists(),
@@ -72,18 +73,7 @@ fn host_hex() -> Result<String, HostError> {
 pub fn installed_node_name(root: &Path) -> Option<String> {
     let at = |path: &str| root.join(path.trim_start_matches('/'));
     let configured = Rancher::ALL.into_iter().find_map(|d| {
-        let dir = at(d.distribution().layout().config_dir);
-        let mut files = vec![dir.join("config.yaml")];
-        let mut drop_ins: Vec<_> = fs::read_dir(dir.join("config.yaml.d"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "yaml"))
-            .collect();
-        drop_ins.sort();
-        files.extend(drop_ins);
-        files
+        rancher_config_files(root, d)
             .iter()
             .filter_map(|f| rancher_node_name(f))
             .next_back()
@@ -102,6 +92,41 @@ pub fn installed_node_name(root: &Path) -> Option<String> {
         })
         .map(|name| name.trim().to_ascii_lowercase())
         .filter(|name| !name.is_empty())
+}
+
+/// The family of the primary service network when the K3s or RKE2 configuration under `root` sets
+/// `service-cidr`; the last file that sets it wins, as the distributions read them.
+#[must_use]
+pub fn installed_service_family(root: &Path) -> Option<IpFamily> {
+    Rancher::ALL.into_iter().find_map(|d| {
+        rancher_config_files(root, d)
+            .iter()
+            .filter_map(|f| Rancher::service_family(&fs::read_to_string(f).ok()?))
+            .next_back()
+    })
+}
+
+/// `config.yaml` of `distribution` under `root`, then its `config.yaml.d` drop-ins in the order
+/// the distribution reads them.
+fn rancher_config_files(root: &Path, distribution: Rancher) -> Vec<std::path::PathBuf> {
+    let dir = root.join(
+        distribution
+            .distribution()
+            .layout()
+            .config_dir
+            .trim_start_matches('/'),
+    );
+    let mut drop_ins: Vec<_> = fs::read_dir(dir.join("config.yaml.d"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "yaml"))
+        .collect();
+    drop_ins.sort();
+    std::iter::once(dir.join("config.yaml"))
+        .chain(drop_ins)
+        .collect()
 }
 
 fn rancher_node_name(path: &Path) -> Option<String> {
@@ -360,6 +385,25 @@ mod tests {
             "node-name: db-1\n",
         );
         assert_eq!(installed_node_name(root).as_deref(), Some("db-1"));
+    }
+
+    #[test]
+    fn the_last_service_cidr_on_the_host_gives_the_family() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        assert_eq!(installed_service_family(root), None);
+        write(
+            root,
+            "/etc/rancher/rke2/config.yaml.d/90-local.yaml",
+            "service-cidr: fd00:43::/112\n",
+        );
+        assert_eq!(installed_service_family(root), Some(IpFamily::V6));
+        write(
+            root,
+            "/etc/rancher/rke2/config.yaml.d/95-later.yaml",
+            "service-cidr: 10.43.0.0/16,fd00:43::/112\n",
+        );
+        assert_eq!(installed_service_family(root), Some(IpFamily::V4));
     }
 
     #[test]
