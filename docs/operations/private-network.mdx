@@ -42,7 +42,7 @@ network:
   interface: eth1
 ```
 
-On K3s, each node names its own interface. On RKE2, Canal takes one interface name for the whole cluster: every server writes it in `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`, a `HelmChartConfig` named `rke2-canal`. Give every RKE2 node an interface of the same name and the same `network.interface`. When you remove the setting, the server keeps the file with a blank interface, which puts Canal back on the default route. If you keep your own `rke2-canal` `HelmChartConfig` in the manifests directory, set `flannel.iface` in it instead of `network.interface`, because two of them overwrite each other.
+On K3s, each node names its own interface. On RKE2, Canal takes one interface name for the whole cluster: every server writes it in `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`, a `HelmChartConfig` named `rke2-canal`. Give every RKE2 node an interface of the same name and the same `network.interface`. When you remove the setting, the server keeps the file with a blank interface, which puts Canal back on the default route. Canal's pods read the interface only when they start, so after the node is ready, `apply` on an RKE2 server restarts Canal on each node of the cluster, one node at a time, when the interface changed. Pod traffic between nodes can pause while the nodes move to the new interface. If you keep your own `rke2-canal` `HelmChartConfig` in the manifests directory, set `flannel.iface` in it instead of `network.interface`, because two of them overwrite each other.
 
 ## Tailscale
 

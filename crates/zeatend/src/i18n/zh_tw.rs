@@ -28,6 +28,7 @@ pub(super) const MESSAGES: Messages = Messages {
     starting_unit,
     restarting_unit,
     waiting_for_node,
+    restarting_canal,
     step,
     done: DONE,
     ready,
@@ -164,6 +165,15 @@ fn starting_unit(unit: &str) -> String {
 
 fn restarting_unit(unit: &str) -> String {
     format!("正在重新啟動 {unit}，套用新的設定")
+}
+
+fn restarting_canal(iface: &str) -> String {
+    let iface = if iface.is_empty() {
+        "預設路由"
+    } else {
+        iface
+    };
+    format!("正在逐一重新啟動每個節點的 Canal，改走 {iface}")
 }
 
 fn waiting_for_node(node: &str) -> String {

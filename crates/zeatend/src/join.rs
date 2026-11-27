@@ -173,6 +173,9 @@ pub(crate) async fn apply(
         restarted.then(|| install.unit()),
     )
     .await?;
+    if let Some(iface) = &plan.canal_iface {
+        apply::roll_canal(&Kubectl::admin(distribution.distribution()), iface).await?;
+    }
     steps.start(Step::WriteRecord)?;
     apply::write_record(
         Path::new(layout.state_dir),

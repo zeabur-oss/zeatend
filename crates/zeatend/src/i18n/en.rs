@@ -32,6 +32,7 @@ pub(super) const MESSAGES: Messages = Messages {
     starting_unit,
     restarting_unit,
     waiting_for_node,
+    restarting_canal,
     step,
     done: DONE,
     ready,
@@ -187,6 +188,15 @@ fn starting_unit(unit: &str) -> String {
 
 fn restarting_unit(unit: &str) -> String {
     format!("restarting {unit} for the new configuration")
+}
+
+fn restarting_canal(iface: &str) -> String {
+    let iface = if iface.is_empty() {
+        "the default route"
+    } else {
+        iface
+    };
+    format!("restarting Canal on each node, one at a time, to run on {iface}")
 }
 
 fn waiting_for_node(node: &str) -> String {

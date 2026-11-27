@@ -42,7 +42,7 @@ network:
   interface: eth1
 ```
 
-K3s 的每個節點各自指定介面。RKE2 的 Canal 則整個叢集只用一個介面名稱：每台伺服器都會把它寫進 `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`，也就是名為 `rke2-canal` 的 `HelmChartConfig`。所以 RKE2 的每個節點都要有同名的介面，並設定相同的 `network.interface`。之後移除這項設定時，伺服器會保留這份檔案、把介面留空，Canal 就回到預設路由。如果你在 manifests 目錄放了自己的 `rke2-canal` `HelmChartConfig`，就在那份檔案設定 `flannel.iface`，不要設定 `network.interface`，否則兩份設定會互相覆蓋。
+K3s 的每個節點各自指定介面。RKE2 的 Canal 則整個叢集只用一個介面名稱：每台伺服器都會把它寫進 `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`，也就是名為 `rke2-canal` 的 `HelmChartConfig`。所以 RKE2 的每個節點都要有同名的介面，並設定相同的 `network.interface`。之後移除這項設定時，伺服器會保留這份檔案、把介面留空，Canal 就回到預設路由。Canal 的 Pod 只在啟動時讀取介面，所以介面變更時，RKE2 伺服器上的 `apply` 會在節點就緒後，逐一重新啟動叢集每個節點的 Canal。各節點換到新介面的過程中，節點之間的 Pod 流量可能短暫中斷。如果你在 manifests 目錄放了自己的 `rke2-canal` `HelmChartConfig`，就在那份檔案設定 `flannel.iface`，不要設定 `network.interface`，否則兩份設定會互相覆蓋。
 
 ## Tailscale
 

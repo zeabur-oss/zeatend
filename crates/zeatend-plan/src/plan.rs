@@ -136,6 +136,9 @@ pub struct Plan {
     /// Files written before the distribution starts.
     #[serde(skip)]
     pub host_files: Vec<HostFile>,
+    /// The interface Canal runs on after `apply`, on an RKE2 server; `None` leaves Canal alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canal_iface: Option<String>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
     /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
@@ -268,6 +271,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         .collect();
     let memory_tier = MemoryTier::of(facts.memory_mib);
     let tuning = HostTuning::new(config.distribution, memory_tier);
+    let mut canal_iface = None;
     let (release, mut host_files) = if let Some(rancher) = config.distribution.rancher() {
         memory(rancher, facts, &mut findings)?;
         let mut cluster = cluster_plan(
@@ -289,6 +293,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         files.extend(rancher.node_ip_file(interface, &facts.node_ips, &facts.external_ips)?);
         let written = facts.registry_files.contains(&Rancher::canal_config_path());
         files.extend(rancher.canal_config(interface, written)?);
+        canal_iface = rancher.canal_iface(interface, written).map(str::to_owned);
         (Release::Cluster(cluster), files)
     } else {
         let arch = facts.arch.as_str();
@@ -347,6 +352,7 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         removed_files: registry::removed(&facts.registry_files, &host_files),
         host_files,
+        canal_iface,
         longhorn,
         changes,
         findings: findings.into_iter().map(Check::from).collect(),
@@ -590,9 +596,12 @@ mod tests {
             canal.contains(r#""valuesContent":"flannel:\n  iface: eth1\n""#),
             "{canal}"
         );
+        assert_eq!(rke2.canal_iface.as_deref(), Some("eth1"));
+        assert_eq!(k3s.canal_iface, None);
         // Without the setting, nothing names an interface.
         let plain = plan(&config("distribution: rke2\n"), &facts()).unwrap();
         assert!(file(&plain, &Rancher::canal_config_path()).is_none());
+        assert_eq!(plain.canal_iface, None);
         // Once the setting goes, the manifest stays with a blank interface, because RKE2 keeps
         // the resource of a removed manifest.
         let earlier = Facts {
@@ -603,6 +612,8 @@ mod tests {
         assert_eq!(cleared.removed_files, Vec::<String>::new());
         let canal = file(&cleared, &Rancher::canal_config_path()).unwrap();
         assert!(!canal.contains("eth1"), "{canal}");
+        // Canal moves back to the default route.
+        assert_eq!(cleared.canal_iface.as_deref(), Some(""));
     }
 
     #[test]
