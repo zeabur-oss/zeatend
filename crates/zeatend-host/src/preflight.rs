@@ -240,32 +240,35 @@ async fn iptables() -> Option<Check> {
 
 /// [`iptables`] with the programs found in `path`, a `PATH` value.
 async fn iptables_in(path: &std::ffi::OsStr) -> Option<Check> {
-    let programs: Vec<(&str, std::path::PathBuf)> = IPTABLES_SAVE
-        .iter()
-        .filter_map(|&name| {
-            std::env::split_paths(path)
-                .map(|dir| dir.join(name))
-                .find(|file| file.is_file())
-                .map(|file| (name, file))
-        })
-        .collect();
-    if programs.is_empty() {
-        return None;
+    let mut found = false;
+    for command in IPTABLES_SAVE {
+        let output = tokio::process::Command::new(command)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await;
+        let error = match output {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => e.to_string(),
+            Ok(output) if output.status.success() => {
+                found = true;
+                continue;
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let lines: Vec<&str> = stderr.lines().map(str::trim).collect();
+                if lines.is_empty() {
+                    output.status.to_string()
+                } else {
+                    lines.join(" ")
+                }
+            }
+        };
+        let command = command.to_owned();
+        return Some(Finding::IptablesUnreadable { command, error }.into());
     }
-    for (name, program) in programs {
-        if let Err(e) = cmd::run(&program, &[], None).await {
-            let command = name.to_owned();
-            let message = e.to_string();
-            let stderr: Vec<&str> = message.lines().skip(1).collect();
-            let error = if stderr.is_empty() {
-                message.clone()
-            } else {
-                stderr.join(" ")
-            };
-            return Some(Finding::IptablesUnreadable { command, error }.into());
-        }
-    }
-    Some(Finding::IptablesOk.into())
+    found.then(|| Finding::IptablesOk.into())
 }
 
 /// Tailscale's addresses: the shared address space of RFC 6598, `100.64.0.0/10`
@@ -488,6 +491,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(iptables_in(dir.path().as_os_str()).await, None);
         program(dir.path(), "iptables-save", "echo '*filter'");
+        let one = iptables_in(dir.path().as_os_str()).await.unwrap();
+        assert_eq!(one.finding, Finding::IptablesOk);
         program(dir.path(), "ip6tables-save", "echo '*filter'");
         let ok = iptables_in(dir.path().as_os_str()).await.unwrap();
         assert_eq!(ok.finding, Finding::IptablesOk);
