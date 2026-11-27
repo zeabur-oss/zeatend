@@ -300,6 +300,7 @@ pub(super) const fn topic(topic: Topic) -> &'static str {
         Topic::Mirrors => "registry mirrors",
         Topic::NodeName => "node name",
         Topic::NetworkInterface => "network interface",
+        Topic::Iptables => "iptables",
     }
 }
 
@@ -431,6 +432,13 @@ pub(crate) fn finding(finding: &Finding) -> String {
             "{interface} is a Tailscale interface: {address} is in 100.64.0.0/10. Tailscale sends \
              flannel's traffic back into its own tunnel. Remove network.interface and use K3s's \
              Tailscale integration, as \
+             https://oss.zeabur.com/docs/zeatend/operations/private-network/#tailscale says."
+        ),
+        Finding::IptablesOk => "iptables-save reads the host's rules".to_owned(),
+        Finding::IptablesUnreadable { command, error } => format!(
+            "{command} fails ({error}), so Calico and kube-proxy can't read the rules and don't \
+             start. Another program wrote nftables rules that iptables can't read. Run Tailscale \
+             in its iptables mode, as \
              https://oss.zeabur.com/docs/zeatend/operations/private-network/#tailscale says."
         ),
         Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
