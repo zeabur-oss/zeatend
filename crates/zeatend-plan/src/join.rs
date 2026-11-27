@@ -296,7 +296,8 @@ fn network_files(
         .into_iter()
         .collect();
     if config.join.role == Role::Server {
-        files.extend(distribution.canal_config(interface)?);
+        let written = facts.registry_files.contains(&Rancher::canal_config_path());
+        files.extend(distribution.canal_config(interface, written)?);
     }
     Ok(files)
 }

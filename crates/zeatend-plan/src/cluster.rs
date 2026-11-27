@@ -718,10 +718,20 @@ impl Rancher {
     /// of the cluster: the chart passes it to the Canal `DaemonSet` (`FLANNELD_IFACE`). `None` on
     /// K3s, which takes the interface per node, and without an interface.
     ///
+    /// Without an interface on a server where zeatend wrote the manifest before (`written`), the
+    /// manifest stays with a blank interface, which is the default route. The deploy controller
+    /// does not delete a resource when its manifest goes
+    /// (<https://docs.rke2.io/install/packaged_components>), so a removed manifest leaves the old
+    /// interface in the cluster.
+    ///
     /// # Errors
     ///
     /// When the manifest cannot be serialised.
-    pub fn canal_config(self, interface: Option<&str>) -> Result<Option<HostFile>, PlanError> {
+    pub fn canal_config(
+        self,
+        interface: Option<&str>,
+        written: bool,
+    ) -> Result<Option<HostFile>, PlanError> {
         #[derive(Serialize)]
         struct Values<'a> {
             flannel: Flannel<'a>,
@@ -730,7 +740,10 @@ impl Rancher {
         struct Flannel<'a> {
             iface: &'a str,
         }
-        let Some(interface) = interface.filter(|_| self == Self::Rke2) else {
+        if self != Self::Rke2 {
+            return Ok(None);
+        }
+        let Some(interface) = interface.or_else(|| written.then_some("")) else {
             return Ok(None);
         };
         let values = serde_saphyr::to_string(&Values {
@@ -1502,7 +1515,10 @@ mod tests {
             value,
             serde_json::json!({"node-ip": ["10.0.0.6"], "node-external-ip": ["203.0.113.6"]})
         );
-        let canal = Rancher::Rke2.canal_config(Some("eth1")).unwrap().unwrap();
+        let canal = Rancher::Rke2
+            .canal_config(Some("eth1"), false)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             canal.path,
             "/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml"
@@ -1527,8 +1543,21 @@ mod tests {
                 "spec": {"valuesContent": "flannel:\n  iface: eth1\n"},
             })]
         );
-        assert_eq!(Rancher::K3s.canal_config(Some("eth1")).unwrap(), None);
-        assert_eq!(Rancher::Rke2.canal_config(None).unwrap(), None);
+        assert_eq!(
+            Rancher::K3s.canal_config(Some("eth1"), false).unwrap(),
+            None
+        );
+        assert_eq!(Rancher::K3s.canal_config(None, true).unwrap(), None);
+        assert_eq!(Rancher::Rke2.canal_config(None, false).unwrap(), None);
+        // Once written, the manifest stays and sets the default route back.
+        let reset = Rancher::Rke2.canal_config(None, true).unwrap().unwrap();
+        assert!(
+            reset
+                .content
+                .contains(r#""valuesContent":"flannel:\n  iface: \"\"\n""#),
+            "{}",
+            reset.content
+        );
         // An interface without a readable address still writes the CNI interface.
         assert!(
             Rancher::K3s

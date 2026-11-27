@@ -42,7 +42,7 @@ network:
   interface: eth1
 ```
 
-K3s 的每个节点各自指定接口。RKE2 的 Canal 则在整个集群只用一个接口名称：每台服务器都会把它写进 `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`，即名为 `rke2-canal` 的 `HelmChartConfig`。因此 RKE2 的每个节点都要有同名接口，并配置相同的 `network.interface`。如果你在 manifests 目录里放了自己的 `rke2-canal` `HelmChartConfig`，就在那个文件里设置 `flannel.iface`，不要配置 `network.interface`，否则两份配置会互相覆盖。
+K3s 的每个节点各自指定接口。RKE2 的 Canal 则在整个集群只用一个接口名称：每台服务器都会把它写进 `/var/lib/rancher/rke2/server/manifests/zeatend-canal-config.yaml`，即名为 `rke2-canal` 的 `HelmChartConfig`。因此 RKE2 的每个节点都要有同名接口，并配置相同的 `network.interface`。之后删除这项配置时，服务器会保留这个文件并把接口留空，Canal 就回到默认路由。如果你在 manifests 目录里放了自己的 `rke2-canal` `HelmChartConfig`，就在那个文件里设置 `flannel.iface`，不要配置 `network.interface`，否则两份配置会互相覆盖。
 
 ## Tailscale
 

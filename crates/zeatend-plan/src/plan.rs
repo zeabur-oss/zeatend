@@ -287,7 +287,8 @@ pub fn plan(config: &Config, facts: &Facts) -> Result<Plan, PlanError> {
         files.push(rancher.node_name_file(&node_name)?);
         let interface = config.network.interface.as_deref();
         files.extend(rancher.node_ip_file(interface, &facts.node_ips, &facts.external_ips)?);
-        files.extend(rancher.canal_config(interface)?);
+        let written = facts.registry_files.contains(&Rancher::canal_config_path());
+        files.extend(rancher.canal_config(interface, written)?);
         (Release::Cluster(cluster), files)
     } else {
         let arch = facts.arch.as_str();
@@ -592,13 +593,16 @@ mod tests {
         // Without the setting, nothing names an interface.
         let plain = plan(&config("distribution: rke2\n"), &facts()).unwrap();
         assert!(file(&plain, &Rancher::canal_config_path()).is_none());
-        // Once the setting goes, the manifest zeatend wrote goes too.
+        // Once the setting goes, the manifest stays with a blank interface, because RKE2 keeps
+        // the resource of a removed manifest.
         let earlier = Facts {
             registry_files: vec![Rancher::canal_config_path()],
             ..facts()
         };
-        let removed = plan(&config("distribution: rke2\n"), &earlier).unwrap();
-        assert_eq!(removed.removed_files, [Rancher::canal_config_path()]);
+        let cleared = plan(&config("distribution: rke2\n"), &earlier).unwrap();
+        assert_eq!(cleared.removed_files, Vec::<String>::new());
+        let canal = file(&cleared, &Rancher::canal_config_path()).unwrap();
+        assert!(!canal.contains("eth1"), "{canal}");
     }
 
     #[test]
