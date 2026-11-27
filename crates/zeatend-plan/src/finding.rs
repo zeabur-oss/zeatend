@@ -77,6 +77,8 @@ pub enum Topic {
     NodeName,
     /// The interface of `network.interface`.
     NetworkInterface,
+    /// The host's firewall rules, as `iptables-save` reads them.
+    Iptables,
 }
 
 /// Files of another Kubernetes distribution.
@@ -275,6 +277,18 @@ pub enum Finding {
         interface: String,
         /// The address.
         address: String,
+    },
+    /// `iptables-save` and `ip6tables-save` read the host's rules.
+    #[serde(rename = "iptables.ok")]
+    IptablesOk,
+    /// `iptables-save` or `ip6tables-save` fails, often on nftables rules that iptables-nft
+    /// cannot parse. Calico and kube-proxy read the rules with it, so they do not start.
+    #[serde(rename = "iptables.unreadable")]
+    IptablesUnreadable {
+        /// The command.
+        command: String,
+        /// Its error.
+        error: String,
     },
     /// K3s, RKE2 and `KubeSolo` are not installed.
     #[serde(rename = "service.none")]
@@ -558,6 +572,7 @@ impl Finding {
             | Self::InterfaceMissing { .. }
             | Self::InterfaceNoAddress { .. }
             | Self::InterfaceTailscale { .. } => Topic::NetworkInterface,
+            Self::IptablesOk | Self::IptablesUnreadable { .. } => Topic::Iptables,
         }
     }
 
@@ -584,7 +599,8 @@ impl Finding {
             | Self::LonghornReady
             | Self::DownloadsOk { .. }
             | Self::MirrorOk { .. }
-            | Self::InterfaceOk { .. } => Status::Pass,
+            | Self::InterfaceOk { .. }
+            | Self::IptablesOk => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -632,7 +648,8 @@ impl Finding {
             | Self::LonghornMissing { .. }
             | Self::InterfaceMissing { .. }
             | Self::InterfaceNoAddress { .. }
-            | Self::InterfaceTailscale { .. } => Status::Fail,
+            | Self::InterfaceTailscale { .. }
+            | Self::IptablesUnreadable { .. } => Status::Fail,
         }
     }
 }

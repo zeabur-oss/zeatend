@@ -658,6 +658,10 @@ mod tests {
                 interface: "tailscale0".to_owned(),
                 address: "100.101.102.103".to_owned(),
             },
+            Finding::IptablesUnreadable {
+                command: "iptables-save".to_owned(),
+                error: "Parsing nftables rule failed".to_owned(),
+            },
             Finding::RecordMissing {
                 path: "/var/lib/zeatend".to_owned(),
             },

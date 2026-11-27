@@ -48,6 +48,13 @@ On K3s, each node names its own interface. On RKE2, Canal takes one interface na
 
 Don't set `network.interface` to `tailscale0`. Tailscale offers each of the host's addresses as a way to reach the node, the pod network's own `flannel.1` too, so the pods' traffic over `tailscale0` returns into the tunnel. An interface whose peers have fixed addresses, such as a WireGuard interface `wg0`, doesn't have this problem.
 
+On every cluster node, run Tailscale in its iptables mode. In its nftables mode, Tailscale adds rules to the tables of iptables that `iptables-save` can't read, and then Calico and kube-proxy, which read the rules with it, don't start. The host checks stop `apply` when `iptables-save` fails. Set the mode in the file that Tailscale's service reads, and restart Tailscale:
+
+```sh
+echo 'TS_DEBUG_FIREWALL_MODE=iptables' | sudo tee -a /etc/default/tailscaled
+sudo systemctl restart tailscaled
+```
+
 K3s has its own Tailscale integration, which is still experimental: K3s joins each node to your tailnet and sends the pods' traffic through Tailscale subnet routes ([Distributed hybrid or multicloud cluster](https://docs.k3s.io/networking/distributed-multicloud)). Zeatend doesn't set it up, and RKE2 has no such integration. Without `network.interface`, set it up on K3s like this:
 
 <Steps>

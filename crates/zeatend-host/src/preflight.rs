@@ -96,6 +96,7 @@ pub async fn run(options: Options<'_>) -> Vec<Check> {
     if let Some(interface) = options.interface {
         checks.push(network_interface(interface).await);
     }
+    checks.extend(iptables().await);
     checks.push(disk_space(options.distribution.layout().data_dir).await);
     checks.push(encryption(options.distribution, options.require_encrypted_disk).await);
     checks
@@ -225,6 +226,49 @@ fn docker_check(found: Vec<String>, iptables: &str) -> Finding {
     } else {
         Finding::DockerNone
     }
+}
+
+/// The programs that print the host's IPv4 and IPv6 rules.
+const IPTABLES_SAVE: [&str; 2] = ["iptables-save", "ip6tables-save"];
+
+/// Whether `iptables-save` and `ip6tables-save` read the host's rules; `None` on a host without
+/// them. Rules that another program writes with nftables into the tables iptables-nft owns, such
+/// as Tailscale in its nftables mode, can make them fail, and then Calico and kube-proxy fail too.
+async fn iptables() -> Option<Check> {
+    iptables_in(&std::env::var_os("PATH").unwrap_or_default()).await
+}
+
+/// [`iptables`] with the programs found in `path`, a `PATH` value.
+async fn iptables_in(path: &std::ffi::OsStr) -> Option<Check> {
+    let mut found = false;
+    for command in IPTABLES_SAVE {
+        let output = tokio::process::Command::new(command)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output()
+            .await;
+        let error = match output {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => e.to_string(),
+            Ok(output) if output.status.success() => {
+                found = true;
+                continue;
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let lines: Vec<&str> = stderr.lines().map(str::trim).collect();
+                if lines.is_empty() {
+                    output.status.to_string()
+                } else {
+                    lines.join(" ")
+                }
+            }
+        };
+        let command = command.to_owned();
+        return Some(Finding::IptablesUnreadable { command, error }.into());
+    }
+    found.then(|| Finding::IptablesOk.into())
 }
 
 /// Tailscale's addresses: the shared address space of RFC 6598, `100.64.0.0/10`
@@ -434,6 +478,39 @@ mod tests {
     use zeatend_plan::finding::Status;
 
     use super::*;
+
+    fn program(dir: &Path, name: &str, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        let file = dir.join(name);
+        fs::write(&file, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn rules_that_iptables_save_cannot_read_stop_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(iptables_in(dir.path().as_os_str()).await, None);
+        program(dir.path(), "iptables-save", "echo '*filter'");
+        let one = iptables_in(dir.path().as_os_str()).await.unwrap();
+        assert_eq!(one.finding, Finding::IptablesOk);
+        program(dir.path(), "ip6tables-save", "echo '*filter'");
+        let ok = iptables_in(dir.path().as_os_str()).await.unwrap();
+        assert_eq!(ok.finding, Finding::IptablesOk);
+        program(
+            dir.path(),
+            "ip6tables-save",
+            "echo 'Error: meta sreg is not an immediate' >&2\n\
+             echo 'ip6tables-nft-save v1.8.11 (nf_tables): Parsing nftables rule failed' >&2\n\
+             exit 1",
+        );
+        let failed = iptables_in(dir.path().as_os_str()).await.unwrap();
+        assert_eq!(failed.status, Status::Fail);
+        let Finding::IptablesUnreadable { command, error } = failed.finding else {
+            panic!("{failed:?}");
+        };
+        assert_eq!(command, "ip6tables-save");
+        assert!(error.contains("Parsing nftables rule failed"), "{error}");
+    }
 
     #[test]
     fn the_interface_must_exist_hold_an_address_and_not_be_tailscale() {

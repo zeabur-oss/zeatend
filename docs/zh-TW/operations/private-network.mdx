@@ -48,6 +48,13 @@ K3s 的每個節點各自指定介面。RKE2 的 Canal 則整個叢集只用一�
 
 不要把 `network.interface` 設為 `tailscale0`。Tailscale 會把主機的每個位址都當成連到這個節點的途徑，連 Pod 網路自己的 `flannel.1` 也包括在內，所以走 `tailscale0` 的 Pod 流量會繞回通道裡。如果介面另一端的位址固定，例如 WireGuard 的 `wg0`，就沒有這個問題。
 
+在每個叢集節點上，讓 Tailscale 以 iptables 模式執行。Tailscale 在 nftables 模式下，會在 iptables 的表格裡加入 `iptables-save` 讀不懂的規則，用它讀取規則的 Calico 和 kube-proxy 就無法啟動。`iptables-save` 執行失敗時，主機檢查會讓 `apply` 停止。在 Tailscale 服務讀取的檔案裡設定模式，再重新啟動 Tailscale：
+
+```sh
+echo 'TS_DEBUG_FIREWALL_MODE=iptables' | sudo tee -a /etc/default/tailscaled
+sudo systemctl restart tailscaled
+```
+
 K3s 內建 Tailscale 整合，目前仍是實驗功能：K3s 會讓每個節點加入你的 tailnet，並透過 Tailscale 的子網路路由傳送 Pod 的流量（[Distributed hybrid or multicloud cluster](https://docs.k3s.io/networking/distributed-multicloud)）。Zeatend 不會幫你設定這項整合，RKE2 也沒有類似的整合。不設定 `network.interface`，在 K3s 照以下步驟設定：
 
 <Steps>
