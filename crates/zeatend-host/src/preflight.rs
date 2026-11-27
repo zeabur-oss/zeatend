@@ -240,23 +240,21 @@ async fn iptables() -> Option<Check> {
 
 /// [`iptables`] with the programs found in `path`, a `PATH` value.
 async fn iptables_in(path: &std::ffi::OsStr) -> Option<Check> {
-    let programs: Vec<std::path::PathBuf> = IPTABLES_SAVE
+    let programs: Vec<(&str, std::path::PathBuf)> = IPTABLES_SAVE
         .iter()
-        .filter_map(|program| {
+        .filter_map(|&name| {
             std::env::split_paths(path)
-                .map(|dir| dir.join(program))
+                .map(|dir| dir.join(name))
                 .find(|file| file.is_file())
+                .map(|file| (name, file))
         })
         .collect();
     if programs.is_empty() {
         return None;
     }
-    for program in programs {
+    for (name, program) in programs {
         if let Err(e) = cmd::run(&program, &[], None).await {
-            let command = program
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
+            let command = name.to_owned();
             let message = e.to_string();
             let stderr: Vec<&str> = message.lines().skip(1).collect();
             let error = if stderr.is_empty() {
