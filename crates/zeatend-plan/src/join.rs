@@ -154,6 +154,9 @@ pub struct JoinPlan {
     /// Files written before the node starts. The token file is not among them.
     #[serde(skip)]
     pub host_files: Vec<HostFile>,
+    /// The interface Canal runs on after `apply`, on an RKE2 server; `None` leaves Canal alone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canal_iface: Option<String>,
     /// Their paths, for the JSON form.
     pub host_file_paths: Vec<String>,
     /// What `apply` does for Longhorn; `None` unless `storage.longhorn` is set.
@@ -302,6 +305,17 @@ fn network_files(
     Ok(files)
 }
 
+/// The interface Canal runs on after `apply`; only a server deploys Canal's settings.
+fn canal_iface(distribution: Rancher, config: &JoinConfig, facts: &Facts) -> Option<String> {
+    if config.join.role != Role::Server {
+        return None;
+    }
+    let written = facts.registry_files.contains(&Rancher::canal_config_path());
+    distribution
+        .canal_iface(config.network.interface.as_deref(), written)
+        .map(str::to_owned)
+}
+
 /// Computes the plan of a joining node.
 ///
 /// # Errors
@@ -365,6 +379,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
     host_files.push(distribution.join_file(&join.server)?);
     host_files.push(distribution.node_name_file(&node_name)?);
     host_files.extend(network_files(distribution, config, &facts.facts)?);
+    let canal_iface = canal_iface(distribution, config, &facts.facts);
     let (host, port) = crate::config::server_address(&join.server, distribution.join_port())?;
     let mut direct = facts.facts.node_ips.clone();
     direct.push(host.clone());
@@ -404,6 +419,7 @@ pub fn plan(config: &JoinConfig, facts: &JoinFacts) -> Result<JoinPlan, PlanErro
         host_file_paths: host_files.iter().map(|f| f.path.clone()).collect(),
         removed_files: crate::registry::removed(&facts.facts.registry_files, &host_files),
         host_files,
+        canal_iface,
         longhorn: facts.facts.longhorn(config.storage)?,
         rtt,
         ports,
@@ -534,11 +550,14 @@ mod tests {
         // A worker deploys no manifests; a server writes Canal's interface as the first one does.
         let canal = Rancher::canal_config_path();
         assert!(!worker.host_file_paths.contains(&canal));
+        assert_eq!(worker.canal_iface, None);
         let server = plan(
             &config("  role: server\nnetwork: {interface: eth1}\n"),
             &read,
-        );
-        assert!(server.unwrap().host_file_paths.contains(&canal));
+        )
+        .unwrap();
+        assert!(server.host_file_paths.contains(&canal));
+        assert_eq!(server.canal_iface.as_deref(), Some("eth1"));
         // The node's registry traffic to its own addresses stays direct.
         let proxied = plan(
             &config("network: {interface: eth1}\nproxy: {https: \"http://proxy:3128\"}\n"),

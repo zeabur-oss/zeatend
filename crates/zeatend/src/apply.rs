@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use k8s_openapi::api::apps::v1::DaemonSet;
+use k8s_openapi::api::core::v1::ConfigMap;
 use k8s_openapi::apimachinery::pkg::version::Info;
 use zeatend_host::kubectl::{self, Kubectl};
 use zeatend_host::{HostError, archive, cmd, download, facts, files, longhorn, preflight, systemd};
@@ -171,6 +173,9 @@ async fn run_cluster(
     if restarted {
         crate::join::wait_node_ready(&kubectl, &name, Some(install.unit())).await?;
     }
+    if let Some(iface) = &plan.canal_iface {
+        roll_canal(&kubectl, iface).await?;
+    }
     steps.start(Step::WaitRemoved)?;
     wait_removed(&kubectl, rancher, &config.disable).await?;
     steps.start(Step::ProtectCertificates)?;
@@ -201,6 +206,46 @@ async fn run_cluster(
         rewrite: url.as_deref().map(|url| (loopback.as_str(), url)),
         add_nodes: true,
     }));
+    Ok(())
+}
+
+/// Waits until Canal's `ConfigMap` names `iface`, then rolls the `rke2-canal` `DaemonSet` when its
+/// pods started with another interface. The pods read the `ConfigMap` only when they start, and the
+/// chart does not roll them when it changes, so without this a first server keeps the default
+/// route, and a changed `network.interface` takes effect only where a pod restarts.
+pub(crate) async fn roll_canal(kubectl: &Kubectl, iface: &str) -> Result<(), InstallError> {
+    const NAMESPACE: &str = "kube-system";
+    kubectl::poll(
+        Duration::from_mins(10),
+        "the rke2-canal-config ConfigMap to take the interface",
+        async || {
+            let map: Option<ConfigMap> = kubectl
+                .get("configmap", "rke2-canal-config", Some(NAMESPACE))
+                .await?;
+            Ok::<_, InstallError>(
+                map.and_then(|m| m.data)
+                    .and_then(|data| data.get("canal_iface").cloned())
+                    .is_some_and(|value| value == iface),
+            )
+        },
+    )
+    .await?;
+    let daemon_set: Option<DaemonSet> = kubectl
+        .get("daemonset", "rke2-canal", Some(NAMESPACE))
+        .await?;
+    let annotation = daemon_set
+        .and_then(|d| d.spec.template.metadata?.annotations)
+        .and_then(|a| a.get(cluster::CANAL_IFACE_ANNOTATION).cloned());
+    let Some(patch) = cluster::canal_rollout(annotation.as_deref(), iface) else {
+        return Ok(());
+    };
+    output::note(&(i18n::messages().restarting_canal)(iface));
+    kubectl
+        .patch(NAMESPACE, "daemonset/rke2-canal", &patch)
+        .await?;
+    kubectl
+        .rollout(NAMESPACE, "daemonset/rke2-canal", Duration::from_mins(10))
+        .await?;
     Ok(())
 }
 

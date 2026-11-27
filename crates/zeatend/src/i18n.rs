@@ -200,6 +200,8 @@ pub(crate) struct Messages {
     pub(crate) restarting_unit: fn(&str) -> String,
     /// The node that [`Step::WaitReady`] waits for, as a note under the step.
     pub(crate) waiting_for_node: fn(&str) -> String,
+    /// Canal restarts on every node to read a new interface; blank is the default route.
+    pub(crate) restarting_canal: fn(&str) -> String,
     /// A step of an install.
     pub(crate) step: fn(Step) -> &'static str,
     /// The last step of an install.

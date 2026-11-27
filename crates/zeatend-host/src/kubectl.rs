@@ -104,6 +104,28 @@ impl Kubectl {
         self.run(&all, None).await.map(drop)
     }
 
+    /// Applies a JSON merge patch to `object`, such as `daemonset/rke2-canal`.
+    ///
+    /// # Errors
+    ///
+    /// When `kubectl patch` fails.
+    pub async fn patch(&self, namespace: &str, object: &str, patch: &str) -> Result<(), HostError> {
+        self.run(
+            &[
+                "patch",
+                "--namespace",
+                namespace,
+                object,
+                "--type=merge",
+                "--patch",
+                patch,
+            ],
+            None,
+        )
+        .await
+        .map(drop)
+    }
+
     /// Waits for the API server to answer `/readyz`. Each try waits at most 10 s for an answer,
     /// so this returns at most 10 s after `timeout`.
     ///

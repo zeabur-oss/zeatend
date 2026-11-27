@@ -740,10 +740,7 @@ impl Rancher {
         struct Flannel<'a> {
             iface: &'a str,
         }
-        if self != Self::Rke2 {
-            return Ok(None);
-        }
-        let Some(interface) = interface.or_else(|| written.then_some("")) else {
+        let Some(interface) = self.canal_iface(interface, written) else {
             return Ok(None);
         };
         let values = serde_saphyr::to_string(&Values {
@@ -767,6 +764,17 @@ impl Rancher {
             &[config],
         )
         .map(Some)
+    }
+
+    /// The interface [`Self::canal_config`] gives Canal: `interface`, or blank (the default
+    /// route) once zeatend wrote the manifest. `None` when there is no manifest: on K3s, and on
+    /// RKE2 without an interface.
+    #[must_use]
+    pub fn canal_iface(self, interface: Option<&str>, written: bool) -> Option<&str> {
+        if self != Self::Rke2 {
+            return None;
+        }
+        interface.or_else(|| written.then_some(""))
     }
 
     /// Where [`Self::canal_config`] goes.
@@ -1321,6 +1329,24 @@ pub(crate) fn control_plane_requests() -> Vec<String> {
     ]
 }
 
+/// The annotation on the `rke2-canal` pod template that names the interface its pods read.
+///
+/// The chart passes `flannel.iface` to the pods through a `ConfigMap`, which they read only when
+/// they start, and nothing in the chart rolls them when it changes.
+pub const CANAL_IFACE_ANNOTATION: &str = "zeatend.zeabur.com/canal-iface";
+
+/// The merge patch that rolls the `rke2-canal` `DaemonSet` onto `iface`; `None` when its pod
+/// template's [`CANAL_IFACE_ANNOTATION`] (`annotation`) already names it.
+#[must_use]
+pub fn canal_rollout(annotation: Option<&str>, iface: &str) -> Option<String> {
+    (annotation != Some(iface)).then(|| {
+        serde_json::json!({
+            "spec": {"template": {"metadata": {"annotations": {CANAL_IFACE_ANNOTATION: iface}}}}
+        })
+        .to_string()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -1567,6 +1593,37 @@ mod tests {
                 .content
                 .contains("flannel-iface: eth1")
         );
+    }
+
+    #[test]
+    fn canal_rolls_only_when_its_pods_started_with_another_interface() {
+        #[derive(Deserialize)]
+        struct Patch {
+            spec: PatchSpec,
+        }
+        #[derive(Deserialize)]
+        struct PatchSpec {
+            template: PatchTemplate,
+        }
+        #[derive(Deserialize)]
+        struct PatchTemplate {
+            metadata: ObjectMeta,
+        }
+        assert_eq!(Rancher::Rke2.canal_iface(Some("wg0"), false), Some("wg0"));
+        assert_eq!(Rancher::Rke2.canal_iface(None, true), Some(""));
+        assert_eq!(Rancher::Rke2.canal_iface(None, false), None);
+        assert_eq!(Rancher::K3s.canal_iface(Some("wg0"), true), None);
+
+        assert_eq!(canal_rollout(Some("wg0"), "wg0"), None);
+        for (started, iface) in [(None, "wg0"), (Some("eth1"), "wg0"), (Some("wg0"), "")] {
+            let patch: Patch =
+                serde_json::from_str(&canal_rollout(started, iface).unwrap()).unwrap();
+            let annotations = patch.spec.template.metadata.annotations.unwrap();
+            assert_eq!(
+                annotations.get(CANAL_IFACE_ANNOTATION).map(String::as_str),
+                Some(iface)
+            );
+        }
     }
 
     #[test]

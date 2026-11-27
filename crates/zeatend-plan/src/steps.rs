@@ -25,7 +25,8 @@ pub enum Step {
     InstallRelease,
     /// Enables and starts the unit, or restarts it when something changed.
     StartService,
-    /// Waits until the API server answers and the node is Ready.
+    /// Waits until the API server answers and the node is Ready; on an RKE2 server, also until
+    /// Canal runs on the interface of `network.interface`.
     WaitReady,
     /// Waits until the server removes the components that `disable` turns off.
     WaitRemoved,
