@@ -209,10 +209,11 @@ async fn run_cluster(
     Ok(())
 }
 
-/// Waits until Canal's `ConfigMap` names `iface`, then rolls the `rke2-canal` `DaemonSet` when its
-/// pods started with another interface. The pods read the `ConfigMap` only when they start, and the
-/// chart does not roll them when it changes, so without this a first server keeps the default
-/// route, and a changed `network.interface` takes effect only where a pod restarts.
+/// Waits until Canal's `ConfigMap` names `iface`, rolls the `rke2-canal` `DaemonSet` when its pods
+/// started with another interface, and waits until every pod runs the current template. The pods
+/// read the `ConfigMap` only when they start, and the chart does not roll them when it changes, so
+/// without this a first server keeps the default route, and a changed `network.interface` takes
+/// effect only where a pod restarts.
 pub(crate) async fn roll_canal(kubectl: &Kubectl, iface: &str) -> Result<(), InstallError> {
     const NAMESPACE: &str = "kube-system";
     kubectl::poll(
@@ -236,13 +237,12 @@ pub(crate) async fn roll_canal(kubectl: &Kubectl, iface: &str) -> Result<(), Ins
     let annotation = daemon_set
         .and_then(|d| d.spec.template.metadata?.annotations)
         .and_then(|a| a.get(cluster::CANAL_IFACE_ANNOTATION).cloned());
-    let Some(patch) = cluster::canal_rollout(annotation.as_deref(), iface) else {
-        return Ok(());
-    };
-    output::note(&(i18n::messages().restarting_canal)(iface));
-    kubectl
-        .patch(NAMESPACE, "daemonset/rke2-canal", &patch)
-        .await?;
+    if let Some(patch) = cluster::canal_rollout(annotation.as_deref(), iface) {
+        output::note(&(i18n::messages().restarting_canal)(iface));
+        kubectl
+            .patch(NAMESPACE, "daemonset/rke2-canal", &patch)
+            .await?;
+    }
     kubectl
         .rollout(NAMESPACE, "daemonset/rke2-canal", Duration::from_mins(10))
         .await?;
