@@ -311,6 +311,7 @@ pub(super) const fn topic(topic: Topic) -> &'static str {
         Topic::NodeName => "node name",
         Topic::NetworkInterface => "network interface",
         Topic::Iptables => "iptables",
+        Topic::Localhost => "localhost",
     }
 }
 
@@ -451,6 +452,12 @@ pub(crate) fn finding(finding: &Finding) -> String {
              Tailscale, use its iptables mode, as \
              https://oss.zeabur.com/docs/zeatend/operations/private-network/#tailscale says."
         ),
+        Finding::LocalhostOk => "/etc/hosts maps localhost to ::1".to_owned(),
+        Finding::LocalhostIpv4 => "/etc/hosts doesn't map localhost to ::1. With only IPv6 node \
+                                   addresses, RKE2's control plane and kube-proxy listen on ::1, \
+                                   and their health checks to localhost fail. Add localhost to \
+                                   the ::1 line: `::1 localhost ip6-localhost ip6-loopback`."
+            .to_owned(),
         Finding::NotInstalled => "K3s, RKE2 and KubeSolo are not installed on this host; install \
                                   with `sudo zeatend apply`"
             .to_owned(),

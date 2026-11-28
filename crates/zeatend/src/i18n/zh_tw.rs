@@ -286,6 +286,7 @@ const fn topic(topic: Topic) -> &'static str {
         Topic::NodeName => "節點名稱",
         Topic::NetworkInterface => "網路介面",
         Topic::Iptables => "iptables",
+        Topic::Localhost => "localhost",
         // Plan findings stay in English until zeatend#32 words them.
         Topic::Memory
         | Topic::Release
@@ -428,6 +429,12 @@ fn finding(finding: &Finding) -> String {
              可能有其他程式寫入了 iptables 讀不懂的 nftables 規則。如果是 Tailscale，請改用 \
              iptables 模式，做法見 https://oss.zeabur.com/zh-TW/docs/zeatend/operations/private-network/ 。"
         ),
+        Finding::LocalhostOk => "/etc/hosts 把 localhost 指到 ::1".to_owned(),
+        Finding::LocalhostIpv4 => "/etc/hosts 沒有把 localhost 指到 ::1。節點只有 IPv6 位址時，\
+                                   RKE2 的控制平面和 kube-proxy 只監聽 ::1，它們連 localhost \
+                                   的健康檢查會失敗。請在 ::1 那一行加上 localhost：\
+                                   `::1 localhost ip6-localhost ip6-loopback`。"
+            .to_owned(),
         Finding::NotInstalled => {
             "這台主機沒有安裝 K3s、RKE2 或 KubeSolo，用 `sudo zeatend apply` 安裝".to_owned()
         }

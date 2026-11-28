@@ -664,6 +664,7 @@ mod tests {
                 command: "iptables-save".to_owned(),
                 error: "Parsing nftables rule failed".to_owned(),
             },
+            Finding::LocalhostIpv4,
             Finding::RecordMissing {
                 path: "/var/lib/zeatend".to_owned(),
             },

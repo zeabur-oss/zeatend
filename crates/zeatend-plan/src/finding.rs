@@ -79,6 +79,8 @@ pub enum Topic {
     NetworkInterface,
     /// The host's firewall rules, as `iptables-save` reads them.
     Iptables,
+    /// `localhost` on an RKE2 node with only IPv6 node addresses.
+    Localhost,
 }
 
 /// Files of another Kubernetes distribution.
@@ -290,6 +292,14 @@ pub enum Finding {
         /// Its error.
         error: String,
     },
+    /// `localhost` resolves to `::1` in `/etc/hosts`.
+    #[serde(rename = "localhost.ok")]
+    LocalhostOk,
+    /// `/etc/hosts` does not map `localhost` to `::1`. On an RKE2 node with only IPv6 node
+    /// addresses, etcd, the controller manager, the scheduler and kube-proxy listen on `::1`, and
+    /// their probes, which call `localhost`, fail.
+    #[serde(rename = "localhost.ipv4")]
+    LocalhostIpv4,
     /// K3s, RKE2 and `KubeSolo` are not installed.
     #[serde(rename = "service.none")]
     NotInstalled,
@@ -573,6 +583,7 @@ impl Finding {
             | Self::InterfaceNoAddress { .. }
             | Self::InterfaceTailscale { .. } => Topic::NetworkInterface,
             Self::IptablesOk | Self::IptablesUnreadable { .. } => Topic::Iptables,
+            Self::LocalhostOk | Self::LocalhostIpv4 => Topic::Localhost,
         }
     }
 
@@ -600,7 +611,8 @@ impl Finding {
             | Self::DownloadsOk { .. }
             | Self::MirrorOk { .. }
             | Self::InterfaceOk { .. }
-            | Self::IptablesOk => Status::Pass,
+            | Self::IptablesOk
+            | Self::LocalhostOk => Status::Pass,
             Self::TimeDrift
             | Self::TimeUnknown
             | Self::SwapOn
@@ -649,7 +661,8 @@ impl Finding {
             | Self::InterfaceMissing { .. }
             | Self::InterfaceNoAddress { .. }
             | Self::InterfaceTailscale { .. }
-            | Self::IptablesUnreadable { .. } => Status::Fail,
+            | Self::IptablesUnreadable { .. }
+            | Self::LocalhostIpv4 => Status::Fail,
         }
     }
 }

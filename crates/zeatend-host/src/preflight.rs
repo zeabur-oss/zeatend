@@ -2,7 +2,7 @@
 //! The checks produce data; an interface words each [`Finding`].
 
 use std::fs;
-use std::net::{Ipv4Addr, TcpListener};
+use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
 use std::path::Path;
 
 use zeatend_plan::cluster::{Distribution, PortUse};
@@ -97,6 +97,9 @@ pub async fn run(options: Options<'_>) -> Vec<Check> {
         checks.push(network_interface(interface).await);
     }
     checks.extend(iptables().await);
+    if options.distribution == Distribution::Rke2 && facts::ipv6_only(options.interface).await {
+        checks.push(localhost());
+    }
     checks.push(disk_space(options.distribution.layout().data_dir).await);
     checks.push(encryption(options.distribution, options.require_encrypted_disk).await);
     checks
@@ -269,6 +272,31 @@ async fn iptables_in(path: &std::ffi::OsStr) -> Option<Check> {
         return Some(Finding::IptablesUnreadable { command, error }.into());
     }
     found.then(|| Finding::IptablesOk.into())
+}
+
+/// Whether `/etc/hosts` maps `localhost` to `::1`. With only IPv6 node addresses, RKE2 binds
+/// etcd, the controller manager, the scheduler and kube-proxy to `::1`, and their probes call
+/// `localhost`. Ubuntu's `/etc/hosts` gives `::1` only the names `ip6-localhost ip6-loopback`.
+fn localhost() -> Check {
+    localhost_check(&fs::read_to_string("/etc/hosts").unwrap_or_default()).into()
+}
+
+/// [`localhost`] from the text of `/etc/hosts` (hosts(5)).
+fn localhost_check(hosts: &str) -> Finding {
+    let on_loopback = hosts.lines().any(|line| {
+        let mut words = line
+            .split('#')
+            .next()
+            .unwrap_or_default()
+            .split_whitespace();
+        words.next().and_then(|a| a.parse::<Ipv6Addr>().ok()) == Some(Ipv6Addr::LOCALHOST)
+            && words.any(|name| name.eq_ignore_ascii_case("localhost"))
+    });
+    if on_loopback {
+        Finding::LocalhostOk
+    } else {
+        Finding::LocalhostIpv4
+    }
 }
 
 /// Tailscale's addresses: the shared address space of RFC 6598, `100.64.0.0/10`
@@ -510,6 +538,26 @@ mod tests {
         };
         assert_eq!(command, "ip6tables-save");
         assert!(error.contains("Parsing nftables rule failed"), "{error}");
+    }
+
+    #[test]
+    fn localhost_must_name_the_ipv6_loopback() {
+        let ubuntu = "127.0.0.1 localhost\n127.0.1.1 node-1\n\n\
+                      # The following lines are desirable for IPv6 capable hosts\n\
+                      ::1     ip6-localhost ip6-loopback\n";
+        assert_eq!(localhost_check(ubuntu), Finding::LocalhostIpv4);
+        assert_eq!(localhost_check(ubuntu).status(), Status::Fail);
+        assert_eq!(localhost_check(""), Finding::LocalhostIpv4);
+        assert_eq!(
+            localhost_check("# ::1 localhost\n0:0:0:0:0:0:0:1 x # localhost\n"),
+            Finding::LocalhostIpv4
+        );
+        for hosts in [
+            "::1     localhost ip6-localhost ip6-loopback\n",
+            "127.0.0.1 localhost\n0:0:0:0:0:0:0:1\tip6-loopback LocalHost # note\n",
+        ] {
+            assert_eq!(localhost_check(hosts), Finding::LocalhostOk, "{hosts}");
+        }
     }
 
     #[test]

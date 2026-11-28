@@ -19,6 +19,12 @@ Before a change merges, CI installs each distribution on an Ubuntu 26.04 runner 
 
 The host checks also warn when the clock isn't synchronized, swap is on, the kernel keeps memory for a crash kernel, another Kubernetes install left files on the host, or the cluster's data isn't on an encrypted disk.
 
+On an RKE2 node whose addresses are all IPv6, `/etc/hosts` must map `localhost` to `::1`. RKE2 then runs etcd, the controller manager, the scheduler and kube-proxy on `::1`, and their health checks call `localhost`. Ubuntu's `/etc/hosts` maps it to `127.0.0.1` only, so the host checks stop `apply` until the `::1` line names it:
+
+```text
+::1     localhost ip6-localhost ip6-loopback
+```
+
 ## Releases
 
 Each Zeatend release pins one release of each distribution and checks its downloads against digests built into Zeatend. `zeatend plan` prints the release it installs. This release pins:
