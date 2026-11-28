@@ -24,7 +24,7 @@ env:
 
 jobs:
   lint:
-    runs-on: instabox-medium
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,7 +40,7 @@ jobs:
             run: nix develop -c scripts/ci/lint.sh cargo
 
   test:
-    runs-on: instabox-medium
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -51,9 +51,9 @@ jobs:
           rust-cache: true
       - run: nix develop -c scripts/ci/test.sh
 
-  # Installs each distribution on a fresh runner and runs the cluster tests. A GitHub runner, not
-  # Instabox: zeatend changes the host, and the network policy test needs a policy controller
-  # that the host's kernel supports. Not on pull requests: the merge queue runs it.
+  # Installs each distribution on a fresh runner and runs the cluster tests: zeatend changes the
+  # host, and the network policy test needs a policy controller that the host's kernel supports.
+  # Not on pull requests: the merge queue runs it.
   cluster:
     name: cluster (${{ matrix.distribution }})
     if: github.event_name != 'pull_request'
@@ -82,7 +82,7 @@ jobs:
       - run: nix develop -c scripts/ci/cluster.sh ${{ matrix.distribution }}
 
   docs:
-    runs-on: instabox-small
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: zeabur-oss/website/.github/actions/docs-check@2f5a9b47e8c236f28052b4789c607634d95e45af # main
@@ -92,7 +92,7 @@ jobs:
     name: ci / ok
     if: always()
     needs: [lint, test, cluster, docs]
-    runs-on: instabox-small
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
